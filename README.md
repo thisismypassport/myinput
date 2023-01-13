@@ -27,9 +27,9 @@ Edit Configs/_default.ini to change the default key mapping.
 
 By default, the file maps keyboard keys to a XBox360 controller.
 
-Both (Keyboard -> Virtual Controller) and (Keyboard -> Keyboard/Mouse) mappings are well-supported.
+Both (Keyboard -> Virtual Controller) and (Keyboard -> Keyboard/Mouse Button) mappings are well-supported.
 
-(Mouse -> \*) mappings are WIP. (Controller -> \*) mappings are not currently supported.
+(Mouse -> \*) mappings are only partially implemented currently. (Controller -> \*) mappings are not currently supported.
 
 ## Per-Executable Mapping
 
