@@ -40,3 +40,13 @@ If you have an executable named Hello.exe, you can create a Configs/Hello.ini fi
 Prerequisite: https://github.com/microsoft/Detours - copy to 3rdparty/detours folder
 
 Then just build with MSVC 2022 or above.
+
+# Implementation Details
+
+It hooks:
+- The RawInput API
+- The CfgMgr API
+- The hid device IOCTLs (used by DirectInput)
+- The xusb device IOCTLs (used by XInput)
+- low-level keyboard & mouse events
+- Misc. APIs to improve compatibility.
