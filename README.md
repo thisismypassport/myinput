@@ -1,7 +1,9 @@
 # myinput
-A per-process Keyboard -> Virtual Controller key mapper. Relies on hooks instead of drivers.
+A per-process Keyboard -> Virtual Controller key mapper for Windows. Relies on hooks instead of drivers.
 
 Currently not user-friendly, but functional.
+
+[You can find the latest release (MyInput_Windows.zip) here.](https://github.com/thisismypassport/myinput/releases/) 
 
 # Usage
 
