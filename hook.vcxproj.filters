@@ -1,0 +1,57 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="MyInputHook.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Config.h" />
+    <ClInclude Include="Device.h" />
+    <ClInclude Include="DeviceApi.h" />
+    <ClInclude Include="Hook.h" />
+    <ClInclude Include="Impl.h" />
+    <ClInclude Include="CfgMgr.h" />
+    <ClInclude Include="MiscApi.h" />
+    <ClInclude Include="RawInput.h" />
+    <ClInclude Include="State.h" />
+    <ClInclude Include="UtilsBase.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="UtilsBuffer.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="UtilsPath.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="UtilsStr.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="Devices.h" />
+    <ClInclude Include="WinHooks.h" />
+    <ClInclude Include="Log.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="WinFeatures.h" />
+    <ClInclude Include="UtilsUi.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="UtilsUiBase.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="NotifyApi.h" />
+    <ClInclude Include="XUsbApi.h" />
+    <ClInclude Include="RawRegister.h" />
+    <ClInclude Include="Header.h" />
+    <ClInclude Include="WinInput.h" />
+    <ClInclude Include="Keys.h" />
+    <ClInclude Include="Thunk.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Utils">
+      <UniqueIdentifier>{62be0691-0a85-40c3-898b-04b470aa872e}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <CopyFileToFolders Include="_default.ini" />
+    <CopyFileToFolders Include="_default.log" />
+  </ItemGroup>
+</Project>

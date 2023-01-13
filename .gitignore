@@ -30,3 +30,7 @@
 *.exe
 *.out
 *.app
+
+3rdparty
+Build
+Run
