@@ -90,13 +90,13 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>3rdparty\detours\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\3rdparty\detours\include</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_WINDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>3rdparty\detours\lib.X86</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X86</AdditionalLibraryDirectories>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
@@ -110,13 +110,13 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>3rdparty\detours\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\3rdparty\detours\include</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_WINDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>3rdparty\detours\lib.X64</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X64</AdditionalLibraryDirectories>
       <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
@@ -132,7 +132,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
-      <AdditionalIncludeDirectories>3rdparty\detours\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\3rdparty\detours\include</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_WINDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
@@ -141,7 +141,7 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>3rdparty\detours\lib.X86</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X86</AdditionalLibraryDirectories>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
@@ -157,7 +157,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
-      <AdditionalIncludeDirectories>3rdparty\detours\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\3rdparty\detours\include</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_WINDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
@@ -166,7 +166,7 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>3rdparty\detours\lib.X64</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X64</AdditionalLibraryDirectories>
       <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
