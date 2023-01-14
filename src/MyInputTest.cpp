@@ -1255,8 +1255,9 @@ void TestWindowMsg(UINT msg, WPARAM w, LPARAM l, LONG time, bool injected, ULONG
     case WM_KEYUP:
     case WM_SYSKEYUP:
         if (gPrintKeyboard) {
-            printed = printf("key %d -> %d %s%s%s: %s <%d>\n", (int)w,
+            printed = printf("key %d -> %d %s%s%s%s: %s <%d>\n", (int)w,
                              msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN,
+                             (HIWORD(l) & (KF_REPEAT | KF_UP)) == KF_REPEAT ? "[R] " : "",
                              HIWORD(l) & KF_EXTENDED ? "[X] " : "",
                              injected ? "[J] " : "",
                              (msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) ? "[S] " : "",
@@ -1560,6 +1561,8 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
                 WORD flags = ri->data.keyboard.MakeCode;
                 if (ri->data.keyboard.Flags & RI_KEY_BREAK) {
                     flags |= KF_UP;
+                } else if (ri->data.keyboard.Flags & RI_KEY_MAKE) {
+                    flags |= KF_REPEAT;
                 }
                 if (ri->data.keyboard.Flags & RI_KEY_E0) {
                     flags |= KF_EXTENDED;

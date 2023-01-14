@@ -3,6 +3,24 @@
 #include "Devices.h"
 #include <fstream>
 
+string ConfigReadToken(const string &str, intptr_t *startPtr) {
+    intptr_t start = *startPtr;
+    while ((size_t)start < str.size() && isspace(str[start])) {
+        start++;
+    }
+
+    intptr_t end = start;
+    while ((size_t)end < str.size() && !isspace(str[end])) {
+        char ch = str[end++];
+        if (!isalnum(ch) && ch != '.' && ch != '_' && ch != '%') {
+            break;
+        }
+    }
+
+    *startPtr = end;
+    return str.substr(start, end - start);
+}
+
 int ConfigReadKey(const string &str, bool output = false) {
 #define CONFIG_ON_KEY(vk, name, ...) \
     if (strLow == name)              \
@@ -12,7 +30,7 @@ int ConfigReadKey(const string &str, bool output = false) {
     string strLow = StrLowerCase(str);
     StrReplaceAll(strLow, ".", "");
 
-    if (StrStartsWith(strLow, '%') && output) {
+    if (strLow.starts_with('%') && output) {
         ENUMERATE_PAD_VKS(CONFIG_ON_KEY);
     } else {
         if (strLow.size() == 1 && ((strLow[0] >= 'a' && strLow[0] <= 'z') || (strLow[0] >= '0' && strLow[0] <= '9'))) {
@@ -36,11 +54,11 @@ int ConfigReadUser(const string &str) {
     }
 
     int value;
-    if (StrToValue(str, &value) && value >= 1 && value <= 4) {
+    if (StrToValue(str, &value) && value >= 1 && value <= IMPL_MAX_USERS) {
         return value - 1;
     }
 
-    LOG << "ERROR: Invalid user (must be between 1 and 4): " << str << END;
+    LOG << "ERROR: Invalid user (must be between 1 and " << IMPL_MAX_USERS << "): " << str << END;
     return -1;
 }
 
@@ -58,100 +76,145 @@ double ConfigReadStrength(const string &str) {
     return 1;
 }
 
-double ConfigReadRange(const string &str, bool turbo) {
+double ConfigReadRate(const string &str) {
     if (!str.empty()) {
         double value;
         if (StrToValue(str, &value) && value > 0) {
             return value;
         }
 
-        const char *what = turbo ? "time" : "range";
-        LOG << "ERROR: Invalid " << what << " (must be number greater than 0) : " << str << END;
+        LOG << "ERROR: Invalid rate (must be number greater than 0) : " << str << END;
     }
-    return turbo ? 0.02 : 50;
+    return 0.02;
 }
 
-void ConfigLoadInputLine(const string &line) {
-    string inputStr = StrTrimmed(StrBeforeFirst(line, ':'));
-    string rest = StrTrimmed(StrAfterFirst(line, ':'));
+struct ConfigInputLine {
+    bool Replace = false;
+    bool Forward = false;
+    bool Turbo = false;
+    bool Toggle = false;
+    bool Snap = false;
+    int Input = 0;
+    int Output = 0;
+    int User = 0;
+    double Strength = 0;
+    double Rate = 0;
+    ImplInputCond *Cond = nullptr;
 
-    bool replace = false;
-    bool forward = false;
-    bool turbo = false;
-    bool toggle = false;
-    bool snap = false;
-    while (StrContains(rest, '!')) {
-        string optStr = StrLowerCase(StrTrimmed(StrAfterLast(rest, '!')));
-        rest = StrTrimmed(StrBeforeLast(rest, '!'));
-
-        if (optStr == "replace") {
-            replace = true;
-        } else if (optStr == "forward") {
-            forward = true;
-        } else if (optStr == "turbo") {
-            turbo = true;
-        } else if (optStr == "toggle") {
-            toggle = true;
-        } else if (optStr == "snap") {
-            snap = true;
-        } else {
-            LOG << "ERROR: Invalid option: " << optStr << END;
+    void Reset() {
+        if (Cond) {
+            Cond->Reset();
+            delete Cond;
         }
     }
+};
 
-    ImplInputCond *rootCond = nullptr;
-    while (StrContains(rest, '?')) {
-        string condStr = StrTrimmed(StrAfterLast(rest, '?'));
-        rest = StrTrimmed(StrBeforeLast(rest, '?'));
+bool ConfigReadInputLine(const string &line, ConfigInputLine &cfg) {
+    intptr_t idx = 0;
+    string inputStr = ConfigReadToken(line, &idx);
+    string colon = ConfigReadToken(line, &idx);
+    string outputStr = ConfigReadToken(line, &idx);
 
-        auto cond = new ImplInputCond();
-        if (StrStartsWith(condStr, '~')) {
-            condStr = StrTrimmed(StrAfterFirst(condStr, '~'));
-        } else {
+    if (colon != ":") {
+        LOG << "ERROR: ':' expected after key name in: " << line << END;
+        return false;
+    }
+
+    string userStr, strengthStr, rateStr;
+    while (true) {
+        string token = ConfigReadToken(line, &idx);
+        if (token.empty()) {
+            break;
+        }
+
+        if (token == "!") {
+            string optStr = StrLowerCase(ConfigReadToken(line, &idx));
+            if (optStr == "replace") {
+                cfg.Replace = true;
+            } else if (optStr == "forward") {
+                cfg.Forward = true;
+            } else if (optStr == "turbo") {
+                cfg.Turbo = true;
+            } else if (optStr == "toggle") {
+                cfg.Toggle = true;
+            } else if (optStr == "snap") {
+                cfg.Snap = true;
+            } else {
+                LOG << "ERROR: Invalid option: " << optStr << END;
+            }
+        } else if (token == "?") {
+            string condStr = ConfigReadToken(line, &idx);
+            auto cond = new ImplInputCond();
             cond->State = true;
+
+            while (true) {
+                if (condStr == "^") {
+                    cond->Toggle = true;
+                } else if (condStr == "~") {
+                    cond->State = false;
+                } else {
+                    break;
+                }
+
+                condStr = ConfigReadToken(line, &idx);
+            }
+
+            cond->Key = ConfigReadKey(condStr);
+
+            cond->Next = cfg.Cond;
+            cfg.Cond = cond;
+        } else if (token == "@") {
+            userStr = ConfigReadToken(line, &idx);
+        } else if (token == "^") {
+            rateStr = ConfigReadToken(line, &idx);
+        } else if (token == "~") {
+            strengthStr = ConfigReadToken(line, &idx);
+        } else {
+            LOG << "ERROR: Ignoring unknown token in mapping line: " << token << END;
         }
-
-        cond->Key = ConfigReadKey(condStr);
-
-        cond->Next = rootCond;
-        rootCond = cond;
     }
 
-    string userStr = StrTrimmed(StrAfterFirst(rest, '@'));
-    rest = StrTrimmed(StrBeforeFirst(rest, '@'));
+    cfg.Input = ConfigReadKey(inputStr);
+    cfg.Output = ConfigReadKey(outputStr, true);
+    cfg.Strength = ConfigReadStrength(strengthStr);
+    cfg.Rate = ConfigReadRate(rateStr);
+    cfg.User = ConfigReadUser(userStr);
 
-    string rangeStr = StrTrimmed(StrAfterFirst(rest, '^'));
-    rest = StrTrimmed(StrBeforeFirst(rest, '^'));
+    LOG << "Mapping " << inputStr << " to " << outputStr << " of player " << (cfg.User + 1) << " (strength " << cfg.Strength << ")" << END;
 
-    string outputStr = StrTrimmed(StrBeforeFirst(rest, '~'));
-    string strengthStr = StrTrimmed(StrAfterFirst(rest, '~'));
+    return true;
+}
 
-    int input = ConfigReadKey(inputStr);
-    int output = ConfigReadKey(outputStr, true);
-    double strength = ConfigReadStrength(strengthStr);
-    double range = ConfigReadRange(rangeStr, turbo);
-    int user = ConfigReadUser(userStr);
+bool ConfigLoadInputLine(const string &line) {
+    ConfigInputLine cfg;
+    if (!ConfigReadInputLine(line, cfg)) {
+        return false;
+    }
 
     int nextInput = 0;
-    int inputFlags = GetKeyType(input);
-    if (inputFlags & MY_TYPE_PAIR) {
-        tie(input, nextInput) = GetKeyPair(input);
-        inputFlags &= ~MY_TYPE_PAIR;
+    MyVkType inputType = GetKeyType(cfg.Input);
+    if (inputType.Pair) {
+        tie(cfg.Input, nextInput) = GetKeyPair(cfg.Input);
+        inputType.Pair = false;
     }
 
-    int userIndex = user >= 0 ? user : 0;
-    LOG << "Mapping " << inputStr << " to " << outputStr << " of player " << (userIndex + 1) << " (strength " << strength << ")" << END;
+    int userIndex = cfg.User >= 0 ? cfg.User : 0;
 
-    while (input && output) {
-        int outputFlags = GetKeyType(output);
-        if (outputFlags & MY_TYPE_PAIR) {
-            output = ImplChooseBestKeyInPair(output);
-            outputFlags &= ~MY_TYPE_PAIR;
+    if (inputType.Relative && (cfg.Toggle || cfg.Turbo)) {
+        LOG << "ERROR: toggle & turbo aren't supported for relative input" << END;
+        cfg.Toggle = cfg.Turbo = false;
+    }
+
+    while (cfg.Input && cfg.Output) {
+        MyVkType outputType = GetKeyType(cfg.Output);
+        if (outputType.Pair) {
+            cfg.Output = ImplChooseBestKeyInPair(cfg.Output);
+            outputType.Pair = false;
         }
 
-        ImplInput *mapping = ImplGetInput(input);
+        ImplInput *mapping = ImplGetInput(cfg.Input);
         if (mapping) {
-            if (replace) {
+            if (cfg.Replace) {
                 mapping->Reset();
             } else if (mapping->IsValid()) {
                 while (mapping->Next) {
@@ -162,33 +225,41 @@ void ConfigLoadInputLine(const string &line) {
                 mapping = mapping->Next;
             }
 
-            mapping->Key = output;
-            mapping->KeyType = GetKeyType(output);
-            mapping->UserIndex = user;
-            mapping->Strength = strength;
-            mapping->Range = range;
-            mapping->Conds = rootCond;
-            mapping->Forward = forward;
-            mapping->Turbo = turbo;
-            mapping->Toggle = toggle;
-            mapping->Snap = snap;
+            mapping->DestKey = cfg.Output;
+            mapping->SrcType = inputType;
+            mapping->DestType = GetKeyType(cfg.Output);
+            mapping->User = cfg.User;
+            mapping->Strength = cfg.Strength;
+            mapping->Rate = cfg.Rate;
+            mapping->Conds = cfg.Cond;
+            mapping->Forward = cfg.Forward;
+            mapping->Turbo = cfg.Turbo;
+            mapping->Toggle = cfg.Toggle;
+            mapping->Snap = cfg.Snap;
 
-            int inputType = inputFlags & ~MY_TYPE_FLAGS;
-            if (inputType == MY_TYPE_KEYBOARD) {
+            if (inputType.Source == MyVkSource::Keyboard) {
                 G.Keyboard.IsMapped = true;
-            } else if (inputType == MY_TYPE_MOUSE) {
+            } else if (inputType.Source == MyVkSource::Mouse) {
                 G.Mouse.IsMapped = true;
             }
 
-            int outputType = outputFlags & ~MY_TYPE_FLAGS;
-            if (outputType == MY_TYPE_PAD) {
+            if (outputType.OfUser) {
                 G.Users[userIndex].Connected = true;
+            }
+
+            if (IsMouseMotionKey(cfg.Input)) {
+                G.Mouse.AnyMotionInput = true;
+            }
+            if (IsMouseMotionKey(cfg.Output)) {
+                G.Mouse.AnyMotionOutput = true;
             }
         }
 
-        input = nextInput;
+        cfg.Input = nextInput;
         nextInput = 0;
     }
+
+    return true;
 }
 
 void ConfigLoadDevice(const string &key, const string &type) {
@@ -218,8 +289,9 @@ void ConfigLoadDevice(const string &key, const string &type) {
 }
 
 void ConfigLoadExtraHook(const string &val) {
-    Path dllPath = PathFromStr(StrTrimmed(StrBeforeFirst(val, '|')).c_str());
-    Path dllWait = PathFromStr(StrTrimmed(StrAfterFirst(val, '|')).c_str());
+    intptr_t idx = 0;
+    Path dllPath = PathFromStr(ConfigReadToken(val, &idx).c_str());
+    Path dllWait = PathFromStr(ConfigReadToken(val, &idx).c_str());
 
     if (*dllWait) {
         dllWait = PathGetBaseNameWithoutExt(dllWait); // won't support non-dlls
@@ -253,10 +325,17 @@ bool ConfigReadBoolVar(const string &val) {
     return false;
 }
 
-void ConfigLoadVarLine(const string &line) {
-    string key = StrTrimmed(StrBeforeFirst(line, '=')).substr(1);
+bool ConfigLoadVarLine(const string &line) {
+    intptr_t idx = 1; // skipping initial '!'
+    string key = ConfigReadToken(line, &idx);
     string keyLow = StrLowerCase(key);
-    string val = StrTrimmed(StrAfterFirst(line, '='));
+    string eq = ConfigReadToken(line, &idx);
+    string val = ConfigReadToken(line, &idx);
+
+    if (eq != "=") {
+        LOG << "ERROR: '=' expected after variable name in: " << line << END;
+        return false;
+    }
 
     if (keyLow == "trace") {
         G.Trace = ConfigReadBoolVar(val);
@@ -268,8 +347,6 @@ void ConfigLoadVarLine(const string &line) {
         G.ApiDebug = ConfigReadBoolVar(val);
     } else if (keyLow == "waitdebugger") {
         G.WaitDebugger = ConfigReadBoolVar(val);
-    } else if (keyLow == "debugdupinputs") {
-        G.DebugDupInputs = ConfigReadBoolVar(val);
     } else if (keyLow == "forward") {
         G.Forward = ConfigReadBoolVar(val);
     } else if (keyLow == "always") {
@@ -280,34 +357,38 @@ void ConfigLoadVarLine(const string &line) {
         G.InjectChildren = ConfigReadBoolVar(val);
     } else if (keyLow == "rumblewindow") {
         G.RumbleWindow = ConfigReadBoolVar(val);
-    } else if (StrStartsWith(keyLow, "device")) {
+    } else if (keyLow.starts_with("device")) {
         ConfigLoadDevice(keyLow, val);
     } else if (keyLow == "extrahook") {
         ConfigLoadExtraHook(val);
     } else {
         LOG << "ERROR: Invalid variable: " << key << END;
     }
+
+    return true;
 }
 
 void ConfigLoadFrom(istream &file) {
     string line;
     bool active = true;
     while (getline(file, line)) {
-        if (StrIsBlank(line)) {
+        line = StrTrimmed(line);
+
+        if (line.empty()) {
             continue;
         }
 
-        if (StrStartsWith(line, '#')) {
-            if (StrStartsWith(line, "#[")) {
+        if (line.starts_with('#')) {
+            if (line.starts_with("#[")) {
                 active = false;
-            } else if (StrStartsWith(line, "#]")) {
+            } else if (line.starts_with("#]")) {
                 active = true;
             }
             continue;
         }
 
         if (active) {
-            if (StrStartsWith(line, '!')) {
+            if (line.starts_with('!')) {
                 ConfigLoadVarLine(line);
             } else {
                 ConfigLoadInputLine(line);
@@ -317,9 +398,10 @@ void ConfigLoadFrom(istream &file) {
 }
 
 void ConfigReset() {
-    G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = G.DebugDupInputs = false;
+    G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = false;
     G.Forward = G.Always = G.Disable = G.InjectChildren = G.RumbleWindow = false;
     G.Keyboard.IsMapped = G.Mouse.IsMapped = false;
+    G.Mouse.AnyMotionInput = G.Mouse.AnyMotionOutput = false;
 
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
         G.Users[i].Connected = G.Users[i].DeviceSpecified = false;
@@ -338,23 +420,6 @@ void ConfigSendGlobalEvents(bool added) {
     }
 }
 
-void ConfigDebugDupInputs() {
-    for (int key = 0; key < MY_VK_LAST_MOUSE; key++) {
-        auto input = ImplGetInput(key);
-        if (input && !input->IsValid()) {
-            input->Key = key;
-            input->KeyType = GetKeyType(key);
-            input->Forward = true;
-        }
-
-        if (key == MY_VK_LAST_REAL) {
-            key = MY_VK_FIRST_MOUSE;
-        }
-    }
-
-    G.Keyboard.IsMapped = G.Mouse.IsMapped = true;
-}
-
 static bool ConfigReloadNoUpdate() {
     ConfigReset();
 
@@ -365,10 +430,6 @@ static bool ConfigReloadNoUpdate() {
         return false;
     }
     ConfigLoadFrom(file);
-
-    if (G.DebugDupInputs) {
-        ConfigDebugDupInputs();
-    }
 
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
         if (G.Users[i].Connected && !G.Users[i].DeviceSpecified) {

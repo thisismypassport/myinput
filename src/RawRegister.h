@@ -548,7 +548,7 @@ void ProcessMouseWheel(RAWMOUSE &mouse, int mask, bool horiz, int time, ChangedM
 }
 
 void ProcessMouseButton(RAWMOUSE &mouse, int mask, int key, bool down, int time, ChangedMask *changes) {
-    if ((mouse.usButtonFlags & mask) && ImplKeyboardHook(key, down, false, time, changes)) {
+    if ((mouse.usButtonFlags & mask) && ImplProcessMouseButton(key, down, time, changes)) {
         mouse.usButtonFlags &= ~mask;
     }
 }

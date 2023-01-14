@@ -6,23 +6,14 @@ size_t StrGetSize(const char *str) { return strlen(str); }
 size_t StrGetSize(const wchar_t *str) { return wcslen(str); }
 
 template <class TChar>
-bool StrStartsWith(const std::basic_string<TChar> &str, TChar ch) {
-    return str.size() && str[0] == ch;
-}
-
-template <class TChar>
-bool StrStartsWith(const std::basic_string<TChar> &str, const TChar *other) {
-    size_t otherSize = StrGetSize(other);
-    return str.size() >= otherSize && str.compare(0, otherSize, other) == 0;
-}
-
-template <class TChar>
-bool StrContains(const std::basic_string<TChar> &str, TChar ch) {
+bool StrContains(const std::basic_string<TChar> &str, TChar ch) // removeme once C++23 hits
+{
     return str.find(ch) != std::basic_string<TChar>::npos;
 }
 
 template <class TChar>
-bool StrContains(const std::basic_string<TChar> &str, const TChar *other) {
+bool StrContains(const std::basic_string<TChar> &str, const TChar *other) // removeme once C++23 hits
+{
     return str.find(other) != std::basic_string<TChar>::npos;
 }
 
@@ -52,46 +43,6 @@ int StrReplaceAll(std::basic_string<TChar> &str, const TChar *other, const TChar
 }
 
 template <class TChar>
-std::basic_string<TChar> StrBeforeFirst(const std::basic_string<TChar> &str, TChar ch) {
-    intptr_t idx = str.find(ch);
-    if (idx >= 0) {
-        return str.substr(0, idx);
-    } else {
-        return str;
-    }
-}
-
-template <class TChar>
-std::basic_string<TChar> StrAfterFirst(const std::basic_string<TChar> &str, TChar ch) {
-    intptr_t idx = str.find(ch);
-    if (idx >= 0) {
-        return str.substr(idx + 1);
-    } else {
-        return std::basic_string<TChar>();
-    }
-}
-
-template <class TChar>
-std::basic_string<TChar> StrBeforeLast(const std::basic_string<TChar> &str, TChar ch) {
-    intptr_t idx = str.rfind(ch);
-    if (idx >= 0) {
-        return str.substr(0, idx);
-    } else {
-        return std::basic_string<TChar>();
-    }
-}
-
-template <class TChar>
-std::basic_string<TChar> StrAfterLast(const std::basic_string<TChar> &str, TChar ch) {
-    intptr_t idx = str.rfind(ch);
-    if (idx >= 0) {
-        return str.substr(idx + 1);
-    } else {
-        return str;
-    }
-}
-
-template <class TChar>
 std::basic_string<TChar> StrTrimmed(const std::basic_string<TChar> &str) {
     intptr_t start = 0;
     while ((size_t)start < str.size() && isspace(str[start])) {
@@ -104,16 +55,6 @@ std::basic_string<TChar> StrTrimmed(const std::basic_string<TChar> &str) {
     }
 
     return str.substr(start, end - start);
-}
-
-template <class TChar>
-bool StrIsBlank(const std::basic_string<TChar> &str) {
-    intptr_t i = 0;
-    while ((size_t)i < str.size() && isspace(str[i])) {
-        i++;
-    }
-
-    return i == str.size();
 }
 
 template <class TChar, class T>

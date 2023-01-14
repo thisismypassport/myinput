@@ -93,6 +93,7 @@ struct ImplUser {
 struct ImplInputCond {
     int Key = 0;
     bool State = false;
+    bool Toggle = false;
     ImplInputCond *Next = nullptr;
 
     void Reset() {
@@ -113,36 +114,42 @@ struct ImplInput {
         return iter == sTimers.end() ? nullptr : iter->second;
     }
 
-    int Key = 0;
-    int KeyType = MY_TYPE_UNKNOWN;
-    int8_t UserIndex = 0;
+    int DestKey = 0;
+    MyVkType SrcType = {};
+    MyVkType DestType = {};
+    int8_t User = 0; // -1 to use active
 
-    bool Forward = false;
-    bool Turbo = false;
-    bool Toggle = false;
-    bool Snap = false;
-    bool PassedCond = false;
-    bool TurboValue = false;
-    bool AsyncDown = false; // set even if cond/etc fails
-    bool ToggleValue = false;
+    bool Forward : 1 = false;
+    bool Turbo : 1 = false;
+    bool Toggle : 1 = false;
+    bool Snap : 1 = false;
+    bool PassedCond : 1 = false;
+    bool TurboValue : 1 = false;
+    bool ToggleValue : 1 = false;
 
+    // set even if cond/etc fails (shouldn't really be here...)
+    bool AsyncDown : 1 = false;
+    bool AsyncToggle : 1 = false;
+
+    double Rate = 0;
     double Strength = 0;
-    double Range = 0;
     ImplInput *Next = nullptr;
     ImplInputCond *Conds = nullptr;
     UINT_PTR TimerValue = 0;
 
-    bool IsValid() const { return Key != 0; }
+    bool IsValid() const { return DestKey != 0; }
     bool HasTimer() const { return TimerValue != 0; }
 
-    void AddTimer(int timeMs, TIMERPROC timerCb) {
-        if (!TimerValue) {
-            TimerValue = SetTimer(nullptr, 0, timeMs, timerCb);
-            sTimers[TimerValue] = this;
+    void StartTimer(int timeMs, TIMERPROC timerCb) {
+        if (TimerValue) {
+            EndTimer();
         }
+
+        TimerValue = SetTimer(nullptr, 0, timeMs, timerCb);
+        sTimers[TimerValue] = this;
     }
 
-    void RemoveTimer() {
+    void EndTimer() {
         if (TimerValue) {
             sTimers.erase(TimerValue);
             KillTimer(nullptr, TimerValue);
@@ -151,7 +158,7 @@ struct ImplInput {
     }
 
     void Reset() {
-        RemoveTimer();
+        EndTimer();
         if (Next) {
             Next->Reset();
             delete Next;
@@ -162,8 +169,10 @@ struct ImplInput {
         }
 
         bool oldDown = AsyncDown;
+        bool oldToggle = AsyncToggle;
         *this = ImplInput();
         AsyncDown = oldDown;
+        AsyncToggle = oldToggle;
     }
 };
 
@@ -224,10 +233,14 @@ struct ImplMouse : public ImplDeviceBase {
     ImplMouseMotion Motion;
     ImplMouseAxis Wheel, HWheel;
 
+    bool AnyMotionInput = false;
+    bool AnyMotionOutput = false;
+
     DWORD ActiveThread = 0;
     POINT OldPos = {};
     WeakAtomic<DWORD> PrevThread{0};
     WeakAtomic<HWND> PrevWindow{nullptr};
+    MOUSEINPUT MotionChange = {};
 
     mutex ThreadHooksMutex;
     vector<ImplThreadHook> ThreadHooks;
@@ -249,7 +262,7 @@ using ImplGlobalCb = list<function<void(ImplUser *, bool)>>::iterator;
 
 struct ImplG {
     ImplUser Users[IMPL_MAX_USERS];
-    ImplKeyboard Keyboard;
+    ImplKeyboard Keyboard; // also includes mouse buttons, though...
     ImplMouse Mouse;
     int8_t ActiveUser = 0;
     int8_t DefaultActiveUser = 0;
@@ -259,7 +272,6 @@ struct ImplG {
     bool ApiTrace = false;
     bool ApiDebug = false;
     bool WaitDebugger = false;
-    bool DebugDupInputs = false;
     bool Forward = false;
     bool Always = false;
     bool Disable = false;

@@ -36,43 +36,28 @@ static LRESULT CALLBACK LowKeyboardHook(int nCode, WPARAM wParam, LPARAM lParam)
 static bool ImplCheckMouse(WPARAM msg, MSLLHOOKSTRUCT *data) {
     switch (msg) {
     case WM_MOUSEMOVE:
-    case WM_NCMOUSEMOVE:
         return ImplCheckMouseMotion();
 
     case WM_MOUSEWHEEL:
+        return ImplCheckMouseWheel(false);
+
     case WM_MOUSEHWHEEL:
-        return ImplCheckMouseWheel(msg == WM_MOUSEHWHEEL);
+        return ImplCheckMouseWheel(true);
 
     case WM_LBUTTONDOWN:
     case WM_LBUTTONUP:
-    case WM_LBUTTONDBLCLK:
-    case WM_NCLBUTTONDOWN:
-    case WM_NCLBUTTONUP:
-    case WM_NCLBUTTONDBLCLK:
         return ImplCheckKeyboard(VK_LBUTTON, false);
 
     case WM_RBUTTONDOWN:
     case WM_RBUTTONUP:
-    case WM_RBUTTONDBLCLK:
-    case WM_NCRBUTTONDOWN:
-    case WM_NCRBUTTONUP:
-    case WM_NCRBUTTONDBLCLK:
         return ImplCheckKeyboard(VK_RBUTTON, false);
 
     case WM_MBUTTONDOWN:
     case WM_MBUTTONUP:
-    case WM_MBUTTONDBLCLK:
-    case WM_NCMBUTTONDOWN:
-    case WM_NCMBUTTONUP:
-    case WM_NCMBUTTONDBLCLK:
         return ImplCheckKeyboard(VK_MBUTTON, false);
 
     case WM_XBUTTONDOWN:
     case WM_XBUTTONUP:
-    case WM_XBUTTONDBLCLK:
-    case WM_NCXBUTTONDOWN:
-    case WM_NCXBUTTONUP:
-    case WM_NCXBUTTONDBLCLK:
         int xbtn = HIWORD(data->mouseData) == XBUTTON2 ? VK_XBUTTON2 : VK_XBUTTON1;
         return ImplCheckKeyboard(xbtn, false);
     }
@@ -170,19 +155,18 @@ static void CALLBACK ObjectFocusHook(HWINEVENTHOOK hook, DWORD event, HWND windo
         return;
     }
 
-    DWORD mouseThread = (G.Mouse.IsMapped && ImplCheckMouseMotion()) ? GetWindowThreadInOurProcess(window) : 0;
+    bool wantCapture = G.Mouse.IsMapped && G.Mouse.AnyMotionInput && !G.Mouse.AnyMotionOutput && !G.Disable;
+    DWORD mouseThread = wantCapture ? GetWindowThreadInOurProcess(window) : 0;
 
     DWORD oldMouseThread = G.Mouse.ActiveThread;
     if (mouseThread != oldMouseThread) {
         if (oldMouseThread) {
-            {
-                lock_guard<mutex> lock(G.Mouse.ThreadHooksMutex);
-                for (auto &hook : G.Mouse.ThreadHooks) {
-                    hook.Finished = true;
-                }
-                G.Mouse.PrevThread = 0;
-                G.Mouse.PrevWindow = nullptr;
+            lock_guard<mutex> lock(G.Mouse.ThreadHooksMutex);
+            for (auto &hook : G.Mouse.ThreadHooks) {
+                hook.Finished = true;
             }
+            G.Mouse.PrevThread = 0;
+            G.Mouse.PrevWindow = nullptr;
         }
 
         G.Mouse.ActiveThread = mouseThread;

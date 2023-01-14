@@ -6,7 +6,7 @@ enum {
     MY_VK_NUMPAD_RETURN = VK_CANCEL, // something unused, but within public range
     MY_VK_LAST_REAL = 0x100,
 
-    MY_VK_FIRST_MOUSE = 0x1200,
+    MY_VK_FIRST_MOUSE_AXIS = 0x1200,
     MY_VK_MOUSE_UP,
     MY_VK_MOUSE_DOWN,
     MY_VK_MOUSE_LEFT,
@@ -15,7 +15,7 @@ enum {
     MY_VK_WHEEL_DOWN,
     MY_VK_WHEEL_LEFT,
     MY_VK_WHEEL_RIGHT,
-    MY_VK_LAST_MOUSE,
+    MY_VK_LAST_MOUSE_AXIS,
 
     MY_VK_FIRST_PAD = 0x1500,
     MY_VK_PAD_A,
@@ -77,10 +77,10 @@ enum {
     MY_VK_TOGGLE_DISABLE,
     MY_VK_LAST_CMD,
 
-    MY_VK_FIRST_PAD_CMD = 0xc500,
+    MY_VK_FIRST_USER_CMD = 0xc500,
     MY_VK_SET_ACTIVE_USER,
     MY_VK_HOLD_ACTIVE_USER,
-    MY_VK_LAST_PAD_CMD,
+    MY_VK_LAST_USER_CMD,
 };
 
 #define ENUMERATE_LIT_VKS(e) \
@@ -300,15 +300,44 @@ enum {
     e(MY_VK_SET_ACTIVE_USER, "setactive");    \
     e(MY_VK_HOLD_ACTIVE_USER, "holdactive");
 
-enum {
-    MY_TYPE_UNKNOWN = 0,
-    MY_TYPE_KEYBOARD,
-    MY_TYPE_MOUSE,
-    MY_TYPE_PAD,
-    MY_TYPE_PAIR = 0x100,
-    MY_TYPE_COMMAND = 0x200,
-    MY_TYPE_MODIFIER = 0x400,
-    MY_TYPE_FLAGS = MY_TYPE_COMMAND | MY_TYPE_MODIFIER | MY_TYPE_PAIR,
+enum class MyVkSource : byte {
+    Unknown = 0,
+    Keyboard,
+    Mouse,
+    Pad,
+    Command = 0xff,
+};
+
+struct MyVkType {
+    MyVkSource Source = MyVkSource::Unknown;
+    bool Pair : 1 = false;
+    bool OfUser : 1 = false;
+    bool Modifier : 1 = false;
+    bool Repeatable : 1 = false;
+    bool Relative : 1 = false;
+
+    MyVkType() = default;
+    MyVkType(MyVkSource source) : Source(source) {}
+    MyVkType &SetPair() {
+        Pair = true;
+        return *this;
+    }
+    MyVkType &SetOfUser() {
+        OfUser = true;
+        return *this;
+    }
+    MyVkType &SetModifier() {
+        Modifier = true;
+        return *this;
+    }
+    MyVkType &SetRepeatable() {
+        Repeatable = true;
+        return *this;
+    }
+    MyVkType &SetRelative() {
+        Relative = true;
+        return *this;
+    }
 };
 
 bool IsVkMouseButton(int vk) // supports normal vks only, not my_vks
@@ -325,7 +354,7 @@ bool IsVkMouseButton(int vk) // supports normal vks only, not my_vks
     }
 }
 
-bool IsVkSetButton(int vk) // supports normal vks only, not my_vks
+bool IsVkPairButton(int vk) // supports normal vks only, not my_vks
 {
     switch (vk) {
     case VK_SHIFT:
@@ -337,32 +366,44 @@ bool IsVkSetButton(int vk) // supports normal vks only, not my_vks
     }
 }
 
-int GetKeyType(int key) {
+MyVkType GetKeyType(int key) {
     if (key >= 0 && key < MY_VK_LAST_REAL) {
         if (IsVkMouseButton(key)) {
-            return MY_TYPE_MOUSE;
-        } else if (IsVkSetButton(key)) {
-            return MY_TYPE_KEYBOARD | MY_TYPE_PAIR;
+            return MyVkType(MyVkSource::Mouse);
+        } else if (IsVkPairButton(key)) {
+            return MyVkType(MyVkSource::Keyboard).SetRepeatable().SetPair();
         } else {
-            return MY_TYPE_KEYBOARD;
+            return MyVkType(MyVkSource::Keyboard).SetRepeatable();
         }
     }
 
-    if (key >= MY_VK_FIRST_MOUSE && key < MY_VK_LAST_MOUSE) {
-        return MY_TYPE_MOUSE;
+    if (key >= MY_VK_FIRST_MOUSE_AXIS && key < MY_VK_LAST_MOUSE_AXIS) {
+        return MyVkType(MyVkSource::Mouse).SetRelative();
     } else if (key >= MY_VK_FIRST_KEY_PAIR && key < MY_VK_LAST_KEY_PAIR) {
-        return MY_TYPE_KEYBOARD | MY_TYPE_PAIR;
+        return MyVkType(MyVkSource::Keyboard).SetRepeatable().SetPair();
     } else if (key >= MY_VK_FIRST_PAD && key < MY_VK_LAST_PAD) {
-        return MY_TYPE_PAD;
+        return MyVkType(MyVkSource::Pad).SetOfUser();
     } else if (key >= MY_VK_FIRST_PAD_MODIFIER && key < MY_VK_LAST_PAD_MODIFIER) {
-        return MY_TYPE_PAD | MY_TYPE_MODIFIER;
+        return MyVkType(MyVkSource::Pad).SetOfUser().SetModifier();
     } else if (key >= MY_VK_FIRST_CMD && key < MY_VK_LAST_CMD) {
-        return MY_TYPE_COMMAND;
-    } else if (key >= MY_VK_FIRST_PAD_CMD && key < MY_VK_LAST_PAD_CMD) {
-        return MY_TYPE_PAD | MY_TYPE_COMMAND;
+        return MyVkType(MyVkSource::Command);
+    } else if (key >= MY_VK_FIRST_USER_CMD && key < MY_VK_LAST_USER_CMD) {
+        return MyVkType(MyVkSource::Command).SetOfUser();
     }
 
-    return MY_TYPE_UNKNOWN;
+    return MyVkType();
+}
+
+bool IsMouseMotionKey(int key) {
+    switch (key) {
+    case MY_VK_MOUSE_LEFT:
+    case MY_VK_MOUSE_RIGHT:
+    case MY_VK_MOUSE_UP:
+    case MY_VK_MOUSE_DOWN:
+        return true;
+    default:
+        return false;
+    }
 }
 
 tuple<int, int> GetKeyPair(int key) {
