@@ -5,6 +5,8 @@ Currently not user-friendly, but functional.
 
 [You can find the latest release (MyInput_Windows.zip) here.](https://github.com/thisismypassport/myinput/releases/) 
 
+If you find this useful, and have any requests or suggestions, let me know via opening an issue or starting a disussion. (And if you're having trouble getting it to work on your machine or to behave as you'd like, please open an issue)
+
 # Usage
 
 ## One-time Run
