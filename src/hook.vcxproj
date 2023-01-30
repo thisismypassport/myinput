@@ -187,6 +187,8 @@
     <ClInclude Include="Hook.h" />
     <ClInclude Include="Impl.h" />
     <ClInclude Include="CfgMgr.h" />
+    <ClInclude Include="ImplKeyMouse.h" />
+    <ClInclude Include="ImplPad.h" />
     <ClInclude Include="MiscApi.h" />
     <ClInclude Include="NotifyApi.h" />
     <ClInclude Include="RawRegister.h" />
@@ -204,6 +206,7 @@
     <ClInclude Include="WinFeatures.h" />
     <ClInclude Include="WinHooks.h" />
     <ClInclude Include="WinInput.h" />
+    <ClInclude Include="WinUtils.h" />
     <ClInclude Include="XUsbApi.h" />
   </ItemGroup>
   <ItemGroup>

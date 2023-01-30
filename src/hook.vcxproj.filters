@@ -44,6 +44,11 @@
     <ClInclude Include="WinInput.h" />
     <ClInclude Include="Keys.h" />
     <ClInclude Include="Thunk.h" />
+    <ClInclude Include="ImplPad.h" />
+    <ClInclude Include="ImplKeyMouse.h" />
+    <ClInclude Include="WinUtils.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Utils">

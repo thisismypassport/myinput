@@ -13,14 +13,14 @@ struct ImplThreadPoolNotification {
 
 class ImplThreadPoolNotifications {
     mutex mMutex;
-    unordered_map<void *, shared_ptr<ImplThreadPoolNotification>> mNotifications;
+    unordered_map<void *, SharedPtr<ImplThreadPoolNotification>> mNotifications;
 
 public:
     // handle here must be a real pointer, so it's safe to allocate our own
     // (this is indeed the case for HDEVNOTIFY and HCMNOTIFICATION)
 
     void *Allocate() {
-        auto notify = make_shared<ImplThreadPoolNotification>();
+        auto notify = SharedPtr<ImplThreadPoolNotification>::New();
         notify->Allocated = true;
 
         lock_guard<mutex> lock(mMutex);
@@ -34,11 +34,11 @@ public:
 
         auto &notify = mNotifications[handle];
         if (!notify) {
-            notify = make_shared<ImplThreadPoolNotification>();
+            notify = SharedPtr<ImplThreadPoolNotification>::New();
         }
         notify->Cb = move(cb);
 
-        notify->CbIter = G.AddGlobalCallback([notify](ImplUser *user, bool added) {
+        notify->CbIter = G.GlobalCallbacks.Add([notify](ImplUser *user, bool added) {
             QueueUserWorkItem([](LPVOID param) -> DWORD {
                 (*((function<void()> *)param))();
                 return 0;
@@ -60,7 +60,7 @@ public:
         }
 
         auto notify = iter->second;
-        G.RemoveGlobalCallback(notify->CbIter);
+        G.GlobalCallbacks.Remove(notify->CbIter);
 
         mNotifications.erase(iter);
 

@@ -1,5 +1,7 @@
 # myinput
-A per-process Keyboard -> Virtual Controller key mapper for Windows. Relies on hooks instead of drivers.
+Allows mapping Keyboard/Mouse keys to a Virtual Controller on a per-app basis, without having to install any drivers.
+
+Can also remap Keyboard/Mouse keys to other Keyboard/Mouse keys.
 
 Currently not user-friendly, but functional.
 
@@ -29,9 +31,9 @@ Edit Configs/_default.ini to change the default key mapping.
 
 By default, the file maps keyboard keys to a XBox360 controller.
 
-Both (Keyboard -> Virtual Controller) and (Keyboard -> Keyboard/Mouse Button) mappings are well-supported.
+You can see various mapping examples in Config/myinput_test.ini and Config/myinput_test_subconf.ini (do not copy the \#\[ and \#\] lines)
 
-(Mouse -> \*) mappings are only partially implemented currently. (Controller -> \*) mappings are not currently supported.
+You can see a reference of the configuration file format in Config/_default.ini
 
 ## Per-Executable Mapping
 

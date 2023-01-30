@@ -1,8 +1,9 @@
 #pragma once
-#include <Windows.h>
 #include "UtilsStr.h"
 #include "UtilsPath.h"
 #include "Keys.h"
+#include "WinUtils.h"
+#include <Windows.h>
 
 #define IMPL_MAX_USERS 8
 
@@ -19,15 +20,15 @@ struct ImplButtonState : public ImplRawState {
 };
 
 struct ImplTriggerState : public ImplButtonState {
-    double Value = false;
+    double Value = 0; // 0 .. 1
+    double Threshold = 0.12;
 
     uint8_t Value8() const { return (uint8_t)round(Value * 0xff); }
 };
 
 struct ImplAxisState {
     ImplRawState Pos, Neg; // must be first (see union below)
-    int State = 0;         // -1/0/1
-    double Value = 0;
+    double Value = 0;      // -1 .. 1
     double Extent = 0;
     double RotateModifier = 1;
     bool RotateFakePressed = false;
@@ -51,23 +52,39 @@ struct ImplAxesState {
     };
 };
 
+struct ImplMotionDimState {
+    double NewValue = 0;
+    double OldValue = 0;
+    double Speed = 0;
+    double Accel = 0;
+    double FinalAccel = 0; // value in mult. of g
+};
+
+static constexpr double DegreesToRadians = std::numbers::pi / 180;
+
+struct ImplMotionState {
+    ImplMotionDimState X, Y, Z;    // value is metres
+    ImplMotionDimState RX, RY, RZ; // value is radians
+    UserTimer Timer;
+    DWORD PrevTime = 0;
+
+    static constexpr double PosScale = 0.01; // cm -> metres
+    static constexpr double RotScale = DegreesToRadians;
+    static constexpr double GScale = 9.80665;
+
+    ImplMotionState() { Y.FinalAccel = -1; } // gravity
+};
+
 struct ImplState {
     mutable mutex Mutex;
     ImplButtonState A, B, X, Y, LB, RB, L, R, DL, DR, DU, DD, Start, Back, Guide, Extra;
     ImplTriggerState LT, RT;
     ImplAxesState LA, RA;
-    int Version;
-
-    void IncrementVersion() {
-        Version++;
-        if (Version == 0) {
-            Version++;
-        }
-    }
+    ImplMotionState Motion;
+    DWORD Time = 0;
+    int Version = 0;
 };
 
-struct ImplUser;
-using ImplUserCb = list<function<void(ImplUser *)>>::iterator;
 struct DeviceIntf;
 
 struct ImplUser {
@@ -75,45 +92,21 @@ struct ImplUser {
     bool Connected = false;
     bool DeviceSpecified = false;
     DeviceIntf *Device = nullptr;
-
-    mutex CbMutex;
-    list<function<void(ImplUser *)>> Callbacks;
-
-    ImplUserCb AddCallback(function<void(ImplUser *)> cb);
-    void RemoveCallback(const ImplUserCb &cbIter);
-
-    void SendEvent() {
-        lock_guard<mutex> lock(CbMutex);
-        for (auto &cb : Callbacks) {
-            cb(this);
-        }
-    }
+    CallbackList<void(ImplUser *)> Callbacks;
 };
 
-struct ImplInputCond {
+using ImplUserCb = decltype(ImplUser::Callbacks)::CbIter;
+
+struct ImplCond {
     int Key = 0;
     bool State = false;
     bool Toggle = false;
-    ImplInputCond *Next = nullptr;
-
-    void Reset() {
-        if (Next) {
-            Next->Reset();
-            delete Next;
-        }
-        *this = ImplInputCond();
-    }
+    SharedPtr<ImplCond> Child;
+    SharedPtr<ImplCond> Next;
 };
 
-struct ImplInput {
-    // (it's not safe to use this as UINT_PTR, since it may get deleted)
-    static unordered_map<UINT_PTR, ImplInput *> sTimers;
-
-    static ImplInput *FromTimer(UINT_PTR id) {
-        auto iter = sTimers.find(id);
-        return iter == sTimers.end() ? nullptr : iter->second;
-    }
-
+struct ImplMapping {
+    int SrcKey = 0;
     int DestKey = 0;
     MyVkType SrcType = {};
     MyVkType DestType = {};
@@ -122,61 +115,44 @@ struct ImplInput {
     bool Forward : 1 = false;
     bool Turbo : 1 = false;
     bool Toggle : 1 = false;
-    bool Snap : 1 = false;
+    bool Add : 1 = false;
     bool PassedCond : 1 = false;
     bool TurboValue : 1 = false;
     bool ToggleValue : 1 = false;
-
-    // set even if cond/etc fails (shouldn't really be here...)
-    bool AsyncDown : 1 = false;
-    bool AsyncToggle : 1 = false;
+    bool Replace : 1 = false;    // r/w only
+    bool Persistent : 1 = false; // r/w only
 
     double Rate = 0;
     double Strength = 0;
-    ImplInput *Next = nullptr;
-    ImplInputCond *Conds = nullptr;
-    UINT_PTR TimerValue = 0;
+    SharedPtr<ImplMapping> Next;
+    SharedPtr<ImplCond> Conds;
+    UserTimer Timer;
 
-    bool IsValid() const { return DestKey != 0; }
-    bool HasTimer() const { return TimerValue != 0; }
-
-    void StartTimer(int timeMs, TIMERPROC timerCb) {
-        if (TimerValue) {
-            EndTimer();
-        }
-
-        TimerValue = SetTimer(nullptr, 0, timeMs, timerCb);
-        sTimers[TimerValue] = this;
-    }
-
-    void EndTimer() {
-        if (TimerValue) {
-            sTimers.erase(TimerValue);
-            KillTimer(nullptr, TimerValue);
-            TimerValue = 0;
-        }
-    }
-
-    void Reset() {
-        EndTimer();
-        if (Next) {
-            Next->Reset();
-            delete Next;
-        }
-        if (Conds) {
-            Conds->Reset();
-            delete Conds;
-        }
-
-        bool oldDown = AsyncDown;
-        bool oldToggle = AsyncToggle;
-        *this = ImplInput();
-        AsyncDown = oldDown;
-        AsyncToggle = oldToggle;
-    }
+    bool HasTimer() const { return Timer.IsSet(); }
+    void StartTimerMs(DWORD timeMs, TIMERPROC timerCb) { Timer.StartMs(timeMs, timerCb, this); }
+    void StartTimerS(double time, TIMERPROC timerCb) { Timer.StartS(time, timerCb, this); }
+    void EndTimer() { Timer.End(); }
+    static ImplMapping *FromTimer(UINT_PTR id) { return GTimerData.From<ImplMapping>(id); }
 };
 
-unordered_map<UINT_PTR, ImplInput *> ImplInput::sTimers;
+struct ImplReset {
+    SharedPtr<ImplMapping> Mapping;
+    SharedPtr<ImplReset> Next;
+};
+
+struct ImplInput {
+    SharedPtr<ImplMapping> Mappings;
+    SharedPtr<ImplReset> Resets;
+
+    bool AsyncDown : 1 = false;
+    bool AsyncToggle : 1 = false;
+
+    bool PressGenerated : 1 = false;
+    bool PressFresh : 1 = false;
+    bool PressFreshForCheck : 1 = false;
+
+    void Reset() { Mappings = nullptr; }
+};
 
 struct ImplDeviceBase {
     HHOOK HLowHook = nullptr;
@@ -189,7 +165,7 @@ struct ImplKeyboard : public ImplDeviceBase {
     ImplInput Keys[Count] = {};
 
     ImplInput *Get(int input) {
-        if (input >= 0 && input < Count) {
+        if (input > 0 && input < Count) {
             return &Keys[input];
         } else {
             return nullptr;
@@ -201,13 +177,6 @@ struct ImplKeyboard : public ImplDeviceBase {
             Keys[i].Reset();
         }
     }
-};
-
-struct ImplThreadHook {
-    DWORD Thread = 0;
-    HHOOK HHook = nullptr;
-    bool Started = false;
-    bool Finished = false;
 };
 
 struct ImplMouseAxis {
@@ -233,17 +202,7 @@ struct ImplMouse : public ImplDeviceBase {
     ImplMouseMotion Motion;
     ImplMouseAxis Wheel, HWheel;
 
-    bool AnyMotionInput = false;
-    bool AnyMotionOutput = false;
-
-    DWORD ActiveThread = 0;
-    POINT OldPos = {};
-    WeakAtomic<DWORD> PrevThread{0};
-    WeakAtomic<HWND> PrevWindow{nullptr};
     MOUSEINPUT MotionChange = {};
-
-    mutex ThreadHooksMutex;
-    vector<ImplThreadHook> ThreadHooks;
 
     void Reset() {
         Motion.Reset();
@@ -258,14 +217,13 @@ struct ImplDelayedHooks {
     WeakAtomic<bool> Loaded = false;
 };
 
-using ImplGlobalCb = list<function<void(ImplUser *, bool)>>::iterator;
-
 struct ImplG {
     ImplUser Users[IMPL_MAX_USERS];
     ImplKeyboard Keyboard; // also includes mouse buttons, though...
     ImplMouse Mouse;
     int8_t ActiveUser = 0;
     int8_t DefaultActiveUser = 0;
+    bool InForeground = false;
 
     bool Trace = false;
     bool Debug = false;
@@ -275,48 +233,20 @@ struct ImplG {
     bool Forward = false;
     bool Always = false;
     bool Disable = false;
+    bool HideCursor = false;
     bool InjectChildren = false;
     bool RumbleWindow = false;
 
     HINSTANCE HInstance = nullptr;
     DWORD DllThread = 0;
     HWND DllWindow = nullptr;
-    Path ConfigPath;
     vector<Path> ExtraHooks;
     vector<ImplDelayedHooks> ExtraDelayedHooks;
 
-    mutex CbMutex;
-    list<function<void(ImplUser *, bool)>> GlobalCallbacks;
-
-    ImplGlobalCb AddGlobalCallback(function<void(ImplUser *, bool)> cb) {
-        lock_guard<mutex> lock(CbMutex);
-        GlobalCallbacks.push_back(cb);
-        return std::prev(GlobalCallbacks.end());
-    }
-
-    void RemoveGlobalCallback(const ImplGlobalCb &cbIter) {
-        lock_guard<mutex> lock(CbMutex);
-        GlobalCallbacks.erase(cbIter);
-    }
-
-    void SendGlobalEvent(ImplUser *user, bool added) {
-        lock_guard<mutex> lock(CbMutex);
-        for (auto &cb : GlobalCallbacks) {
-            cb(user, added);
-        }
-    }
+    CallbackList<void(ImplUser *, bool)> GlobalCallbacks;
 } G;
 
-ImplUserCb ImplUser::AddCallback(function<void(ImplUser *)> cb) {
-    lock_guard<mutex> lock(CbMutex);
-    Callbacks.push_back(cb);
-    return std::prev(Callbacks.end());
-}
-
-void ImplUser::RemoveCallback(const ImplUserCb &cbIter) {
-    lock_guard<mutex> lock(CbMutex);
-    Callbacks.erase(cbIter);
-}
+using ImplGlobalCb = decltype(ImplG::GlobalCallbacks)::CbIter;
 
 static ImplUser *ImplGetUser(DWORD user, bool force = false) {
     if (user < IMPL_MAX_USERS && (force || G.Users[user].Connected)) {
@@ -380,12 +310,19 @@ ImplInput *ImplGetInput(int key) {
 }
 
 int ImplChooseBestKeyInPair(int key) {
-    int key1, key2;
-    tie(key1, key2) = GetKeyPair(key);
+    auto [key1, key2] = GetKeyPair(key);
     int scan1 = MapVirtualKeyW(key1, MAPVK_VK_TO_VSC);
     int scan2 = MapVirtualKeyW(key2, MAPVK_VK_TO_VSC);
     return (!scan1 && scan2) ? key2 : key1;
 }
+
+struct InputValue {
+    bool Down;
+    DWORD Time;
+    double Strength;
+
+    InputValue(bool down, double strength, DWORD time) : Down(down), Strength(strength), Time(time) {}
+};
 
 #define DBG_ASSERT_DLL_THREAD() \
     DBG_ASSERT(GetCurrentThreadId() == G.DllThread, "wrong thread in call")

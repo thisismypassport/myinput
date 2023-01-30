@@ -1,7 +1,6 @@
-#define NOMINMAX
-#include <Windows.h>
 #include "UtilsPath.h"
 #include "UtilsUi.h"
+#include <Windows.h>
 
 #define IFEO_KEY LR"(SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options)"
 #define DEBUGGER_VALUE L"Debugger"

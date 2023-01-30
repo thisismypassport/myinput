@@ -1,3 +1,7 @@
+#include "UtilsPath.h"
+#include "UtilsStr.h"
+#include "UtilsUiBase.h"
+
 #include <Windows.h>
 #include <hidusage.h>
 #include <hidpi.h>
@@ -10,20 +14,31 @@
 #include <inttypes.h>
 #include <Dbt.h>
 #include <Xinput.h>
-#include "UtilsPath.h"
-#include "UtilsStr.h"
-#include "UtilsUiBase.h"
 
+#include "Keys.h" // for IsVkMouseButton
+
+bool gPrintGamepad;
 bool gPrintKeyboard;
 bool gPrintMouse;
 bool gPrintMouseCursor;
 bool gPrintTime;
 bool gPrintDeviceChange;
+bool gStressDevice;
+bool gStressDeviceCommunicate;
 
 WeakAtomic<HWND> gNotifyWin;
 WeakAtomic<HWND> gNotifyWinA;
 HANDLE gSubProcess;
 WNDPROC gTestWindowProcBase;
+HANDLE gTestWindow;
+
+struct LatencyMeasure {
+    enum { MaxPrev = 0x80 };
+    const char *Name;
+    double SumPrev = 0.0;
+    int NumPrev = 0;
+    uint64_t LastTime = 0;
+} gKeyLatency{"key"}, gMouseLatency{"mouse"};
 
 #ifdef _WIN64 // some things are broken in wow64 mode
 #define WOW64_BROKEN(x) x
@@ -63,6 +78,26 @@ void CreateThread(TFunc threadFunc) {
             return 0;
         },
         new function<void()>(threadFunc), 0, nullptr));
+}
+
+uint64_t GetPerfCounter() {
+    LARGE_INTEGER value = {};
+    QueryPerformanceCounter(&value);
+    return value.QuadPart;
+}
+
+double GetPerfDelay(uint64_t prev, uint64_t *nowPtr = nullptr) {
+    static uint64_t freq = ([]() {
+        LARGE_INTEGER value = {};
+        QueryPerformanceFrequency(&value);
+        return value.QuadPart;
+    })();
+
+    uint64_t now = GetPerfCounter();
+    if (nowPtr) {
+        *nowPtr = now;
+    }
+    return (double)(now - prev) / freq;
 }
 
 DWORD CALLBACK DeviceChangeCMCb(HCMNOTIFICATION notify, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA data, DWORD size);
@@ -157,37 +192,64 @@ public:
         ZeroMemory(datas, sizeof(datas)); // allows using RawValue
         AssertEquals("raw.read", HidP_GetData(HidP_Input, datas, &ndatas, mPreparsed, (char *)buffer, length), HIDP_STATUS_SUCCESS);
 
-        for (ULONG i = 0; i < ndatas; i++) {
-            auto &input = mInputs[datas[i].DataIndex];
+        if (gPrintGamepad) {
+            for (ULONG i = 0; i < ndatas; i++) {
+                auto &input = mInputs[datas[i].DataIndex];
 
-            if (input.Prev != datas[i].RawValue) {
-                printf("pad.%d %s -> %ld : %s\n", mIdx, input.Name.c_str(), datas[i].RawValue, mSource);
-                input.Prev = datas[i].RawValue;
+                if (input.Prev != datas[i].RawValue) {
+                    printf("pad.%d %s -> %ld : %s\n", mIdx, input.Name.c_str(), datas[i].RawValue, mSource);
+                    input.Prev = datas[i].RawValue;
+                }
+
+                input.Seen = true;
             }
 
-            input.Seen = true;
-        }
+            // handle buttons (so complicated...)
+            for (auto &input : mInputs) {
+                if (!input.IsValue && !input.Seen && input.Prev) {
+                    printf("pad.%d %s -> 0 : %s\n", mIdx, input.Name.c_str(), mSource);
+                    input.Prev = 0;
+                }
 
-        // handle buttons (so complicated...)
-        for (auto &input : mInputs) {
-            if (!input.IsValue && !input.Seen && input.Prev) {
-                printf("pad.%d %s -> 0 : %s\n", mIdx, input.Name.c_str(), mSource);
-                input.Prev = 0;
+                input.Seen = false;
             }
-
-            input.Seen = false;
         }
     }
 };
 
-void ReadDevice(int idx, const wchar_t *path, uint8_t *preparsed, bool immediate) {
-    /* leak test
-    while (true)
-    {
-        HANDLE h1 = CreateFileW (path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_FLAG_OVERLAPPED, nullptr);
-        CloseHandle (h1);
+void StressDevice(const wchar_t *path) {
+    static bool started = false;
+    if (!started) {
+        wstring pathCopy = path;
+        CreateThread([pathCopy]() {
+            uint64_t prev = GetPerfCounter();
+            int i = 0;
+            while (true) {
+                HANDLE handle = CreateFileW(pathCopy.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, 0, nullptr);
+                if (gStressDeviceCommunicate) {
+                    ULONG value = 0;
+                    DeviceIoControl(handle, IOCTL_HID_SET_POLL_FREQUENCY_MSEC, &value, sizeof(ULONG), nullptr, 0, nullptr, nullptr);
+                    byte data[0x1000];
+                    DWORD dsize;
+                    ReadFile(handle, data, sizeof data, &dsize, nullptr);
+                }
+                CloseHandle(handle);
+
+                if (i++ == 0x10000) {
+                    printf("stress dev create : %lf\n", GetPerfDelay(prev, &prev));
+                    i = 0;
+                }
+            }
+        });
+        started = true;
     }
-    */
+}
+
+void ReadDevice(int idx, const wchar_t *path, uint8_t *preparsed, bool immediate) {
+    if (gStressDevice) {
+        StressDevice(path);
+    }
 
     HANDLE file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_FLAG_OVERLAPPED, nullptr);
     AssertNotEquals("dev.open", (intptr_t)file, (intptr_t)INVALID_HANDLE_VALUE);
@@ -1015,14 +1077,14 @@ void ReadJoysticks(int count) {
         ZeroMemory(oldInfos, sizeof(JOYINFOEX) * count);
 
         while (true) {
-            for (int joy = 0; joy < count; joy++) // this is a terrible way to do this (lots of churn), thus we test it
+            for (int joy = 0; joy < count; joy++) // this is a terrible way to do this (stresses device creation), thus we test it
             {
                 auto &oldInfo = oldInfos[joy];
 
                 JOYINFOEX info;
                 info.dwSize = sizeof(info);
                 info.dwFlags = JOY_RETURNALL;
-                if (joyGetPosEx(joy, &info) == JOYERR_NOERROR) {
+                if (joyGetPosEx(joy, &info) == JOYERR_NOERROR && gPrintGamepad) {
                     if (info.dwXpos != oldInfo.dwXpos) {
                         printf("pad.%d x -> %d : joy\n", joy, info.dwXpos);
                     }
@@ -1110,7 +1172,8 @@ void ReadXInput(bool ex) {
             for (int i = 0; i < XUSER_MAX_COUNT; i++) {
                 XINPUT_STATE state = {};
                 if (XInputGetState(i, &state) == ERROR_SUCCESS &&
-                    state.dwPacketNumber != oldState[i].dwPacketNumber) {
+                    state.dwPacketNumber != oldState[i].dwPacketNumber &&
+                    gPrintGamepad) {
                     const char *buttons[] = {"du", "dd", "dl", "dr", "st", "bk", "l", "r", "lb", "rb", "g", "", "a", "b", "x", "y"};
 
                     for (int mask = 1, b = 0; mask < 0x10000; mask <<= 1, b++) {
@@ -1150,7 +1213,8 @@ void ReadXInputStroke() {
     CreateThread([]() {
         while (true) {
             XINPUT_KEYSTROKE key;
-            while (XInputGetKeystroke_F(XUSER_INDEX_ANY, 0, &key) == ERROR_SUCCESS) {
+            while (XInputGetKeystroke_F(XUSER_INDEX_ANY, 0, &key) == ERROR_SUCCESS &&
+                   gPrintGamepad) {
                 char ch = (key.Flags & XINPUT_KEYSTROKE_REPEAT) ? 'r' : (key.Flags & XINPUT_KEYSTROKE_KEYUP) ? 'u'
                                                                                                              : 'd';
 
@@ -1184,7 +1248,86 @@ void RumbleXInput() {
     });
 }
 
-void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumble) {
+LRESULT CALLBACK VisualizeWindowProc(HWND win, UINT msg, WPARAM w, LPARAM l) {
+    if (msg == WM_TIMER) {
+        InvalidateRect(win, nullptr, false);
+    } else if (msg == WM_PAINT) {
+        static HDC dc = CreateCompatibleDC(nullptr);
+        static HBITMAP bmp = CreateCompatibleBitmap(GetDC(nullptr), 450, 260);
+        SelectObject(dc, bmp);
+
+        RECT whole = {0, 0, 450, 260};
+        FillRect(dc, &whole, (HBRUSH)(COLOR_WINDOW + 1));
+        SetBkMode(dc, TRANSPARENT);
+        SetTextAlign(dc, TA_TOP | TA_LEFT);
+
+        XInputGetState_T XInputGetState = XInputGetStateEx_F ? XInputGetStateEx_F : XInputGetState_F;
+
+        XINPUT_STATE state = {};
+        if (XInputGetState(0, &state) == ERROR_SUCCESS) {
+            const wchar_t *buttons[] = {L"U", L"D", L"L", L"R", L"ST", L"BK", L"LS", L"RS", L"LB", L"RB", L"G", L"", L"A", L"B", L"X", L"Y", L"LT", L"RT"};
+            POINT btnPoints[] = {{140, 180}, {140, 220}, {115, 200}, {165, 200}, {260, 120}, {150, 120}, {65, 140}, {280, 200}, {40, 35}, {375, 35}, {210, 120}, {0, 0}, {350, 150}, {390, 120}, {315, 120}, {350, 90}, {80, 5}, {330, 5}};
+
+            for (int mask = 1, b = 0; mask < 0x10000; mask <<= 1, b++) {
+                if (state.Gamepad.wButtons & mask) {
+                    SetTextColor(dc, RGB(0, 0, 0));
+                    TextOutW(dc, btnPoints[b].x, btnPoints[b].y, buttons[b], (int)wcslen(buttons[b]));
+                }
+            }
+
+            for (int b = 0; b < 2; b++) {
+                BYTE value = b ? state.Gamepad.bRightTrigger : state.Gamepad.bLeftTrigger;
+                if (value) {
+                    SetTextColor(dc, RGB(value ^ 0xff, value ^ 0xff, value ^ 0xff));
+                    int bb = 0x10 + b;
+                    TextOutW(dc, btnPoints[bb].x, btnPoints[bb].y, buttons[bb], (int)wcslen(buttons[bb]));
+                }
+            }
+
+            for (int b = 0; b < 2; b++) {
+                SHORT x = b ? state.Gamepad.sThumbRX : state.Gamepad.sThumbLX;
+                SHORT y = b ? state.Gamepad.sThumbRY : state.Gamepad.sThumbLY;
+                if (x || y) {
+                    static HPEN pen = CreatePen(PS_SOLID, 2, RGB(0xff, 0x80, 0x80));
+                    SelectObject(dc, pen);
+
+                    POINT c = btnPoints[6 + b];
+                    MoveToEx(dc, c.x, c.y, nullptr);
+                    LineTo(dc, c.x + x * 37 / 0x7fff, c.y - y * 37 / 0x7fff);
+                }
+            }
+        }
+
+        PAINTSTRUCT ps;
+        HDC pdc = BeginPaint(win, &ps);
+        RECT crect;
+        GetClientRect(win, &crect);
+        StretchBlt(pdc, 0, 0, crect.right, crect.bottom, dc, 0, 0, 450, 260, SRCCOPY);
+        EndPaint(win, &ps);
+        return 0;
+    }
+
+    return DefWindowProc(win, msg, w, l);
+}
+
+void VisualizeXInput() {
+    CreateThread([]() {
+        RECT rect = {0, 0, 450, 260};
+        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, false);
+        HWND window = CreateWindowW(L"STATIC", L"Visualize", WS_OVERLAPPEDWINDOW, 400, 0, rect.right - rect.left, rect.bottom - rect.top, 0, NULL, NULL, NULL);
+        SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)VisualizeWindowProc);
+        SetTimer(window, 1, 15, nullptr);
+        ShowWindow(window, SW_SHOW);
+
+        MSG msg;
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    });
+}
+
+void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumble, bool visualize) {
     const wchar_t *dll_name = L"";
     switch (version) {
     case 1:
@@ -1245,6 +1388,9 @@ void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumbl
     if (rumble) {
         RumbleXInput();
     }
+    if (visualize) {
+        VisualizeXInput();
+    }
 }
 
 void TestWindowMsg(UINT msg, WPARAM w, LPARAM l, LONG time, bool injected, ULONG_PTR xinfo, const char *source) {
@@ -1290,7 +1436,7 @@ void TestWindowMsg(UINT msg, WPARAM w, LPARAM l, LONG time, bool injected, ULONG
 
     case WM_MOUSEMOVE:
     case WM_NCMOUSEMOVE:
-        if (gPrintMouse && gPrintMouseCursor) {
+        if (gPrintMouseCursor) {
             printed = printf("mouse cursor -> %d,%d %s%s: %s\n", (SHORT)LOWORD(l), (SHORT)HIWORD(l),
                              injected ? "[J] " : "", msg == WM_NCMOUSEMOVE ? "[N] " : "", source);
         }
@@ -1309,7 +1455,7 @@ void TestWindowMsg(UINT msg, WPARAM w, LPARAM l, LONG time, bool injected, ULONG
         printf("(xinfo: %" PRIxPTR " : %s)\n", xinfo, source);
     }
     if (printed >= 0 && time != -1 && gPrintTime) {
-        printf("(time: %d : %s)\n", time, source);
+        printf("(time: %u : %s)\n", time, source);
     }
 }
 
@@ -1471,6 +1617,56 @@ void SendInputs() {
     });
 }
 
+enum { MeasureLatencyXInfo = 0x12345 };
+
+void MeasureLatency() {
+    CreateThread([=]() {
+        bool first = true;
+        while (true) {
+            if (GetForegroundWindow() == gTestWindow && gTestWindow) {
+                INPUT input;
+                input.type = INPUT_KEYBOARD;
+                input.ki = {};
+                input.ki.wVk = 'M';
+                input.ki.wScan = MapVirtualKeyW('M', MAPVK_VK_TO_VSC);
+                input.ki.dwFlags = first ? 0 : KEYEVENTF_KEYUP;
+                input.ki.dwExtraInfo = MeasureLatencyXInfo;
+                gKeyLatency.LastTime = GetPerfCounter();
+                SendInput(1, &input, sizeof(INPUT));
+                Sleep(5);
+
+                input.type = INPUT_MOUSE;
+                input.mi = {};
+                input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+                input.mi.mouseData = WHEEL_DELTA;
+                input.mi.dwExtraInfo = MeasureLatencyXInfo + 1;
+                gMouseLatency.LastTime = GetPerfCounter();
+                SendInput(1, &input, sizeof(INPUT));
+
+                first = !first;
+            }
+            Sleep(15);
+        }
+    });
+}
+
+void MeasureLatencyInMsg() {
+    auto xinfo = GetMessageExtraInfo();
+    if (xinfo == MeasureLatencyXInfo || xinfo == MeasureLatencyXInfo + 1) {
+        LatencyMeasure *latency = xinfo == MeasureLatencyXInfo ? &gKeyLatency : &gMouseLatency;
+        double delay = GetPerfDelay(latency->LastTime);
+
+        latency->SumPrev += delay;
+        latency->NumPrev++;
+
+        if (latency->NumPrev == LatencyMeasure::MaxPrev) {
+            printf("%s latency: %lf\n", latency->Name, latency->SumPrev / latency->NumPrev);
+            latency->SumPrev = 0.0;
+            latency->NumPrev = 0;
+        }
+    }
+}
+
 bool GetCIM() {
     INPUT_MESSAGE_SOURCE ims;
     return GetCurrentInputMessageSource(&ims) && ims.originId == IMO_INJECTED;
@@ -1484,8 +1680,9 @@ LRESULT CALLBACK TestWindowProc(HWND win, UINT msg, WPARAM w, LPARAM l) {
 template <class intT>
 void TestStateMsg(int key, intT value, intT *oldValue, const char *source) {
     if (value != *oldValue) {
-        if (gPrintKeyboard) {
-            printf("key %d -> %d (%d) : %s\n", key, (std::make_signed_t<intT>)value < 0, value & 1, source);
+        bool isMouse = IsVkMouseButton(key);
+        if (isMouse ? gPrintMouse : gPrintKeyboard) {
+            printf("%s %d -> %d (%d) : %s\n", isMouse ? "mouse" : "key", key, (std::make_signed_t<intT>)value < 0, value & 1, source);
         }
         *oldValue = value;
     }
@@ -1506,9 +1703,10 @@ void ShowTestWindow(function<void()> innerCode) {
 
         int width = GetSystemMetrics(SM_CXSCREEN);
         int height = GetSystemMetrics(SM_CYSCREEN);
-        int style = ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL | ES_AUTOHSCROLL;
+        int style = ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL | ES_AUTOHSCROLL | WS_OVERLAPPEDWINDOW;
 
         HWND window = CreateWindowW(L"EDIT", L"TEST", style, width - 500, height - 500, 250, 250, 0, NULL, NULL, NULL);
+        gTestWindow = window;
         SetWindowTextW(window, L"");
 
         gTestWindowProcBase = (WNDPROC)GetWindowLongPtrW(window, GWLP_WNDPROC);
@@ -1520,10 +1718,12 @@ void ShowTestWindow(function<void()> innerCode) {
 
         MSG msg;
         while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            MeasureLatencyInMsg();
+
             POINT newPos;
             AssertEquals("test.gcp", GetCursorPos(&newPos), TRUE);
             if (newPos.x != cursorPos.x || newPos.y != cursorPos.y) {
-                if (gPrintMouse && gPrintMouseCursor) {
+                if (gPrintMouseCursor) {
                     printf("mouse cursor -> %d,%d : state\n", newPos.x, newPos.y);
                 }
                 cursorPos = newPos;
@@ -1572,7 +1772,7 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
                 }
                 TestWindowMsg(ri->data.keyboard.Message, ri->data.keyboard.VKey, flags << 16, GetMessageTime(),
                               injected, ri->data.keyboard.ExtraInformation, "raw");
-            } else if (ri->header.dwType == RIM_TYPEMOUSE && gPrintMouse) {
+            } else if (ri->header.dwType == RIM_TYPEMOUSE) {
                 int printed = -1;
                 const char *injectedStr = injected ? "[J] " : "";
 
@@ -1590,33 +1790,35 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
                     }
                 }
 
-                if (ri->data.mouse.usButtonFlags & RI_MOUSE_WHEEL) {
-                    printed |= printf("mouse wheel -> %d %s: raw\n", (SHORT)ri->data.mouse.usButtonData, injectedStr);
-                }
-                if (ri->data.mouse.usButtonFlags & RI_MOUSE_HWHEEL) {
-                    printed |= printf("mouse hwheel -> %d %s: raw\n", (SHORT)ri->data.mouse.usButtonData, injectedStr);
-                }
-                if (ri->data.mouse.usButtonFlags & (RI_MOUSE_LEFT_BUTTON_DOWN | RI_MOUSE_LEFT_BUTTON_UP)) {
-                    printed |= printf("mouse l -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN) != 0, injectedStr);
-                }
-                if (ri->data.mouse.usButtonFlags & (RI_MOUSE_RIGHT_BUTTON_DOWN | RI_MOUSE_RIGHT_BUTTON_UP)) {
-                    printed |= printf("mouse r -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) != 0, injectedStr);
-                }
-                if (ri->data.mouse.usButtonFlags & (RI_MOUSE_MIDDLE_BUTTON_DOWN | RI_MOUSE_MIDDLE_BUTTON_UP)) {
-                    printed |= printf("mouse m -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN) != 0, injectedStr);
-                }
-                if (ri->data.mouse.usButtonFlags & (RI_MOUSE_BUTTON_4_DOWN | RI_MOUSE_BUTTON_4_UP)) {
-                    printed |= printf("mouse x1 -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN) != 0, injectedStr);
-                }
-                if (ri->data.mouse.usButtonFlags & (RI_MOUSE_BUTTON_5_DOWN | RI_MOUSE_BUTTON_5_UP)) {
-                    printed |= printf("mouse x2 -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN) != 0, injectedStr);
+                if (gPrintMouse) {
+                    if (ri->data.mouse.usButtonFlags & RI_MOUSE_WHEEL) {
+                        printed |= printf("mouse wheel -> %d %s: raw\n", (SHORT)ri->data.mouse.usButtonData, injectedStr);
+                    }
+                    if (ri->data.mouse.usButtonFlags & RI_MOUSE_HWHEEL) {
+                        printed |= printf("mouse hwheel -> %d %s: raw\n", (SHORT)ri->data.mouse.usButtonData, injectedStr);
+                    }
+                    if (ri->data.mouse.usButtonFlags & (RI_MOUSE_LEFT_BUTTON_DOWN | RI_MOUSE_LEFT_BUTTON_UP)) {
+                        printed |= printf("mouse l -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN) != 0, injectedStr);
+                    }
+                    if (ri->data.mouse.usButtonFlags & (RI_MOUSE_RIGHT_BUTTON_DOWN | RI_MOUSE_RIGHT_BUTTON_UP)) {
+                        printed |= printf("mouse r -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) != 0, injectedStr);
+                    }
+                    if (ri->data.mouse.usButtonFlags & (RI_MOUSE_MIDDLE_BUTTON_DOWN | RI_MOUSE_MIDDLE_BUTTON_UP)) {
+                        printed |= printf("mouse m -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN) != 0, injectedStr);
+                    }
+                    if (ri->data.mouse.usButtonFlags & (RI_MOUSE_BUTTON_4_DOWN | RI_MOUSE_BUTTON_4_UP)) {
+                        printed |= printf("mouse x1 -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN) != 0, injectedStr);
+                    }
+                    if (ri->data.mouse.usButtonFlags & (RI_MOUSE_BUTTON_5_DOWN | RI_MOUSE_BUTTON_5_UP)) {
+                        printed |= printf("mouse x2 -> %d %s: raw\n", (ri->data.mouse.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN) != 0, injectedStr);
+                    }
                 }
 
                 if (printed >= 0 && ri->data.mouse.ulExtraInformation) {
                     printf("(xinfo: %x : raw)\n", ri->data.mouse.ulExtraInformation);
                 }
                 if (printed >= 0 && gPrintTime) {
-                    printf("(time: %d : raw)\n", GetMessageTime());
+                    printf("(time: %u : raw)\n", GetMessageTime());
                 }
             }
         };
@@ -1676,7 +1878,7 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
     });
 }
 
-void CreateNewProcess(bool isChild, bool withIO, const string &args) {
+void CreateNewProcess(bool isChild, bool otherBitness, bool withIO, const string &args) {
     if (isChild) {
         if (withIO) {
             char buffer[16];
@@ -1689,9 +1891,18 @@ void CreateNewProcess(bool isChild, bool withIO, const string &args) {
         }
         return;
     } else {
-        PROCESS_INFORMATION pi;
-
         Path ownPath = PathGetModulePath(nullptr);
+        if (otherBitness) {
+            wstring ownPathWStr(ownPath);
+            if (StrContains(ownPathWStr, L"Win32")) {
+                StrReplaceFirst(ownPathWStr, L"Win32", L"x64");
+            } else if (StrContains(ownPathWStr, L"x64")) {
+                StrReplaceFirst(ownPathWStr, L"x64", L"Win32");
+            }
+            ownPath = ownPathWStr.c_str();
+        }
+
+        PROCESS_INFORMATION pi;
         Path cmdLine = args.empty() ? PathFromStr((string(GetCommandLineA()) + " --child").c_str()) : PathFromStr(("myinput_test.exe " + args).c_str());
 
         if (withIO) {
@@ -2008,8 +2219,8 @@ public:
 int main(int argc, char **argv) {
     Args args;
     BOOL_ARG(loadHook, "hook");
-    BOOL_ARG(runTests, "test");
     BOOL_ARG(testWindow, "test-win");
+    BOOL_ARG(visualizeWindow, "vis-win");
 
     BOOL_ARG(readDevice, "read-dev");
     BOOL_ARG(readDeviceImmediate, "read-dev-immed");
@@ -2039,8 +2250,13 @@ int main(int argc, char **argv) {
     BOOL_ARG(registerHookNoMouse, "reg-hook-nomouse");
     INT_ARG(registerHookCount, "reg-hook-count", 1);
     BOOL_ARG(registerHotkey, "reg-hotkey");
-    BOOL_ARG(sendInputs, "send-inputs");
 
+    BOOL_ARG(sendInputs, "send-inputs");
+    G_BOOL_ARG(gStressDevice, "stress-device");
+    G_BOOL_ARG(gStressDeviceCommunicate, "stress-device-comm");
+    BOOL_ARG(measureLatency, "measure-latency");
+
+    G_BOOL_ARG(gPrintGamepad, "print-pad");
     G_BOOL_ARG(gPrintKeyboard, "print-keys");
     G_BOOL_ARG(gPrintMouse, "print-mouse");
     G_BOOL_ARG(gPrintMouseCursor, "print-cursor");
@@ -2050,15 +2266,16 @@ int main(int argc, char **argv) {
     G_BOOL_ARG(gPrintDeviceChange, "print-dev-chg");
 
     BOOL_ARG(createProcess, "create-process");
+    BOOL_ARG(createProcessOther, "create-process-other");
     BOOL_ARG(createProcessWithIo, "create-process-io");
     STR_ARG(processArgs, "process-args");
     BOOL_ARG(isChild, "child");
 
     if (!args.Process(argc, argv)) {
-        runTests = testWindow = readDevice = true;
+        testWindow = readDevice = gPrintGamepad = visualizeWindow = true;
     }
 
-    if (loadHook) {
+    if (loadHook && !isChild) {
         LoadLibraryA("myinput_hook.dll");
     }
 
@@ -2068,47 +2285,51 @@ int main(int argc, char **argv) {
         typedef int (*MyInputHook_GetUserCountType)();
         MyInputHook_GetUserCountType MyInputHook_GetUserCountFunc = (MyInputHook_GetUserCountType)GetProcAddress(hookLib, "MyInputHook_GetUserCount");
         numOurs = MyInputHook_GetUserCountFunc();
+    } else if (loadHook) {
+        Alert(L"Hook not loaded in child!");
     }
 
-    if (runTests) {
-        CreateNotifyWindow();
+    CreateNotifyWindow();
 
-        TestJoystick(readJoystick);
-        TestRawInput(numOurs, readRaw, readRawBuffer, readRawFullPage, printRawInputDevices);
-        TestSetupDi(numOurs, readDevice, readDeviceImmediate);
-        TestCfgMgr(printCfgMgrDevices);
-        TestXInput(xinputVersion, readXInput, readXInputEx, readXInputStroke, rumbleXInput);
+    TestJoystick(readJoystick);
+    TestRawInput(numOurs, readRaw, readRawBuffer, readRawFullPage, printRawInputDevices);
+    TestSetupDi(numOurs, readDevice, readDeviceImmediate);
+    TestCfgMgr(printCfgMgrDevices);
+    TestXInput(xinputVersion, readXInput, readXInputEx, readXInputStroke, rumbleXInput, visualizeWindow);
 
-        if (registerRaw) {
-            RegisterRawInput(!registerRawNoKeyboard, !registerRawNoMouse,
-                             registerRawNoLegacy, registerRawNoHotkey, registerRawHotkey, registerRawCaptureMouse);
-        }
+    if (registerRaw) {
+        RegisterRawInput(!registerRawNoKeyboard, !registerRawNoMouse,
+                         registerRawNoLegacy, registerRawNoHotkey, registerRawHotkey, registerRawCaptureMouse);
+    }
 
-        if (registerLowHook) {
-            RegisterLowHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount);
-        }
+    if (registerLowHook) {
+        RegisterLowHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount);
+    }
 
-        if (testWindow) {
-            ShowTestWindow([=]() {
-                if (registerLocalHook) {
-                    RegisterHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, GetCurrentThreadId());
-                }
-                // if (registerGlobalHook) - nope...
-                //     RegisterHook (!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, 0);
-            });
-        }
+    if (testWindow) {
+        ShowTestWindow([=]() {
+            if (registerLocalHook) {
+                RegisterHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, GetCurrentThreadId());
+            }
+            // if (registerGlobalHook) - nope...
+            //     RegisterHook (!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, 0);
+        });
+    }
 
-        if (registerHotkey) {
-            RegisterHotKeys();
-        }
+    if (registerHotkey) {
+        RegisterHotKeys();
+    }
 
-        if (sendInputs) {
-            SendInputs();
-        }
+    if (sendInputs) {
+        SendInputs();
+    }
 
-        if (createProcess) {
-            CreateNewProcess(isChild, createProcessWithIo, processArgs);
-        }
+    if (measureLatency) {
+        MeasureLatency();
+    }
+
+    if (createProcess) {
+        CreateNewProcess(isChild, createProcessOther, createProcessWithIo, processArgs);
     }
 
     while (true) {

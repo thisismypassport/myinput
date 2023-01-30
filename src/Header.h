@@ -1,4 +1,5 @@
 #pragma once
+#include "UtilsBase.h"
 #include <Windows.h>
 #include <cfgmgr32.h>
 
@@ -101,7 +102,7 @@ enum {
 
     KeyboardInputHandleHighStart = 0x1000,
     MouseInputHandleHighStart = 0x2000,
-    DevicesInputHandleHighStart = 0x3000,
+    GamepadInputHandleHighStart = 0x3000,
     InputHandleHighCount = 0x1000,
 
     HookHandleHighStart = 0x6000,
@@ -150,4 +151,7 @@ void PostAppCallback(AppCallback cb, void *data);
 HANDLE GetCustomDeviceHandle(int user);
 void SetRumble(double lowFreq, double highFreq);
 void UpdateAll();
+void UpdateHideCursor();
 bool ProcessRawKeyboardEvent(int msg, int key, int scan, int flags, ULONG extraInfo, bool injected);
+void ImplPreMappingsChanged();
+void DebugRemoveLowHooks();

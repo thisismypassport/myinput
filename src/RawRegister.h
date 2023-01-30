@@ -362,8 +362,9 @@ public:
     RawInputRegKeyboard() : RawInputRegLegacy(KeyboardInputHandleHighStart, sizeof(RAWINPUTHEADER) + sizeof(RAWKEYBOARD)) {}
 
     void UpdateRealRegister(bool force) {
-        RawInputRegLegacy::UpdateRealRegister(HID_USAGE_GENERIC_KEYBOARD, true, G.Keyboard.IsMapped, force);
-        SetManualAsyncKeyState(NoLegacy && G.Keyboard.IsMapped);
+        bool mapped = G.Keyboard.IsMapped && (G.InForeground || G.Always);
+        RawInputRegLegacy::UpdateRealRegister(HID_USAGE_GENERIC_KEYBOARD, true, mapped, force);
+        SetManualAsyncKeyState(mapped && NoLegacy);
     }
 } GRawInputRegKeyboard;
 
@@ -372,11 +373,12 @@ public:
     RawInputRegMouse() : RawInputRegLegacy(MouseInputHandleHighStart, sizeof(RAWINPUTHEADER) + sizeof(RAWMOUSE)) {}
 
     void UpdateRealRegister(bool force) {
-        RawInputRegLegacy::UpdateRealRegister(HID_USAGE_GENERIC_MOUSE, false, G.Mouse.IsMapped, force);
+        bool mapped = G.Mouse.IsMapped && (G.InForeground || G.Always);
+        RawInputRegLegacy::UpdateRealRegister(HID_USAGE_GENERIC_MOUSE, false, mapped, force);
     }
 } GRawInputRegMouse;
 
-class RawInputRegDevices : public RawInputReg {
+class RawInputRegGamepad : public RawInputReg {
     ImplGlobalCb NotifyCbIter;
 
     struct RegInfo {
@@ -424,7 +426,7 @@ class RawInputRegDevices : public RawInputReg {
     }
 
 public:
-    RawInputRegDevices() : RawInputReg(DevicesInputHandleHighStart) {}
+    RawInputRegGamepad() : RawInputReg(GamepadInputHandleHighStart) {}
 
     void Register(HWND window, UINT flags) {
         if (!gUniqLogRawInputRegister) {
@@ -432,7 +434,7 @@ public:
             LOG << "Listening to device events via RawInput API" << END;
         }
         if (G.ApiDebug) {
-            LOG << "RegisterRawInputDevices - registering for " << window << END;
+            LOG << "RegisterRawInputGamepad - registering for " << window << END;
         }
 
         RawInputRegBase::Register(window, flags, [this]() {
@@ -443,7 +445,7 @@ public:
                     reg.Active = true;
                     reg.BufList = GBufferLists.Get(GetRawInputSize(device));
 
-                    reg.CbIter = G.Users[i].AddCallback([this](ImplUser *user) {
+                    reg.CbIter = G.Users[i].Callbacks.Add([this](ImplUser *user) {
                         OnMessage(user);
                     });
 
@@ -454,7 +456,7 @@ public:
             }
 
             if (Flags & RIDEV_DEVNOTIFY) {
-                NotifyCbIter = G.AddGlobalCallback([this](ImplUser *user, bool added) {
+                NotifyCbIter = G.GlobalCallbacks.Add([this](ImplUser *user, bool added) {
                     OnNotifyMessage(user, added);
                 });
             }
@@ -463,25 +465,25 @@ public:
 
     void Unregister(UINT flags) {
         if (G.ApiDebug) {
-            LOG << "RegisterRawInputDevices - unregistering" << END;
+            LOG << "RegisterRawInputGamepad - unregistering" << END;
         }
 
         RawInputRegBase::Unregister(flags, [this]() {
             for (int i = 0; i < IMPL_MAX_USERS; i++) {
                 if (Regs[i].Active) {
-                    G.Users[i].RemoveCallback(Regs[i].CbIter);
+                    G.Users[i].Callbacks.Remove(Regs[i].CbIter);
                     Regs[i].Active = false;
                 }
             }
 
             if (Flags & RIDEV_DEVNOTIFY) {
-                G.RemoveGlobalCallback(NotifyCbIter);
+                G.GlobalCallbacks.Remove(NotifyCbIter);
             }
         });
     }
 
     void UpdateRealRegister(bool force) {}
-} GRawInputRegDevices;
+} GRawInputRegGamepad;
 
 class DeviceFinder {
     DWORD mType;
@@ -497,7 +499,7 @@ public:
                 UINT count = 0;
                 GetRawInputDeviceList_Real(nullptr, &count, sizeof(RAWINPUTDEVICELIST));
 
-                auto devices = make_unique<RAWINPUTDEVICELIST[]>(count);
+                auto devices = UniquePtr<RAWINPUTDEVICELIST[]>::New(count);
                 UINT realCount = GetRawInputDeviceList_Real(devices.get(), &count, sizeof(RAWINPUTDEVICELIST));
                 if (realCount == INVALID_UINT_VALUE && GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
                     continue;
@@ -541,19 +543,19 @@ void RawInputUpdateMouse() {
     GRawInputRegMouse.UpdateRealRegister(false);
 }
 
-void ProcessMouseWheel(RAWMOUSE &mouse, int mask, bool horiz, int time, ChangedMask *changes) {
+void ProcessMouseWheel(RAWMOUSE &mouse, int mask, bool horiz, DWORD time, ChangedMask *changes) {
     if ((mouse.usButtonFlags & mask) && ImplMouseWheelHook(horiz, (SHORT)mouse.usButtonData, time, changes)) {
         mouse.usButtonFlags &= ~mask;
     }
 }
 
-void ProcessMouseButton(RAWMOUSE &mouse, int mask, int key, bool down, int time, ChangedMask *changes) {
+void ProcessMouseButton(RAWMOUSE &mouse, int mask, int key, bool down, DWORD time, ChangedMask *changes) {
     if ((mouse.usButtonFlags & mask) && ImplProcessMouseButton(key, down, time, changes)) {
         mouse.usButtonFlags &= ~mask;
     }
 }
 
-void ProcessRawInput(HRAWINPUT handle, int time) {
+void ProcessRawInput(HRAWINPUT handle, DWORD time) {
     RAWINPUT input;
     UINT inputSize = sizeof(input);
     if (GetRawInputData_Real(handle, RID_INPUT, &input, &inputSize, sizeof(RAWINPUTHEADER)) >= 0 &&
@@ -578,7 +580,7 @@ void ProcessRawInput(HRAWINPUT handle, int time) {
             LOG << "raw mouse event: " << mouse.lLastX << "," << mouse.lLastY << ", " << mouse.usButtonFlags << ", " << injected << END;
         }
 
-        if (ImplEnableMappings() && !locallyInjected) {
+        if (!locallyInjected) {
             ChangedMask changes;
 
             if ((mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 && // else, trackpad?
@@ -701,14 +703,10 @@ LRESULT CALLBACK DllWindowProc(HWND win, UINT msg, WPARAM w, LPARAM l) {
     return DefWindowProcW(win, msg, w, l);
 }
 
-void RawInputRegisterOnThread() {
+void RawInputInitDllWindow() {
     G.DllWindow = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, nullptr, nullptr);
     ASSERT(G.DllWindow, "Message window couldn't be created");
-
     SetWindowLongPtrW(G.DllWindow, GWLP_WNDPROC, (LONG_PTR)DllWindowProc);
-
-    RawInputUpdateKeyboard();
-    RawInputUpdateMouse();
 }
 
 void RawInputPreregisterEarly() {

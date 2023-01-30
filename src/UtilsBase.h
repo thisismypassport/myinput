@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <functional>
+#include <numbers>
 #include <new>
 
 #define DLLIMPORT __declspec(dllimport)
@@ -16,6 +17,7 @@
 #pragma warning(disable : 4995)
 
 #define QWORD unsigned __int64 // fix windows.h messup (for NEXTRAWINPUTBLOCK)
+#define NOMINMAX               // for later including of windows.h
 
 using std::mutex;
 using recmutex = std::recursive_mutex;
@@ -26,21 +28,17 @@ using std::function;
 using std::istream;
 using std::list;
 using std::lock_guard;
-using std::make_shared;
 using std::make_tuple;
-using std::make_unique;
 using std::max;
 using std::min;
 using std::move;
 using std::ostream;
-using std::shared_ptr;
 using std::string;
 using std::string_view;
 using std::stringstream;
 using std::tie;
 using std::tuple;
 using std::unique_lock;
-using std::unique_ptr;
 using std::unordered_map;
 using std::unordered_set;
 using std::vector;
@@ -68,6 +66,17 @@ T Clamp(T value, T minval, T maxval) {
     return min(max(value, minval), maxval);
 }
 
+template <class IntT, class T>
+IntT ClampToInt(T value) {
+    value = Clamp(value, (T)std::numeric_limits<IntT>::min(), (T)std::numeric_limits<IntT>::max());
+    return (IntT)round(value);
+}
+
+template <class T>
+tuple<T, T> SinCos(T value) {
+    return {sin(value), cos(value)};
+}
+
 template <class TC, class T>
 void Erase(TC &c, const T &val) {
     c.erase(std::remove(c.begin(), c.end(), val), c.end());
@@ -86,6 +95,37 @@ template <class TFunc>
 DestructorClass<TFunc> Destructor(const TFunc &func) {
     return DestructorClass<TFunc>(func);
 }
+
+template <class T>
+class UniquePtr : public std::unique_ptr<T> {
+public:
+    UniquePtr() {}
+    UniquePtr(nullptr_t) {}
+    UniquePtr(std::unique_ptr<T> &&other) : std::unique_ptr<T>(move(other)) {}
+
+    template <class... TArgs>
+    static UniquePtr<T> New(TArgs... args) {
+        return UniquePtr<T>(std::make_unique<T>(forward<TArgs>(args)...));
+    }
+
+    operator T *() { return this->get(); }
+};
+
+template <class T>
+class SharedPtr : public std::shared_ptr<T> {
+public:
+    SharedPtr() {}
+    SharedPtr(nullptr_t) {}
+    SharedPtr(const std::shared_ptr<T> &other) : std::shared_ptr<T>(other) {}
+    SharedPtr(std::shared_ptr<T> &&other) : std::shared_ptr<T>(move(other)) {}
+
+    template <class... TArgs>
+    static SharedPtr<T> New(TArgs... args) {
+        return SharedPtr<T>(std::make_shared<T>(forward<TArgs>(args)...));
+    }
+
+    operator T *() { return this->get(); }
+};
 
 template <class T>
 class WeakAtomic {
@@ -107,4 +147,32 @@ public:
         return value;
     }
     void operator=(const WeakAtomic<T> &other) { set(other.get()); }
+};
+
+template <class F>
+class CallbackList {
+    mutex Mutex;
+    list<function<F>> List;
+
+public:
+    using CbIter = list<function<F>>::iterator;
+
+    CbIter Add(function<F> cb) {
+        lock_guard<mutex> lock(Mutex);
+        List.push_back(cb);
+        return std::prev(List.end());
+    }
+
+    void Remove(const CbIter &cbIter) {
+        lock_guard<mutex> lock(Mutex);
+        List.erase(cbIter);
+    }
+
+    template <class... TArgs>
+    void Call(TArgs... args) {
+        lock_guard<mutex> lock(Mutex);
+        for (auto &cb : List) {
+            cb(forward<TArgs>(args)...);
+        }
+    }
 };

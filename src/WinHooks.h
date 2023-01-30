@@ -6,6 +6,8 @@
 #include "Thunk.h"
 
 static LRESULT CALLBACK LowKeyboardHook(int nCode, WPARAM wParam, LPARAM lParam) {
+    DBG_ASSERT_DLL_THREAD();
+
     KBDLLHOOKSTRUCT *data = (KBDLLHOOKSTRUCT *)lParam;
 
     if (G.Trace) {
@@ -16,16 +18,14 @@ static LRESULT CALLBACK LowKeyboardHook(int nCode, WPARAM wParam, LPARAM lParam)
     // have both a raw keyboard registration and lowlevel event hook in the same process (for whatever bad reason)
 
     if (nCode >= 0) {
-        bool map = ImplEnableMappings();
         bool injected = (data->flags & LLKHF_INJECTED) != 0;
         bool locallyInjected = injected && IsExtraInfoLocal(data->dwExtraInfo);
 
-        if (map && !locallyInjected &&
-            ImplKeyboardHook(data->vkCode, !(data->flags & LLKHF_UP), !!(data->flags & LLKHF_EXTENDED), data->time)) {
+        if (!locallyInjected && ImplKeyboardHook(data->vkCode, !(data->flags & LLKHF_UP), !!(data->flags & LLKHF_EXTENDED), data->time)) {
             return 1;
         }
 
-        if (ProcessRawKeyboardEvent((int)wParam, data->vkCode, data->scanCode, data->flags, (ULONG)data->dwExtraInfo, injected) && map) {
+        if (ProcessRawKeyboardEvent((int)wParam, data->vkCode, data->scanCode, data->flags, (ULONG)data->dwExtraInfo, injected)) {
             return 1;
         }
     }
@@ -37,35 +37,34 @@ static bool ImplCheckMouse(WPARAM msg, MSLLHOOKSTRUCT *data) {
     switch (msg) {
     case WM_MOUSEMOVE:
         return ImplCheckMouseMotion();
-
     case WM_MOUSEWHEEL:
         return ImplCheckMouseWheel(false);
-
     case WM_MOUSEHWHEEL:
         return ImplCheckMouseWheel(true);
-
     case WM_LBUTTONDOWN:
+        return ImplCheckMouseButton(VK_LBUTTON, true);
     case WM_LBUTTONUP:
-        return ImplCheckKeyboard(VK_LBUTTON, false);
-
+        return ImplCheckMouseButton(VK_LBUTTON, false);
     case WM_RBUTTONDOWN:
+        return ImplCheckMouseButton(VK_RBUTTON, true);
     case WM_RBUTTONUP:
-        return ImplCheckKeyboard(VK_RBUTTON, false);
-
+        return ImplCheckMouseButton(VK_RBUTTON, false);
     case WM_MBUTTONDOWN:
+        return ImplCheckMouseButton(VK_MBUTTON, true);
     case WM_MBUTTONUP:
-        return ImplCheckKeyboard(VK_MBUTTON, false);
-
+        return ImplCheckMouseButton(VK_MBUTTON, false);
     case WM_XBUTTONDOWN:
     case WM_XBUTTONUP:
         int xbtn = HIWORD(data->mouseData) == XBUTTON2 ? VK_XBUTTON2 : VK_XBUTTON1;
-        return ImplCheckKeyboard(xbtn, false);
+        return ImplCheckMouseButton(xbtn, msg == WM_XBUTTONDOWN);
     }
 
     return false;
 }
 
 static LRESULT CALLBACK LowMouseHook(int nCode, WPARAM wParam, LPARAM lParam) {
+    DBG_ASSERT_DLL_THREAD();
+
     MSLLHOOKSTRUCT *data = (MSLLHOOKSTRUCT *)lParam;
 
     if (G.Trace) {
@@ -75,11 +74,10 @@ static LRESULT CALLBACK LowMouseHook(int nCode, WPARAM wParam, LPARAM lParam) {
     // we do the real processing in the raw mouse event, here we just block events if needed
 
     if (nCode >= 0) {
-        bool map = ImplEnableMappings();
         bool injected = (data->flags & LLMHF_INJECTED) != 0;
         bool locallyInjected = injected && IsExtraInfoLocal(data->dwExtraInfo);
 
-        if (map && !locallyInjected && ImplCheckMouse(wParam, data)) {
+        if (!locallyInjected && ImplCheckMouse(wParam, data)) {
             return 1;
         }
     }
@@ -87,7 +85,25 @@ static LRESULT CALLBACK LowMouseHook(int nCode, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(G.Mouse.HLowHook, nCode, wParam, lParam);
 }
 
-static LRESULT CALLBACK MouseThreadHook(int nCode, WPARAM wParam, LPARAM lParam) {
+struct MouseCapture {
+    struct ThreadHook {
+        DWORD Thread = 0;
+        HHOOK HHook = nullptr;
+        bool Started = false;
+        bool Finished = false;
+    };
+
+    DWORD CaptureThread = 0;
+    POINT OldPos = {0, 0};
+    WeakAtomic<DWORD> PrevThread{0};
+    WeakAtomic<HWND> PrevWindow{nullptr};
+
+    mutex HooksMutex;
+    vector<ThreadHook> Hooks;
+} GCapture;
+
+static LRESULT CALLBACK MouseCaptureHook(int nCode, WPARAM wParam, LPARAM lParam) // called in thread
+{
     if (nCode >= 0) {
         MSG *msg = (MSG *)lParam;
 
@@ -97,9 +113,9 @@ static LRESULT CALLBACK MouseThreadHook(int nCode, WPARAM wParam, LPARAM lParam)
         HWND activeWindow = GetActiveWindow();
         bool changed = false;
 
-        if (G.Mouse.PrevThread != threadId) {
-            lock_guard<mutex> lock(G.Mouse.ThreadHooksMutex);
-            auto &threadHooks = G.Mouse.ThreadHooks;
+        if (GCapture.PrevThread != threadId) {
+            lock_guard<mutex> lock(GCapture.HooksMutex);
+            auto &threadHooks = GCapture.Hooks;
             for (int i = (int)threadHooks.size() - 1; i >= 0; i--) {
                 auto &info = threadHooks[i];
                 if (info.Thread == threadId) {
@@ -107,11 +123,11 @@ static LRESULT CALLBACK MouseThreadHook(int nCode, WPARAM wParam, LPARAM lParam)
                         start = true;
                         info.Started = true;
                         if (!info.Finished) {
-                            G.Mouse.PrevThread = threadId;
+                            GCapture.PrevThread = threadId;
                         }
                     } else if (info.Finished) {
                         finish = true;
-                        UnhookWindowsHookEx(info.HHook);
+                        UnhookWindowsHookEx_Real(info.HHook);
                         threadHooks.erase(threadHooks.begin() + i);
                     }
                     break;
@@ -119,18 +135,18 @@ static LRESULT CALLBACK MouseThreadHook(int nCode, WPARAM wParam, LPARAM lParam)
             }
         }
 
-        if (activeWindow && activeWindow != G.Mouse.PrevWindow) {
+        if (activeWindow && activeWindow != GCapture.PrevWindow) {
             changed = true;
-            G.Mouse.PrevWindow = activeWindow;
+            GCapture.PrevWindow = activeWindow;
         }
 
         if (finish) {
             ShowCursor(true);
             ClipCursor(nullptr);
-            SetCursorPos(G.Mouse.OldPos.x, G.Mouse.OldPos.y);
-        } else if (start || changed || (activeWindow && msg->hwnd == activeWindow && (msg->message == WM_SIZE || msg->message == WM_MOVE))) {
+            SetCursorPos(GCapture.OldPos.x, GCapture.OldPos.y);
+        } else if (start || changed || (activeWindow && msg->hwnd == activeWindow && (msg->message == WM_SIZE || msg->message == WM_MOVE || msg->message == WM_MOUSEMOVE))) {
             if (start) {
-                GetCursorPos(&G.Mouse.OldPos);
+                GetCursorPos(&GCapture.OldPos);
                 ShowCursor(false);
             }
 
@@ -150,47 +166,103 @@ static LRESULT CALLBACK MouseThreadHook(int nCode, WPARAM wParam, LPARAM lParam)
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
 
+static void UpdateHideCursor() {
+    bool wantCapture = G.HideCursor && !G.Disable;
+    DWORD captureThread = wantCapture ? GetWindowThreadInOurProcess(GetForegroundWindow()) : 0;
+
+    DWORD oldCaptureThread = GCapture.CaptureThread;
+    if (captureThread != oldCaptureThread) {
+        if (oldCaptureThread) {
+            lock_guard<mutex> lock(GCapture.HooksMutex);
+            for (auto &hook : GCapture.Hooks) {
+                hook.Finished = true;
+            }
+            GCapture.PrevThread = 0;
+            GCapture.PrevWindow = nullptr;
+        }
+
+        GCapture.CaptureThread = captureThread;
+
+        if (G.Debug) {
+            LOG << "mouse thread changed to: " << captureThread << END;
+        }
+
+        if (captureThread) {
+            lock_guard<mutex> lock(GCapture.HooksMutex);
+            HHOOK hook = SetWindowsHookExW_Real(WH_GETMESSAGE, MouseCaptureHook, nullptr, captureThread);
+            GCapture.Hooks.push_back({captureThread, hook});
+        }
+    }
+}
+
+static void UpdateInForeground(bool allowUpdateAll = true) {
+    bool inForeground = IsWindowInOurProcess(GetForegroundWindow());
+    if (inForeground != G.InForeground) {
+        ImplPreMappingsChanged();
+        G.InForeground = inForeground;
+        if (G.Debug) {
+            LOG << "App " << (inForeground ? "entered" : "left") << " foreground" << END;
+        }
+        if (!G.Always && allowUpdateAll) {
+            UpdateAll();
+        }
+    }
+}
+
+static unordered_map<DWORD, HHOOK> GForegroundHooks;
+
+static LRESULT CALLBACK ForegroundHook(int nCode, WPARAM wParam, LPARAM lParam) // called in thread
+{
+    if (nCode >= 0) {
+        auto msg = (CWPSTRUCT *)lParam;
+        if (msg->message == WM_NCACTIVATE) {
+            PostAppCallback([](void *data) {
+                UpdateInForeground();
+                UpdateHideCursor();
+            },
+                            nullptr);
+        }
+    }
+
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
+static void AddForegroundHook(HWND window) {
+    DWORD thread = GetWindowThreadInOurProcess(window);
+    if (thread) {
+        auto &hook = GForegroundHooks[thread];
+        if (!hook) {
+            if (G.Debug) {
+                LOG << "Setting foreground hook" << END;
+            }
+            hook = SetWindowsHookExW_Real(WH_CALLWNDPROC, ForegroundHook, nullptr, thread);
+        }
+    }
+}
+
 static void CALLBACK ObjectFocusHook(HWINEVENTHOOK hook, DWORD event, HWND window, LONG objId, LONG childId, DWORD thread, DWORD time) {
-    if (event != EVENT_OBJECT_FOCUS) {
+    if (event != EVENT_SYSTEM_FOREGROUND) {
         return;
     }
 
-    bool wantCapture = G.Mouse.IsMapped && G.Mouse.AnyMotionInput && !G.Mouse.AnyMotionOutput && !G.Disable;
-    DWORD mouseThread = wantCapture ? GetWindowThreadInOurProcess(window) : 0;
+    // window is less up-to-date and sometimes wrong - ignoring it
+    UpdateInForeground();
+    UpdateHideCursor();
 
-    DWORD oldMouseThread = G.Mouse.ActiveThread;
-    if (mouseThread != oldMouseThread) {
-        if (oldMouseThread) {
-            lock_guard<mutex> lock(G.Mouse.ThreadHooksMutex);
-            for (auto &hook : G.Mouse.ThreadHooks) {
-                hook.Finished = true;
-            }
-            G.Mouse.PrevThread = 0;
-            G.Mouse.PrevWindow = nullptr;
-        }
-
-        G.Mouse.ActiveThread = mouseThread;
-
-        if (G.Debug) {
-            LOG << "mouse thread changed to: " << mouseThread << END;
-        }
-
-        if (mouseThread) {
-            lock_guard<mutex> lock(G.Mouse.ThreadHooksMutex);
-            HHOOK mouseThreadHook = SetWindowsHookExW_Real(WH_GETMESSAGE, MouseThreadHook, nullptr, mouseThread);
-            G.Mouse.ThreadHooks.push_back({mouseThread, mouseThreadHook});
-        }
+    // either it changed before we received the msg, or it's bugged and we need a hook to determine when it becomes truly foreground
+    if (window != GetForegroundWindow()) {
+        AddForegroundHook(window);
     }
 }
 
 static void WinHooksUpdateKeyboard(bool force = false) {
     DBG_ASSERT_DLL_THREAD();
 
-    bool keyboard = G.Keyboard.IsMapped;
+    bool keyboard = G.Keyboard.IsMapped && (G.InForeground || G.Always);
     bool oldKeyboard = G.Keyboard.HLowHook != nullptr;
     if (keyboard != oldKeyboard || force) {
         if (oldKeyboard) {
-            UnhookWindowsHookEx(G.Keyboard.HLowHook);
+            UnhookWindowsHookEx_Real(G.Keyboard.HLowHook);
         }
 
         G.Keyboard.HLowHook = nullptr;
@@ -204,11 +276,11 @@ static void WinHooksUpdateKeyboard(bool force = false) {
 static void WinHooksUpdateMouse(bool force = false) {
     DBG_ASSERT_DLL_THREAD();
 
-    bool mouse = G.Mouse.IsMapped;
+    bool mouse = G.Mouse.IsMapped && (G.InForeground || G.Always);
     bool oldMouse = G.Mouse.HLowHook != nullptr;
     if (mouse != oldMouse || force) {
         if (oldMouse) {
-            UnhookWindowsHookEx(G.Mouse.HLowHook);
+            UnhookWindowsHookEx_Real(G.Mouse.HLowHook);
         }
 
         G.Mouse.HLowHook = nullptr;
@@ -217,8 +289,6 @@ static void WinHooksUpdateMouse(bool force = false) {
             G.Mouse.HLowHook = SetWindowsHookExW_Real(WH_MOUSE_LL, LowMouseHook, nullptr, 0);
         }
     }
-
-    ObjectFocusHook(nullptr, EVENT_OBJECT_FOCUS, GetForegroundWindow(), 0, 0, 0, 0);
 }
 
 struct WinHook {
@@ -350,6 +420,15 @@ public:
         }
     }
 
+    void DebugUnhookAll(int type) {
+        lock_guard<mutex> lock(mMutex);
+        for (auto &pair : mByHandle) {
+            if (pair.second->Type == type) {
+                UnhookWindowsHookEx_Real(pair.first);
+            }
+        }
+    }
+
 } GWinHooks;
 
 // Only enable the hook after our main hook is back in the front
@@ -395,14 +474,20 @@ BOOL WINAPI UnhookWindowsHookEx_Hook(HHOOK hhk) {
 }
 
 void WinHooksInitOnThread() {
-    WinHooksUpdateKeyboard();
-    WinHooksUpdateMouse();
-
-    SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS, nullptr, ObjectFocusHook, 0, 0, WINEVENT_OUTOFCONTEXT);
+    SetWinEventHook(EVENT_MIN, EVENT_MAX, nullptr, ObjectFocusHook, 0, 0, WINEVENT_OUTOFCONTEXT);
+    UpdateInForeground(false);
 }
 
 void HookWinHooks() {
     AddGlobalHook(&SetWindowsHookExA_Real, SetWindowsHookExA_Hook);
     AddGlobalHook(&SetWindowsHookExW_Real, SetWindowsHookExW_Hook);
     AddGlobalHook(&UnhookWindowsHookEx_Real, UnhookWindowsHookEx_Hook);
+}
+
+void DebugRemoveLowHooks() // for debugging purposes
+{
+    UnhookWindowsHookEx_Real(G.Keyboard.HLowHook);
+    UnhookWindowsHookEx_Real(G.Mouse.HLowHook);
+    GWinHooks.DebugUnhookAll(WH_KEYBOARD_LL);
+    GWinHooks.DebugUnhookAll(WH_MOUSE_LL);
 }

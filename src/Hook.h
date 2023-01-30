@@ -1,6 +1,5 @@
 #pragma once
 #include "Log.h"
-#include <Windows.h>
 #include <detours.h>
 
 void CheckHookError(LONG error) {

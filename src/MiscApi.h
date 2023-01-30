@@ -43,6 +43,45 @@ bool InjectDirect(HANDLE process) {
     return true;
 }
 
+void InjectIndirect(HANDLE process) {
+    Path ownDir = PathGetDirName(PathGetModulePath(G.HInstance));
+
+    wstring dirName(PathGetBaseName(ownDir));
+    bool replaced = false;
+    if (StrContains(dirName, L"Win32")) {
+        replaced = StrReplaceFirst(dirName, L"Win32", L"x64");
+    } else if (StrContains(dirName, L"x64")) {
+        replaced = StrReplaceFirst(dirName, L"x64", L"Win32");
+    }
+
+    HANDLE inhHandle;
+    if (!replaced) {
+        LOG << "Cannot inject into new process - can't find myinput_inject of other bitness" << END;
+    } else if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &inhHandle,
+                                0, TRUE, DUPLICATE_SAME_ACCESS)) {
+        LOG << "Can't duplicate process handle " << GetLastError() << END;
+    } else {
+        Path otherExePath = PathCombine(PathCombine(PathGetDirName(ownDir), dirName.c_str()), L"myinput_inject.exe");
+        Path cmdArgs = (L"myinput_inject.exe -h " + StrFromValue<wchar_t>((ULONG_PTR)inhHandle)).c_str();
+
+        STARTUPINFOW injSi;
+        ZeroMemory(&injSi, sizeof(injSi));
+        injSi.cb = sizeof(injSi);
+
+        PROCESS_INFORMATION injPi;
+        if (!CreateProcessInternalW_Real(nullptr, otherExePath, cmdArgs, nullptr, nullptr, TRUE,
+                                         0, nullptr, nullptr, &injSi, &injPi, nullptr)) {
+            LOG << "Can't create inject process " << GetLastError() << END;
+        } else {
+            WaitForSingleObject(injPi.hThread, INFINITE);
+            CloseHandle(injPi.hThread);
+            CloseHandle(injPi.hProcess);
+        }
+
+        CloseHandle(inhHandle);
+    }
+}
+
 BOOL WINAPI CreateProcessInternalW_Hook(
     HANDLE token, LPCWSTR appName, LPWSTR cmdLine, LPSECURITY_ATTRIBUTES processSec, LPSECURITY_ATTRIBUTES threadSec,
     BOOL inherit, DWORD flags, LPVOID env, LPCWSTR curDir, LPSTARTUPINFOW startupInfo, LPPROCESS_INFORMATION procInfo, PHANDLE newToken) {
@@ -55,10 +94,16 @@ BOOL WINAPI CreateProcessInternalW_Hook(
     BOOL success = CreateProcessInternalW_Real(token, appName, cmdLine, processSec, threadSec, inherit,
                                                actualFlags, env, curDir, startupInfo, procInfo, newToken);
 
-    if (success) {
-        LOG << "Injecting into new process " << (cmdLine ? cmdLine : appName) << END;
+    if (!success && !(flags & DEBUG_PROCESS) && GetLastError() == ERROR_NOT_SUPPORTED) {
+        // can't debug differently-WOW processes in some cases
 
-        if (!(flags & DEBUG_PROCESS)) {
+        actualFlags &= ~(DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS);
+        success = CreateProcessInternalW_Real(token, appName, cmdLine, processSec, threadSec, inherit,
+                                              actualFlags, env, curDir, startupInfo, procInfo, newToken);
+    }
+
+    if (success) {
+        if ((actualFlags & DEBUG_PROCESS) && !(flags & DEBUG_PROCESS)) {
             DebugActiveProcessStop(procInfo->dwProcessId);
         }
 
@@ -66,10 +111,11 @@ BOOL WINAPI CreateProcessInternalW_Hook(
         if (IsWow64Process(GetCurrentProcess(), &meWow) &&
             IsWow64Process(procInfo->hProcess, &themWow) &&
             meWow == themWow) {
+            LOG << "Injecting into new process of same bitness " << (cmdLine ? cmdLine : appName) << END;
             InjectDirect(procInfo->hProcess);
         } else {
-            // TODO: use myinput_inject 32bit?
-            LOG << "Cannot inject into new process - wrong bitness (TODO)" << END;
+            LOG << "Injecting into new process of different bitness " << (cmdLine ? cmdLine : appName) << END;
+            InjectIndirect(procInfo->hProcess);
         }
 
         if (!(flags & CREATE_SUSPENDED)) {
@@ -113,12 +159,14 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
 }
 
 void HookMisc() {
-    LoadLibraryExW_Real = (LoadLibraryExW_Type)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "LoadLibraryExW");
-    if (!LoadLibraryExW_Real) {
-        LoadLibraryExW_Real = LoadLibraryExW;
-    }
+    if (!G.ExtraDelayedHooks.empty()) {
+        LoadLibraryExW_Real = (LoadLibraryExW_Type)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "LoadLibraryExW");
+        if (!LoadLibraryExW_Real) {
+            LoadLibraryExW_Real = LoadLibraryExW;
+        }
 
-    AddGlobalHook(&LoadLibraryExW_Real, LoadLibraryExW_Hook);
+        AddGlobalHook(&LoadLibraryExW_Real, LoadLibraryExW_Hook);
+    }
 
     if (G.InjectChildren) {
         CreateProcessInternalW_Real = (CreateProcessInternalW_Type)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "CreateProcessInternalW");

@@ -257,7 +257,7 @@ public:
 
 class Window {
     HWND mWindow = nullptr;
-    vector<unique_ptr<Control>> mControls;
+    vector<UniquePtr<Control>> mControls;
 
     static LRESULT CALLBACK WinProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         Window *self;
@@ -341,7 +341,7 @@ public:
     template <class TControl, class... TArgs>
     TControl *Add(TArgs &&...args) {
         intptr_t id = mControls.size() + 1;
-        mControls.emplace_back(make_unique<TControl>(mWindow, id, forward<TArgs>(args)...));
+        mControls.emplace_back(UniquePtr<TControl>::New(mWindow, id, forward<TArgs>(args)...));
         return (TControl *)mControls.back().get();
     }
 

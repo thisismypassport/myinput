@@ -1,6 +1,6 @@
 #pragma once
-#include <Windows.h>
 #include "Log.h"
+#include <Windows.h>
 
 #ifdef _WIN64
 

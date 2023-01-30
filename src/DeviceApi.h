@@ -4,6 +4,7 @@
 #include "Header.h"
 #include "XUsbApi.h"
 #include "UtilsBuffer.h"
+#include "WinUtils.h"
 
 bool gUniqLogDeviceOpen;
 
@@ -71,62 +72,88 @@ class ImplProcessPipeThread {
         Buffer readBuffer(OutputBuffers);
         Buffer writeBuffer;
         OVERLAPPED ReadOverlapped, WriteOverlapped;
-        bool didRead = false;
-        bool didWrite = false;
+        DWORD numRead, numWrite;
+        bool inRead = false, inWrite = false;
+        bool truncRead = false;
+
+        auto onReadEnd = [&](BOOL status) -> bool {
+            inRead = false;
+            if (status) {
+                if (truncRead) {
+                    LOG << "Received too-large output report" << END;
+                } else {
+                    Device->ProcessOutput((const uint8_t *)readBuffer.Ptr(), numRead);
+                }
+                truncRead = false;
+            } else {
+                DWORD err = GetLastError();
+                if (err == ERROR_IO_PENDING) {
+                    inRead = true;
+                } else if (err == ERROR_MORE_DATA) {
+                    truncRead = true;
+                } else if (err == ERROR_BROKEN_PIPE) {
+                    return false;
+                } else {
+                    truncRead = false;
+                }
+            }
+            return true;
+        };
+
+        auto onWriteEnd = [&](BOOL status) {
+            inWrite = false;
+            if (status) {
+                if (G.ApiTrace) {
+                    LOG << "Wrote hid event to pipe " << Pipe << END;
+                }
+            } else {
+                DWORD err = GetLastError();
+                if (err == ERROR_IO_PENDING) {
+                    inWrite = true;
+                } else if (err == ERROR_BROKEN_PIPE) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
         while (true) {
             HANDLE objects[] = {ReadEvent, WriteEvent, SendEvent, CancelEvent};
             int which = WaitForMultipleObjects(NumWaitObjs, objects, false, INFINITE);
             if (which == CanRead) {
-                if (didRead) {
-                    DWORD numRead = 0;
-                    if (!GetOverlappedResult(Pipe, &ReadOverlapped, &numRead, false) && GetLastError() == ERROR_BROKEN_PIPE) {
-                        break;
-                    }
-
-                    Device->ProcessOutput((const uint8_t *)readBuffer.Ptr(), numRead);
+                if (inRead && !onReadEnd(GetOverlappedResult(Pipe, &ReadOverlapped, &numRead, false))) {
+                    break;
                 }
 
                 ZeroMemory(&ReadOverlapped, sizeof(OVERLAPPED));
                 ReadOverlapped.hEvent = ReadEvent;
 
-                if (!ReadFile(Pipe, readBuffer.Ptr(), (int)readBuffer.Size(), nullptr, &ReadOverlapped) && GetLastError() == ERROR_BROKEN_PIPE) {
+                if (!onReadEnd(ReadFile(Pipe, readBuffer.Ptr(), (int)readBuffer.Size(), &numRead, &ReadOverlapped))) {
                     break;
                 }
-                didRead = true;
             } else {
-                if (which == CanCancel && didWrite) {
+                if (which == CanCancel && inWrite) {
                     CancelIoEx(Pipe, &WriteOverlapped);
                 }
 
-                if (which == CanWrite) {
-                    DWORD numWrite = 0;
-                    if (!GetOverlappedResult(Pipe, &WriteOverlapped, &numWrite, false) && GetLastError() == ERROR_BROKEN_PIPE) {
-                        continue; // wait until read part breaks
-                    }
-
-                    if (G.ApiTrace) {
-                        LOG << "Wrote hid event to pipe " << Pipe << END;
-                    }
-                    didWrite = false;
+                if (which == CanWrite && inWrite && !onWriteEnd(GetOverlappedResult(Pipe, &WriteOverlapped, &numWrite, false))) {
+                    continue; // wait until read part breaks
                 }
 
-                if (!didWrite && GetNextReport(&writeBuffer)) {
+                if (!inWrite && GetNextReport(&writeBuffer)) {
                     ZeroMemory(&WriteOverlapped, sizeof(OVERLAPPED));
                     WriteOverlapped.hEvent = WriteEvent;
 
-                    if (!WriteFile(Pipe, writeBuffer.Ptr(), (int)writeBuffer.Size(), nullptr, &WriteOverlapped) && GetLastError() == ERROR_BROKEN_PIPE) {
+                    if (!onWriteEnd(WriteFile(Pipe, writeBuffer.Ptr(), (int)writeBuffer.Size(), &numWrite, &WriteOverlapped))) {
                         continue; // wait until read part breaks
                     }
-
-                    didWrite = true;
                 }
             }
         }
 
         // Wait for write to finish first
-        DWORD unused;
-        if (didWrite) {
-            GetOverlappedResult(Pipe, &WriteOverlapped, &unused, true);
+        if (inWrite) {
+            onWriteEnd(GetOverlappedResult(Pipe, &WriteOverlapped, &numWrite, true));
         }
 
         Stop();
@@ -198,7 +225,7 @@ public:
     }
 
     void Stop() {
-        User()->RemoveCallback(CbIter);
+        User()->Callbacks.Remove(CbIter);
         OnEnded();
         delete this;
     }
@@ -207,14 +234,14 @@ public:
         ReportBuffers = GBufferLists.Get(Device->Preparsed->Input.Bytes);
         OutputBuffers = GBufferLists.Get(Device->Preparsed->Output.Bytes);
 
-        CbIter = User()->AddCallback([this](ImplUser *user) {
+        CbIter = User()->Callbacks.Add([this](ImplUser *user) {
             if (Immediate) {
                 FlushReports();
             } else {
                 SendReport(CreateReport());
             }
         });
-        CloseHandle(CreateThread(nullptr, 0, ImplProcessPipeThread::ProcessThread, this, 0, nullptr));
+        GInfiniteThreadPool.CreateThread(ImplProcessPipeThread::ProcessThread, this);
     }
 };
 
@@ -295,14 +322,15 @@ void ImplProcessPipeThread::OnEnded() {
 DeviceIntf *GetDeviceByHandle(HANDLE handle, Path *outPath = nullptr) {
     if (GetFileType(handle) == FILE_TYPE_PIPE) {
         Path finalPath = PathGetFinalPath(handle, FILE_NAME_OPENED | VOLUME_NAME_NT);
-
-        for (int i = 0; i < IMPL_MAX_USERS; i++) {
-            DeviceIntf *device = ImplGetDevice(i);
-            if (device && wcsncmp(finalPath, device->FinalPipePrefix, device->FinalPipePrefixLen) == 0) {
-                if (outPath) {
-                    *outPath = move(finalPath);
+        if (finalPath) {
+            for (int i = 0; i < IMPL_MAX_USERS; i++) {
+                DeviceIntf *device = ImplGetDevice(i);
+                if (device && wcsncmp(finalPath, device->FinalPipePrefix, device->FinalPipePrefixLen) == 0) {
+                    if (outPath) {
+                        *outPath = move(finalPath);
+                    }
+                    return device;
                 }
-                return device;
             }
         }
     }
@@ -481,7 +509,7 @@ BOOL WINAPI DeviceIoControl_Hook(HANDLE hDevice, DWORD dwIoControlCode, LPVOID l
                                  LPVOID lpOutBuffer, DWORD nOutBufferSize, LPDWORD lpBytesReturned, LPOVERLAPPED lpOverlapped) {
     int deviceType = DEVICE_TYPE_FROM_CTL_CODE(dwIoControlCode);
 
-    if ((deviceType == FILE_DEVICE_KEYBOARD || deviceType == IOCTL_XINPUT_DEVICE_TYPE) &&
+    if ((deviceType == FILE_DEVICE_KEYBOARD || deviceType == IOCTL_XUSB_DEVICE_TYPE) &&
         GetFileType(hDevice) == FILE_TYPE_PIPE) {
         Path finalPath;
         DeviceIntf *device = GetDeviceByHandle(hDevice, &finalPath);

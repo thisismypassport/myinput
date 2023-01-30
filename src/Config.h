@@ -3,6 +3,15 @@
 #include "Devices.h"
 #include <fstream>
 
+struct ConfigState {
+    list<Path> LoadedFiles;
+    unordered_set<wstring_view> LoadedFilesSet;
+    Path MainFile;
+    Path Directory;
+} GConfig;
+
+bool ConfigLoadFrom(const wchar_t *filename);
+
 string ConfigReadToken(const string &str, intptr_t *startPtr) {
     intptr_t start = *startPtr;
     while ((size_t)start < str.size() && isspace(str[start])) {
@@ -11,10 +20,14 @@ string ConfigReadToken(const string &str, intptr_t *startPtr) {
 
     intptr_t end = start;
     while ((size_t)end < str.size() && !isspace(str[end])) {
-        char ch = str[end++];
+        char ch = str[end];
         if (!isalnum(ch) && ch != '.' && ch != '_' && ch != '%') {
+            if (start == end) {
+                end++;
+            }
             break;
         }
+        end++;
     }
 
     *startPtr = end;
@@ -68,11 +81,11 @@ double ConfigReadStrength(const string &str) {
     }
 
     double value;
-    if (StrToValue(str, &value) && value > 0 && value <= 1) {
+    if (StrToValue(str, &value) && value > 0) {
         return value;
     }
 
-    LOG << "ERROR: Invalid strength (must be number between 0 and 1): " << str << END;
+    LOG << "ERROR: Invalid strength (must be number larger than 0): " << str << END;
     return 1;
 }
 
@@ -88,28 +101,76 @@ double ConfigReadRate(const string &str) {
     return 0.02;
 }
 
-struct ConfigInputLine {
-    bool Replace = false;
-    bool Forward = false;
-    bool Turbo = false;
-    bool Toggle = false;
-    bool Snap = false;
-    int Input = 0;
-    int Output = 0;
-    int User = 0;
-    double Strength = 0;
-    double Rate = 0;
-    ImplInputCond *Cond = nullptr;
+SharedPtr<ImplCond> ConfigReadCond(const string &line, intptr_t *idxPtr) {
+    string condStr = ConfigReadToken(line, idxPtr);
+    auto cond = SharedPtr<ImplCond>::New();
+    cond->State = true;
 
-    void Reset() {
-        if (Cond) {
-            Cond->Reset();
-            delete Cond;
+    while (true) {
+        if (condStr == "^") {
+            cond->Toggle = true;
+        } else if (condStr == "~") {
+            cond->State = false;
+        } else {
+            break;
+        }
+
+        condStr = ConfigReadToken(line, idxPtr);
+    }
+
+    if (condStr == "(") {
+        int condType = 0;
+        while (true) {
+            auto subcond = ConfigReadCond(line, idxPtr);
+            subcond->Next = cond->Child;
+            cond->Child = subcond;
+
+            string token = ConfigReadToken(line, idxPtr);
+            int nextType = 0;
+            if (token == "&") {
+                nextType = MY_VK_META_COND_AND;
+            } else if (token == "|") {
+                nextType = MY_VK_META_COND_OR;
+            } else if (token == ")") {
+                break;
+            }
+
+            if (nextType == 0) {
+                LOG << "ERROR: Ignoring unknown token in condition: " << token << END;
+                while ((size_t)*idxPtr < line.size() && ConfigReadToken(line, idxPtr) != ")") {
+                }
+                break;
+            } else {
+                if (condType == 0) {
+                    condType = nextType;
+                } else if (condType != nextType) {
+                    LOG << "ERROR: Mixing & and | without parentheses in condition" << END;
+                }
+            }
+        }
+
+        cond->Key = condType ? condType : MY_VK_META_COND_AND;
+    } else {
+        cond->Key = ConfigReadKey(condStr);
+
+        if (GetKeyType(cond->Key).Pair) {
+            auto cond1 = SharedPtr<ImplCond>::New(*cond);
+            auto cond2 = SharedPtr<ImplCond>::New(*cond);
+            tie(cond1->Key, cond2->Key) = GetKeyPair(cond->Key);
+            cond1->State = cond2->State = true; // State used by cond
+
+            cond->Key = MY_VK_META_COND_OR;
+            cond->Child = cond1;
+            cond1->Next = cond2;
         }
     }
-};
 
-bool ConfigReadInputLine(const string &line, ConfigInputLine &cfg) {
+    return cond;
+}
+
+SharedPtr<ImplMapping> ConfigReadInputLine(const string &line) {
+    auto cfg = SharedPtr<ImplMapping>::New();
+
     intptr_t idx = 0;
     string inputStr = ConfigReadToken(line, &idx);
     string colon = ConfigReadToken(line, &idx);
@@ -117,7 +178,7 @@ bool ConfigReadInputLine(const string &line, ConfigInputLine &cfg) {
 
     if (colon != ":") {
         LOG << "ERROR: ':' expected after key name in: " << line << END;
-        return false;
+        return nullptr;
     }
 
     string userStr, strengthStr, rateStr;
@@ -130,39 +191,25 @@ bool ConfigReadInputLine(const string &line, ConfigInputLine &cfg) {
         if (token == "!") {
             string optStr = StrLowerCase(ConfigReadToken(line, &idx));
             if (optStr == "replace") {
-                cfg.Replace = true;
+                cfg->Replace = true;
             } else if (optStr == "forward") {
-                cfg.Forward = true;
+                cfg->Forward = true;
             } else if (optStr == "turbo") {
-                cfg.Turbo = true;
+                cfg->Turbo = true;
             } else if (optStr == "toggle") {
-                cfg.Toggle = true;
-            } else if (optStr == "snap") {
-                cfg.Snap = true;
+                cfg->Toggle = true;
+            } else if (optStr == "add") {
+                cfg->Add = true;
+            } else if (optStr == "persistent") {
+                cfg->Persistent = true;
             } else {
                 LOG << "ERROR: Invalid option: " << optStr << END;
             }
         } else if (token == "?") {
-            string condStr = ConfigReadToken(line, &idx);
-            auto cond = new ImplInputCond();
-            cond->State = true;
+            auto cond = ConfigReadCond(line, &idx);
 
-            while (true) {
-                if (condStr == "^") {
-                    cond->Toggle = true;
-                } else if (condStr == "~") {
-                    cond->State = false;
-                } else {
-                    break;
-                }
-
-                condStr = ConfigReadToken(line, &idx);
-            }
-
-            cond->Key = ConfigReadKey(condStr);
-
-            cond->Next = cfg.Cond;
-            cfg.Cond = cond;
+            cond->Next = cfg->Conds;
+            cfg->Conds = cond;
         } else if (token == "@") {
             userStr = ConfigReadToken(line, &idx);
         } else if (token == "^") {
@@ -174,89 +221,91 @@ bool ConfigReadInputLine(const string &line, ConfigInputLine &cfg) {
         }
     }
 
-    cfg.Input = ConfigReadKey(inputStr);
-    cfg.Output = ConfigReadKey(outputStr, true);
-    cfg.Strength = ConfigReadStrength(strengthStr);
-    cfg.Rate = ConfigReadRate(rateStr);
-    cfg.User = ConfigReadUser(userStr);
+    cfg->SrcKey = ConfigReadKey(inputStr);
+    cfg->DestKey = ConfigReadKey(outputStr, true);
+    cfg->Strength = ConfigReadStrength(strengthStr);
+    cfg->Rate = ConfigReadRate(rateStr);
+    cfg->User = ConfigReadUser(userStr);
 
-    LOG << "Mapping " << inputStr << " to " << outputStr << " of player " << (cfg.User + 1) << " (strength " << cfg.Strength << ")" << END;
+    LOG << "Mapping " << inputStr << " to " << outputStr << " of player " << (cfg->User + 1) << " (strength " << cfg->Strength << ")" << END;
 
-    return true;
+    return cfg;
+}
+
+void ConfigCreateResets(const SharedPtr<ImplMapping> &mapping, ImplCond *cond) {
+    do {
+        ImplInput *input = ImplGetInput(cond->Key);
+        if (input) {
+            auto reset = SharedPtr<ImplReset>::New();
+            reset->Mapping = mapping;
+            reset->Next = input->Resets;
+            input->Resets = reset;
+        }
+
+        if (cond->Child) {
+            ConfigCreateResets(mapping, cond->Child);
+        }
+
+        cond = cond->Next;
+    } while (cond);
 }
 
 bool ConfigLoadInputLine(const string &line) {
-    ConfigInputLine cfg;
-    if (!ConfigReadInputLine(line, cfg)) {
+    auto cfg = ConfigReadInputLine(line);
+    if (!cfg) {
         return false;
     }
 
-    int nextInput = 0;
-    MyVkType inputType = GetKeyType(cfg.Input);
-    if (inputType.Pair) {
-        tie(cfg.Input, nextInput) = GetKeyPair(cfg.Input);
-        inputType.Pair = false;
+    int nextSrcKey = 0;
+    cfg->SrcType = GetKeyType(cfg->SrcKey);
+    if (cfg->SrcType.Pair) {
+        tie(cfg->SrcKey, nextSrcKey) = GetKeyPair(cfg->SrcKey);
+        cfg->SrcType.Pair = false;
     }
 
-    int userIndex = cfg.User >= 0 ? cfg.User : 0;
+    int userIndex = cfg->User >= 0 ? cfg->User : 0;
 
-    if (inputType.Relative && (cfg.Toggle || cfg.Turbo)) {
+    if (cfg->SrcType.Relative && (cfg->Toggle || cfg->Turbo)) {
         LOG << "ERROR: toggle & turbo aren't supported for relative input" << END;
-        cfg.Toggle = cfg.Turbo = false;
+        cfg->Toggle = cfg->Turbo = false;
     }
 
-    while (cfg.Input && cfg.Output) {
-        MyVkType outputType = GetKeyType(cfg.Output);
-        if (outputType.Pair) {
-            cfg.Output = ImplChooseBestKeyInPair(cfg.Output);
-            outputType.Pair = false;
+    while (cfg && cfg->SrcKey && cfg->DestKey) {
+        cfg->DestType = GetKeyType(cfg->DestKey);
+        if (cfg->DestType.Pair) {
+            cfg->DestKey = ImplChooseBestKeyInPair(cfg->DestKey);
+            cfg->DestType.Pair = false;
         }
 
-        ImplInput *mapping = ImplGetInput(cfg.Input);
-        if (mapping) {
-            if (cfg.Replace) {
-                mapping->Reset();
-            } else if (mapping->IsValid()) {
-                while (mapping->Next) {
-                    mapping = mapping->Next;
-                }
+        SharedPtr<ImplMapping> nextCfg;
+        if (nextSrcKey) {
+            nextCfg = SharedPtr<ImplMapping>::New(*cfg);
+        }
 
-                mapping->Next = new ImplInput();
-                mapping = mapping->Next;
+        if (cfg->Conds && !cfg->Persistent) {
+            ConfigCreateResets(cfg, cfg->Conds);
+        }
+
+        ImplInput *input = ImplGetInput(cfg->SrcKey);
+        if (input) {
+            if (!cfg->Replace) {
+                cfg->Next = input->Mappings;
             }
+            input->Mappings = cfg;
 
-            mapping->DestKey = cfg.Output;
-            mapping->SrcType = inputType;
-            mapping->DestType = GetKeyType(cfg.Output);
-            mapping->User = cfg.User;
-            mapping->Strength = cfg.Strength;
-            mapping->Rate = cfg.Rate;
-            mapping->Conds = cfg.Cond;
-            mapping->Forward = cfg.Forward;
-            mapping->Turbo = cfg.Turbo;
-            mapping->Toggle = cfg.Toggle;
-            mapping->Snap = cfg.Snap;
-
-            if (inputType.Source == MyVkSource::Keyboard) {
+            if (cfg->SrcType.Source == MyVkSource::Keyboard) {
                 G.Keyboard.IsMapped = true;
-            } else if (inputType.Source == MyVkSource::Mouse) {
+            } else if (cfg->SrcType.Source == MyVkSource::Mouse) {
                 G.Mouse.IsMapped = true;
             }
 
-            if (outputType.OfUser) {
+            if (cfg->DestType.OfUser) {
                 G.Users[userIndex].Connected = true;
-            }
-
-            if (IsMouseMotionKey(cfg.Input)) {
-                G.Mouse.AnyMotionInput = true;
-            }
-            if (IsMouseMotionKey(cfg.Output)) {
-                G.Mouse.AnyMotionOutput = true;
             }
         }
 
-        cfg.Input = nextInput;
-        nextInput = 0;
+        cfg = nextCfg;
+        nextSrcKey = 0;
     }
 
     return true;
@@ -288,10 +337,20 @@ void ConfigLoadDevice(const string &key, const string &type) {
     }
 }
 
-void ConfigLoadExtraHook(const string &val) {
-    intptr_t idx = 0;
-    Path dllPath = PathFromStr(ConfigReadToken(val, &idx).c_str());
-    Path dllWait = PathFromStr(ConfigReadToken(val, &idx).c_str());
+void ConfigLoadInclude(const string &val) {
+    Path filename;
+    if (val.ends_with(".ini")) {
+        filename = PathFromStr(val.c_str());
+    } else {
+        filename = PathCombineExt(PathFromStr(val.c_str()), L"ini");
+    }
+
+    ConfigLoadFrom(filename);
+}
+
+void ConfigLoadExtraHook(const string &line, intptr_t idx) {
+    Path dllPath = PathFromStr(ConfigReadToken(line, &idx).c_str());
+    Path dllWait = PathFromStr(ConfigReadToken(line, &idx).c_str());
 
     if (*dllWait) {
         dllWait = PathGetBaseNameWithoutExt(dllWait); // won't support non-dlls
@@ -329,13 +388,14 @@ bool ConfigLoadVarLine(const string &line) {
     intptr_t idx = 1; // skipping initial '!'
     string key = ConfigReadToken(line, &idx);
     string keyLow = StrLowerCase(key);
-    string eq = ConfigReadToken(line, &idx);
-    string val = ConfigReadToken(line, &idx);
 
-    if (eq != "=") {
-        LOG << "ERROR: '=' expected after variable name in: " << line << END;
-        return false;
+    intptr_t valIdx = idx;
+    if (ConfigReadToken(line, &idx) == "=") { // optional '='
+        valIdx = idx;
+    } else {
+        idx = valIdx;
     }
+    string val = ConfigReadToken(line, &idx);
 
     if (keyLow == "trace") {
         G.Trace = ConfigReadBoolVar(val);
@@ -353,14 +413,18 @@ bool ConfigLoadVarLine(const string &line) {
         G.Always = ConfigReadBoolVar(val);
     } else if (keyLow == "disable") {
         G.Disable = ConfigReadBoolVar(val);
+    } else if (keyLow == "hidecursor") {
+        G.HideCursor = ConfigReadBoolVar(val);
     } else if (keyLow == "injectchildren") {
         G.InjectChildren = ConfigReadBoolVar(val);
     } else if (keyLow == "rumblewindow") {
         G.RumbleWindow = ConfigReadBoolVar(val);
     } else if (keyLow.starts_with("device")) {
         ConfigLoadDevice(keyLow, val);
+    } else if (keyLow == "include") {
+        ConfigLoadInclude(val);
     } else if (keyLow == "extrahook") {
-        ConfigLoadExtraHook(val);
+        ConfigLoadExtraHook(line, valIdx);
     } else {
         LOG << "ERROR: Invalid variable: " << key << END;
     }
@@ -368,7 +432,23 @@ bool ConfigLoadVarLine(const string &line) {
     return true;
 }
 
-void ConfigLoadFrom(istream &file) {
+bool ConfigLoadFrom(const wchar_t *filename) {
+    if (GConfig.LoadedFilesSet.contains(filename)) {
+        LOG << "ERROR: Duplicate loading of config " << filename << END;
+        return false;
+    }
+
+    GConfig.LoadedFiles.push_back(filename);
+    GConfig.LoadedFilesSet.insert(GConfig.LoadedFiles.back().Get());
+
+    Path path = PathCombine(GConfig.Directory, filename);
+    LOG << "Loading config from: " << path << END;
+    std::ifstream file(path);
+    if (file.fail()) {
+        LOG << "ERROR: Failed to open: " << path << END;
+        return false;
+    }
+
     string line;
     bool active = true;
     while (getline(file, line)) {
@@ -395,13 +475,14 @@ void ConfigLoadFrom(istream &file) {
             }
         }
     }
+    return true;
 }
 
 void ConfigReset() {
     G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = false;
-    G.Forward = G.Always = G.Disable = G.InjectChildren = G.RumbleWindow = false;
+    G.Forward = G.Always = G.Disable = G.HideCursor = false;
+    G.InjectChildren = G.RumbleWindow = false;
     G.Keyboard.IsMapped = G.Mouse.IsMapped = false;
-    G.Mouse.AnyMotionInput = G.Mouse.AnyMotionOutput = false;
 
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
         G.Users[i].Connected = G.Users[i].DeviceSpecified = false;
@@ -410,12 +491,15 @@ void ConfigReset() {
     G.Keyboard.Reset();
     G.Mouse.Reset();
     G.ActiveUser = 0;
+
+    GConfig.LoadedFilesSet.clear();
+    GConfig.LoadedFiles.clear();
 }
 
-void ConfigSendGlobalEvents(bool added) {
+static void ConfigSendGlobalEvents(bool added) {
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
         if (G.Users[i].Connected) {
-            G.SendGlobalEvent(&G.Users[i], added);
+            G.GlobalCallbacks.Call(&G.Users[i], added);
         }
     }
 }
@@ -423,28 +507,27 @@ void ConfigSendGlobalEvents(bool added) {
 static bool ConfigReloadNoUpdate() {
     ConfigReset();
 
-    LOG << "Loading config from: " << G.ConfigPath << END;
-    std::ifstream file(G.ConfigPath);
-    if (file.fail()) {
-        LOG << "ERROR: Failed to open: " << G.ConfigPath << END;
-        return false;
+    if (!ConfigLoadFrom(GConfig.MainFile)) {
+        ConfigLoadFrom(L"_default.ini");
     }
-    ConfigLoadFrom(file);
 
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
         if (G.Users[i].Connected && !G.Users[i].DeviceSpecified) {
             G.Users[i].Device = new XDeviceIntf(i);
         }
     }
+
     return true;
 }
 
-bool ConfigLoad(Path &&path) {
-    G.ConfigPath = move(path);
+bool ConfigLoad(Path &&path, Path &&name) {
+    GConfig.Directory = move(path);
+    GConfig.MainFile = move(name);
     return ConfigReloadNoUpdate();
 }
 
 void ConfigReload() {
+    ImplPreMappingsChanged();
     ConfigSendGlobalEvents(false);
     ConfigReloadNoUpdate();
     ConfigSendGlobalEvents(true);

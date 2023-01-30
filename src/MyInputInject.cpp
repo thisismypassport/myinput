@@ -1,8 +1,7 @@
-#define NOMINMAX
-#include <Windows.h>
 #include "UtilsPath.h"
 #include "UtilsStr.h"
 #include "UtilsUiBase.h"
+#include <Windows.h>
 
 wchar_t *SkipCommandLineArgs(wchar_t *cmdLine, int count) {
     bool inQuotes = false;
@@ -54,37 +53,76 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     Path ownDir = PathGetDirName(PathGetModulePath(nullptr));
 
     bool registered = (numArgs > 2 && wcscmp(args[1], L"-r") == 0);
-    int firstArg = registered ? 2 : userArg ? 0
-                                            : 1;
-
-    bool redirecting = false;
-    bool success = false;
-    wchar_t *processCmdLine = SkipCommandLineArgs(cmdLine, firstArg);
+    bool byPid = (numArgs > 2 && wcscmp(args[1], L"-p") == 0);
+    bool byHandle = (numArgs > 2 && wcscmp(args[1], L"-h") == 0);
 
     STARTUPINFOW si;
     GetStartupInfoW(&si);
 
-    bool created = true;
+    bool success = false;
+    bool created = false;
     PROCESS_INFORMATION pi;
-    // debug flags prevent debugger (which might be us again!) from interfering
-    if (!CreateProcessW(nullptr, processCmdLine, nullptr, nullptr, registered,
-                        CREATE_SUSPENDED | DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS,
-                        nullptr, registered ? Path() : PathGetDirName(args[firstArg]),
-                        &si, &pi)) {
-        if (GetLastError() == ERROR_NOT_SUPPORTED) {
-            // attempt to debug wrong bitness exe
-            created = false;
+    if (byPid || byHandle) {
+        // (As of this writing, injecting into an already running process is NOT properly supported)
+
+        uint64_t value;
+        if (!StrToValue(wstring(args[2]), &value)) {
+            Alert(L"Invalid number argument %ws.", args[2]);
+            return -1;
+        }
+
+        pi.dwThreadId = 0;
+        pi.hThread = nullptr;
+
+        if (byHandle) {
+            pi.hProcess = (HANDLE)value;
+            pi.dwProcessId = GetProcessId(pi.hProcess);
+
+            if (pi.dwProcessId == 0) {
+                Alert(L"Invalid process handle %lld.", value);
+                return -1;
+            }
+        } else {
+            pi.dwProcessId = (DWORD)value;
+            pi.hProcess = OpenProcess(PROCESS_ALL_ACCESS, false, pi.dwProcessId);
+
+            if (pi.hProcess == nullptr) {
+                Alert(L"Can't open process id %lld.", value);
+                return -1;
+            }
+        }
+
+        success = true;
+    } else {
+        int firstArg = registered ? 2 : userArg ? 0
+                                                : 1;
+
+        wchar_t *processCmdLine = SkipCommandLineArgs(cmdLine, firstArg);
+
+        // debug flags prevent debugger (which might be us again!) from interfering
+        if (CreateProcessW(nullptr, processCmdLine, nullptr, nullptr, registered,
+                           CREATE_SUSPENDED | DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS,
+                           nullptr, registered ? Path() : PathGetDirName(args[firstArg]),
+                           &si, &pi)) {
+            DebugActiveProcessStop(pi.dwProcessId); // was needed just at creation time
+            created = true;
+            success = true;
+        } else if (GetLastError() == ERROR_NOT_SUPPORTED) {
+            // attempt to debug wrong bitness exe in some cases
         } else {
             Alert(L"Failed starting %ws. File not found?", args[firstArg]);
             return -1;
         }
     }
 
+    bool redirected = false;
     BOOL meWow, themWow;
-    if (!created ||
+    if (!success ||
         !IsWow64Process(GetCurrentProcess(), &meWow) ||
         !IsWow64Process(pi.hProcess, &themWow) ||
         meWow != themWow) {
+        success = false;
+
         wstring dirName(PathGetBaseName(ownDir));
         bool replaced = false;
         if (StrContains(dirName, L"Win32")) {
@@ -106,20 +144,17 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
                 }
 
                 pi = redirectPi; // wait for redirect instead;
+                redirected = true;
                 success = true;
             } else {
                 Alert(L"Failed redirecting to %ws. File not found?", otherExePath.Get());
             }
         } else {
-            Alert(L"Process has wrong bitness and cannot find redirection target - cannot inject");
+            Alert(L"Process has wrong bitness and cannot find myinput_inject of other bitness - cannot inject");
         }
-
-        created = false;
     }
 
-    if (created) {
-        DebugActiveProcessStop(pi.dwProcessId); // was needed just at creation time
-
+    if (success && !redirected) {
         void *loadLibAddr = GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
 
         const wchar_t *dllName = L"myinput_hook.dll";
@@ -149,8 +184,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         }
     }
 
-    ResumeThread(pi.hThread);
-    CloseHandle(pi.hThread);
+    if (pi.hThread) {
+        ResumeThread(pi.hThread);
+        CloseHandle(pi.hThread);
+    }
 
     DWORD exitCode = -1;
     if (registered) {

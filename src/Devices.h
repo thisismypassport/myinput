@@ -6,7 +6,7 @@
 struct XHidReport {
     uint8_t ReportId;
     uint16_t X, Y, RX, RY;
-    uint8_t LT, RT;
+    uint16_t Triggers;
     uint16_t Btns, Pad;
 
     void SetFrom(const ImplUser *user) {
@@ -18,20 +18,20 @@ struct XHidReport {
         Y = 0x8000 - state.LA.Y.Value16();
         RX = state.RA.X.Value16() + 0x8000;
         RY = 0x8000 - state.RA.Y.Value16();
-        LT = state.LT.Value8();
-        RT = state.RT.Value8();
+        // this mess is needed for 'clever' xinput correlation code in sdl
+        Triggers = (int16_t)round((state.LT.Value - state.RT.Value) * 0x7fff) + 0x8000;
 
         Btns = 0;
         Btns |= state.A.State ? 0x1 : 0;
         Btns |= state.B.State ? 0x2 : 0;
-        Btns |= state.Y.State ? 0x4 : 0;
-        Btns |= state.X.State ? 0x8 : 0;
+        Btns |= state.X.State ? 0x4 : 0;
+        Btns |= state.Y.State ? 0x8 : 0;
         Btns |= state.LB.State ? 0x10 : 0;
         Btns |= state.RB.State ? 0x20 : 0;
-        Btns |= state.L.State ? 0x40 : 0;
-        Btns |= state.R.State ? 0x80 : 0;
-        Btns |= state.Start.State ? 0x100 : 0;
-        Btns |= state.Back.State ? 0x200 : 0;
+        Btns |= state.Start.State ? 0x40 : 0;
+        Btns |= state.Back.State ? 0x80 : 0;
+        Btns |= state.L.State ? 0x100 : 0;
+        Btns |= state.R.State ? 0x200 : 0;
 
         Btns |= CreateHatValue(state.DU.State, state.DD.State, state.DL.State, state.DR.State, true) << 10;
     }
@@ -40,16 +40,15 @@ struct XHidReport {
 
 // Driver-exported, not real
 struct XHidPreparsedData {
-    PreparsedHeader Header = {8, sizeof(XHidReport), 0, 0, 0, 0, 3}; // Update if adding/removing below
+    PreparsedHeader Header = {7, sizeof(XHidReport), 0, 0, 0, 0, 3}; // Update if adding/removing below
 
     PreparsedCap X = PreparsedCap::Axis(1, 0, 16, HID_USAGE_GENERIC_PAIR(X), 0, 1);
     PreparsedCap Y = PreparsedCap::Axis(3, 0, 16, HID_USAGE_GENERIC_PAIR(Y), 1, 1);
     PreparsedCap RX = PreparsedCap::Axis(5, 0, 16, HID_USAGE_GENERIC_PAIR(RX), 2, 2);
     PreparsedCap RY = PreparsedCap::Axis(7, 0, 16, HID_USAGE_GENERIC_PAIR(RY), 3, 2);
-    PreparsedCap LT = PreparsedCap::Axis(9, 0, 8, HID_USAGE_GENERIC_PAIR(Z), 4);
-    PreparsedCap RT = PreparsedCap::Axis(10, 0, 8, HID_USAGE_GENERIC_PAIR(RZ), 5);
-    PreparsedCap Btns = PreparsedCap::Buttons(11, 0, 10, HID_USAGE_PAGE_BUTTON, 1, 6);
-    PreparsedCap DPad = PreparsedCap::Hat(12, 2, true, HID_USAGE_GENERIC_PAIR(HATSWITCH), 16);
+    PreparsedCap Trig = PreparsedCap::Axis(9, 0, 16, HID_USAGE_GENERIC_PAIR(Z), 4);
+    PreparsedCap Btns = PreparsedCap::Buttons(11, 0, 10, HID_USAGE_PAGE_BUTTON, 1, 5);
+    PreparsedCap DPad = PreparsedCap::Hat(12, 2, true, HID_USAGE_GENERIC_PAIR(HATSWITCH), 15);
 
     PreparsedNode Root = PreparsedNode(HID_USAGE_GENERIC_PAIR(GAMEPAD), 0, 1, 0, 1, 2);
     PreparsedNode XY = PreparsedNode(HID_USAGE_PAGE_GENERIC, 0, 0, 0, 2);
@@ -86,11 +85,12 @@ struct DS4HidReport {
     uint8_t ReportId;
     uint8_t X, Y, RX, RY;
     uint8_t Btns[3], LT, RT;
-    uint8_t Unk1[3];
-    uint16_t GX, GY, GZ;
+    uint16_t Time;
+    uint8_t Battery;
+    int16_t GX, GY, GZ;
     int16_t AX, AY, AZ;
     uint8_t Unk2[5];
-    uint8_t Battery;
+    uint8_t PowerOptions;
     uint8_t Unk3[4];
     uint8_t Touch1[4];
     uint8_t Touch2[4];
@@ -128,16 +128,20 @@ struct DS4HidReport {
         Btns[2] |= state.Extra.State ? 0x2 : 0;
         Btns[2] |= state.Version << 2;
 
-        // TODO: G/A?
-        // (16th of a degree; 8192th of 1G)
-        GX = 0;
-        GY = 0;
-        GZ = 0;
-        AX = 0;
-        AY = 0;
-        AZ = 0;
+        constexpr double gScale = 1.0 / 0x2000;
+        constexpr double rotScale = DegreesToRadians / 16;
+        auto &motion = state.Motion;
+        AX = ClampToInt<int16_t>(motion.X.FinalAccel / gScale);
+        AY = ClampToInt<int16_t>(motion.Y.FinalAccel / gScale);
+        AZ = ClampToInt<int16_t>(motion.Z.FinalAccel / gScale);
+        GX = ClampToInt<int16_t>(motion.RX.Speed / rotScale);
+        GY = ClampToInt<int16_t>(motion.RY.Speed / rotScale);
+        GZ = ClampToInt<int16_t>(motion.RZ.Speed / rotScale);
 
-        Battery = 0x1b;
+        Time = (uint16_t)((uint64_t)state.Time * 1000 * 3 / 16);
+
+        Battery = 0xff; // scale?
+        PowerOptions = 0x1b;
         // TODO: touch?
         Touch1[0] = Touch2[0] = 0x80;
     }
@@ -182,7 +186,7 @@ struct Ds4DeviceIntf : public DeviceIntf {
         if (id == 18 && size >= 0x10) // serial? more?
         {
             if (dest) {
-                ZeroMemory(dest + 1, 0xf);
+                FillMemory(dest + 1, 0xf, 0xff);
             }
             return 0x10;
         } else if (id == 2) // calibration

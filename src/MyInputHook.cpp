@@ -1,5 +1,3 @@
-#define NOMINMAX
-#include <Windows.h>
 #include "UtilsBase.h"
 #include "WinHooks.h"
 #include "WinInput.h"
@@ -10,12 +8,14 @@
 #include "RawRegister.h"
 #include "CfgMgr.h"
 #include "NotifyApi.h"
+#include <Windows.h>
 
 void UpdateAll() {
     WinHooksUpdateKeyboard();
     RawInputUpdateKeyboard();
     WinHooksUpdateMouse();
     RawInputUpdateMouse();
+    UpdateHideCursor();
 }
 
 void PostAppCallback(AppCallback cb, void *data) {
@@ -33,7 +33,8 @@ static DWORD WINAPI DllThread(LPVOID param) {
 
     RegisterGlobalNotify();
     WinHooksInitOnThread();
-    RawInputRegisterOnThread();
+    RawInputInitDllWindow();
+    UpdateAll();
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
@@ -74,10 +75,7 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD ul_reason_for_call, LPVOID lpRe
 
         RawInputPreregisterEarly();
 
-        Path configDir = PathCombine(rootDir, L"Configs");
-        if (!ConfigLoad(PathCombine(configDir, PathCombineExt(baseName, L"ini")))) {
-            ConfigLoad(PathCombine(configDir, L"_default.ini"));
-        }
+        ConfigLoad(PathCombine(rootDir, L"Configs"), PathCombineExt(baseName, L"ini"));
 
         HookRawInput();
         HookDeviceApi();
@@ -94,10 +92,6 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD ul_reason_for_call, LPVOID lpRe
 
         CloseHandle(CreateThread(nullptr, 0, DllThread, NULL, 0, nullptr)); // do the rest on the thread, as it's not dllmain-safe
         LOG << "Initialized!" << END;
-    } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
-        LOG << "De-initializing..." << END;
-        ClearGlobalHooks();
-        LOG << "De-initialized!" << END;
     }
     return TRUE;
 }

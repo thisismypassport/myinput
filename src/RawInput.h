@@ -154,15 +154,22 @@ UINT WINAPI GetRawInputData_Hook(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pDa
         LOG << "GetRawInputData (" << hRawInput << "," << uiCommand << ")" << END;
     }
 
-    UINT count;
-    if (cbSizeHeader == sizeof(RAWINPUTHEADER)) {
-        WORD handleHigh = GetOurHandle(hRawInput);
-        if (handleHigh &&
-            (GRawInputRegMouse.Read(handleHigh, uiCommand, pData, pCbSize, &count) ||
-             GRawInputRegDevices.Read(handleHigh, uiCommand, pData, pCbSize, &count) ||
-             GRawInputRegKeyboard.Read(handleHigh, uiCommand, pData, pCbSize, &count))) {
+    WORD handleHigh = GetOurHandle(hRawInput);
+    if (cbSizeHeader == sizeof(RAWINPUTHEADER) && handleHigh) {
+        UINT count;
+        if (GRawInputRegMouse.Read(handleHigh, uiCommand, pData, pCbSize, &count)) {
             if (G.ApiTrace) {
-                LOG << "GetRawInputData read our data" << END;
+                LOG << "GetRawInputData read mouse data" << END;
+            }
+            return count;
+        } else if (GRawInputRegGamepad.Read(handleHigh, uiCommand, pData, pCbSize, &count)) {
+            if (G.ApiTrace) {
+                LOG << "GetRawInputData read gamepad data" << END;
+            }
+            return count;
+        } else if (GRawInputRegKeyboard.Read(handleHigh, uiCommand, pData, pCbSize, &count)) {
+            if (G.ApiTrace) {
+                LOG << "GetRawInputData read keyboard data" << END;
             }
             return count;
         }
@@ -302,7 +309,7 @@ BOOL WINAPI RegisterRawInputDevices_Hook(PCRAWINPUTDEVICE pRawInputDevices, UINT
     if (success && cbSize == sizeof(RAWINPUTDEVICE) && pRawInputDevices) {
         for (UINT i = 0; i < uiNumDevices; i++) {
             TryRegisterRawInputDevice(pRawInputDevices[i], 0, GRawInputRegFullPage);
-            TryRegisterRawInputDevice(pRawInputDevices[i], HID_USAGE_GENERIC_GAMEPAD, GRawInputRegDevices);
+            TryRegisterRawInputDevice(pRawInputDevices[i], HID_USAGE_GENERIC_GAMEPAD, GRawInputRegGamepad);
             TryRegisterRawInputDevice(pRawInputDevices[i], HID_USAGE_GENERIC_KEYBOARD, GRawInputRegKeyboard);
             TryRegisterRawInputDevice(pRawInputDevices[i], HID_USAGE_GENERIC_MOUSE, GRawInputRegMouse);
         }

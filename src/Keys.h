@@ -1,4 +1,5 @@
 #pragma once
+#include "UtilsBase.h"
 #include <Windows.h>
 
 // (Special custom vk definitions)
@@ -44,6 +45,18 @@ enum {
     MY_VK_PAD_RTRIGGER,
     MY_VK_PAD_LTHUMB_PRESS,
     MY_VK_PAD_RTHUMB_PRESS,
+    MY_VK_PAD_MOTION_LEFT,
+    MY_VK_PAD_MOTION_RIGHT,
+    MY_VK_PAD_MOTION_UP,
+    MY_VK_PAD_MOTION_DOWN,
+    MY_VK_PAD_MOTION_NEAR,
+    MY_VK_PAD_MOTION_FAR,
+    MY_VK_PAD_MOTION_ROT_LEFT,
+    MY_VK_PAD_MOTION_ROT_RIGHT,
+    MY_VK_PAD_MOTION_ROT_UP,
+    MY_VK_PAD_MOTION_ROT_DOWN,
+    MY_VK_PAD_MOTION_ROT_CCW,
+    MY_VK_PAD_MOTION_ROT_CW,
     MY_VK_LAST_PAD,
 
     MY_VK_FIRST_KEY_PAIR = 0x2100,
@@ -70,17 +83,26 @@ enum {
     MY_VK_PAD_RTHUMB_DOWN_ROTATOR,
     MY_VK_PAD_RTHUMB_RIGHT_ROTATOR,
     MY_VK_PAD_RTHUMB_LEFT_ROTATOR,
+    MY_VK_PAD_LTHUMB_RESETTER,
+    MY_VK_PAD_RTHUMB_RESETTER,
     MY_VK_LAST_PAD_MODIFIER,
 
     MY_VK_FIRST_CMD = 0xc000,
     MY_VK_RELOAD,
     MY_VK_TOGGLE_DISABLE,
+    MY_VK_TOGGLE_HIDE_CURSOR,
+    MY_VK_NONE,
     MY_VK_LAST_CMD,
 
     MY_VK_FIRST_USER_CMD = 0xc500,
     MY_VK_SET_ACTIVE_USER,
     MY_VK_HOLD_ACTIVE_USER,
     MY_VK_LAST_USER_CMD,
+
+    MY_VK_FIRST_META = 0xf000,
+    MY_VK_META_COND_AND,
+    MY_VK_META_COND_OR,
+    MY_VK_LAST_META,
 };
 
 #define ENUMERATE_LIT_VKS(e) \
@@ -249,56 +271,70 @@ enum {
     e(VK_VOLUME_DOWN, "volumedown");                       \
     e(VK_VOLUME_MUTE, "volumemute");
 
-#define ENUMERATE_PAD_VKS(e)                         \
-    e(MY_VK_PAD_A, "%a");                            \
-    e(MY_VK_PAD_B, "%b");                            \
-    e(MY_VK_PAD_X, "%x");                            \
-    e(MY_VK_PAD_Y, "%y");                            \
-    e(MY_VK_PAD_START, "%start");                    \
-    e(MY_VK_PAD_BACK, "%back");                      \
-    e(MY_VK_PAD_GUIDE, "%guide");                    \
-    e(MY_VK_PAD_EXTRA, "%extra");                    \
-    e(MY_VK_PAD_DPAD_LEFT, "%dleft");                \
-    e(MY_VK_PAD_DPAD_RIGHT, "%dright");              \
-    e(MY_VK_PAD_DPAD_UP, "%dup");                    \
-    e(MY_VK_PAD_DPAD_DOWN, "%ddown");                \
-    e(MY_VK_PAD_LTHUMB_LEFT, "%lleft");              \
-    e(MY_VK_PAD_LTHUMB_RIGHT, "%lright");            \
-    e(MY_VK_PAD_LTHUMB_UP, "%lup");                  \
-    e(MY_VK_PAD_LTHUMB_DOWN, "%ldown");              \
-    e(MY_VK_PAD_RTHUMB_LEFT, "%rleft");              \
-    e(MY_VK_PAD_RTHUMB_RIGHT, "%rright");            \
-    e(MY_VK_PAD_RTHUMB_UP, "%rup");                  \
-    e(MY_VK_PAD_RTHUMB_DOWN, "%rdown");              \
-    e(MY_VK_PAD_LSHOULDER, "%lb");                   \
-    e(MY_VK_PAD_RSHOULDER, "%rb");                   \
-    e(MY_VK_PAD_LTRIGGER, "%lt");                    \
-    e(MY_VK_PAD_RTRIGGER, "%rt");                    \
-    e(MY_VK_PAD_LTHUMB_PRESS, "%l");                 \
-    e(MY_VK_PAD_RTHUMB_PRESS, "%r");                 \
-    e(MY_VK_PAD_LTHUMB_MODIFIER, "%modl");           \
-    e(MY_VK_PAD_LTHUMB_HORZ_MODIFIER, "%modlx");     \
-    e(MY_VK_PAD_LTHUMB_VERT_MODIFIER, "%modly");     \
-    e(MY_VK_PAD_RTHUMB_MODIFIER, "%modr");           \
-    e(MY_VK_PAD_RTHUMB_HORZ_MODIFIER, "%modrx");     \
-    e(MY_VK_PAD_RTHUMB_VERT_MODIFIER, "%modry");     \
-    e(MY_VK_PAD_TRIGGER_MODIFIER, "%modt");          \
-    e(MY_VK_PAD_LTRIGGER_MODIFIER, "%modlt");        \
-    e(MY_VK_PAD_RTRIGGER_MODIFIER, "%modrt");        \
-    e(MY_VK_PAD_LTHUMB_UP_ROTATOR, "%rotlup");       \
-    e(MY_VK_PAD_LTHUMB_DOWN_ROTATOR, "%rotldown");   \
-    e(MY_VK_PAD_LTHUMB_RIGHT_ROTATOR, "%rotlright"); \
-    e(MY_VK_PAD_LTHUMB_LEFT_ROTATOR, "%rotlleft");   \
-    e(MY_VK_PAD_RTHUMB_UP_ROTATOR, "%rotrup");       \
-    e(MY_VK_PAD_RTHUMB_DOWN_ROTATOR, "%rotrdown");   \
-    e(MY_VK_PAD_RTHUMB_RIGHT_ROTATOR, "%rotrright"); \
+#define ENUMERATE_PAD_VKS(e)                          \
+    e(MY_VK_PAD_A, "%a");                             \
+    e(MY_VK_PAD_B, "%b");                             \
+    e(MY_VK_PAD_X, "%x");                             \
+    e(MY_VK_PAD_Y, "%y");                             \
+    e(MY_VK_PAD_START, "%start");                     \
+    e(MY_VK_PAD_BACK, "%back");                       \
+    e(MY_VK_PAD_GUIDE, "%guide");                     \
+    e(MY_VK_PAD_EXTRA, "%extra");                     \
+    e(MY_VK_PAD_DPAD_LEFT, "%dleft");                 \
+    e(MY_VK_PAD_DPAD_RIGHT, "%dright");               \
+    e(MY_VK_PAD_DPAD_UP, "%dup");                     \
+    e(MY_VK_PAD_DPAD_DOWN, "%ddown");                 \
+    e(MY_VK_PAD_LTHUMB_LEFT, "%lleft");               \
+    e(MY_VK_PAD_LTHUMB_RIGHT, "%lright");             \
+    e(MY_VK_PAD_LTHUMB_UP, "%lup");                   \
+    e(MY_VK_PAD_LTHUMB_DOWN, "%ldown");               \
+    e(MY_VK_PAD_RTHUMB_LEFT, "%rleft");               \
+    e(MY_VK_PAD_RTHUMB_RIGHT, "%rright");             \
+    e(MY_VK_PAD_RTHUMB_UP, "%rup");                   \
+    e(MY_VK_PAD_RTHUMB_DOWN, "%rdown");               \
+    e(MY_VK_PAD_LSHOULDER, "%lb");                    \
+    e(MY_VK_PAD_RSHOULDER, "%rb");                    \
+    e(MY_VK_PAD_LTRIGGER, "%lt");                     \
+    e(MY_VK_PAD_RTRIGGER, "%rt");                     \
+    e(MY_VK_PAD_LTHUMB_PRESS, "%l");                  \
+    e(MY_VK_PAD_RTHUMB_PRESS, "%r");                  \
+    e(MY_VK_PAD_MOTION_UP, "%motionup");              \
+    e(MY_VK_PAD_MOTION_DOWN, "%motiondown");          \
+    e(MY_VK_PAD_MOTION_LEFT, "%motionleft");          \
+    e(MY_VK_PAD_MOTION_RIGHT, "%motionright");        \
+    e(MY_VK_PAD_MOTION_NEAR, "%motionnear");          \
+    e(MY_VK_PAD_MOTION_FAR, "%motionfar");            \
+    e(MY_VK_PAD_MOTION_ROT_UP, "%motionrotup");       \
+    e(MY_VK_PAD_MOTION_ROT_DOWN, "%motionrotdown");   \
+    e(MY_VK_PAD_MOTION_ROT_LEFT, "%motionrotleft");   \
+    e(MY_VK_PAD_MOTION_ROT_RIGHT, "%motionrotright"); \
+    e(MY_VK_PAD_MOTION_ROT_CCW, "%motionrotccw");     \
+    e(MY_VK_PAD_MOTION_ROT_CW, "%motionrotcw");       \
+    e(MY_VK_PAD_LTHUMB_MODIFIER, "%modl");            \
+    e(MY_VK_PAD_LTHUMB_HORZ_MODIFIER, "%modlx");      \
+    e(MY_VK_PAD_LTHUMB_VERT_MODIFIER, "%modly");      \
+    e(MY_VK_PAD_RTHUMB_MODIFIER, "%modr");            \
+    e(MY_VK_PAD_RTHUMB_HORZ_MODIFIER, "%modrx");      \
+    e(MY_VK_PAD_RTHUMB_VERT_MODIFIER, "%modry");      \
+    e(MY_VK_PAD_TRIGGER_MODIFIER, "%modt");           \
+    e(MY_VK_PAD_LTRIGGER_MODIFIER, "%modlt");         \
+    e(MY_VK_PAD_RTRIGGER_MODIFIER, "%modrt");         \
+    e(MY_VK_PAD_LTHUMB_UP_ROTATOR, "%rotlup");        \
+    e(MY_VK_PAD_LTHUMB_DOWN_ROTATOR, "%rotldown");    \
+    e(MY_VK_PAD_LTHUMB_RIGHT_ROTATOR, "%rotlright");  \
+    e(MY_VK_PAD_LTHUMB_LEFT_ROTATOR, "%rotlleft");    \
+    e(MY_VK_PAD_RTHUMB_UP_ROTATOR, "%rotrup");        \
+    e(MY_VK_PAD_RTHUMB_DOWN_ROTATOR, "%rotrdown");    \
+    e(MY_VK_PAD_RTHUMB_RIGHT_ROTATOR, "%rotrright");  \
     e(MY_VK_PAD_RTHUMB_LEFT_ROTATOR, "%rotrleft");
 
-#define ENUMERATE_CMD_VKS(e)                  \
-    e(MY_VK_RELOAD, "reload");                \
-    e(MY_VK_TOGGLE_DISABLE, "toggledisable"); \
-    e(MY_VK_SET_ACTIVE_USER, "setactive");    \
-    e(MY_VK_HOLD_ACTIVE_USER, "holdactive");
+#define ENUMERATE_CMD_VKS(e)                         \
+    e(MY_VK_RELOAD, "reload");                       \
+    e(MY_VK_TOGGLE_DISABLE, "toggledisable");        \
+    e(MY_VK_TOGGLE_HIDE_CURSOR, "togglehidecursor"); \
+    e(MY_VK_SET_ACTIVE_USER, "setactive");           \
+    e(MY_VK_HOLD_ACTIVE_USER, "holdactive");         \
+    e(MY_VK_NONE, "none");
 
 enum class MyVkSource : byte {
     Unknown = 0,
@@ -367,7 +403,7 @@ bool IsVkPairButton(int vk) // supports normal vks only, not my_vks
 }
 
 MyVkType GetKeyType(int key) {
-    if (key >= 0 && key < MY_VK_LAST_REAL) {
+    if (key > 0 && key < MY_VK_LAST_REAL) {
         if (IsVkMouseButton(key)) {
             return MyVkType(MyVkSource::Mouse);
         } else if (IsVkPairButton(key)) {
@@ -392,18 +428,6 @@ MyVkType GetKeyType(int key) {
     }
 
     return MyVkType();
-}
-
-bool IsMouseMotionKey(int key) {
-    switch (key) {
-    case MY_VK_MOUSE_LEFT:
-    case MY_VK_MOUSE_RIGHT:
-    case MY_VK_MOUSE_UP:
-    case MY_VK_MOUSE_DOWN:
-        return true;
-    default:
-        return false;
-    }
 }
 
 tuple<int, int> GetKeyPair(int key) {

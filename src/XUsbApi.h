@@ -6,13 +6,13 @@
 
 DEFINE_GUID(GUID_DEVINTERFACE_XUSB, 0xEC87F1E3L, 0xC13B, 0x4100, 0xB5, 0xF7, 0x8B, 0x84, 0xD5, 0x42, 0x60, 0xCB);
 
-#define IOCTL_XINPUT_DEVICE_TYPE 0x8000
+#define IOCTL_XUSB_DEVICE_TYPE 0x8000
 
-#define IOCTL_XINPUT_GET_INFORMATION 0x80006000
-#define IOCTL_XINPUT_GET_CAPABILITIES 0x8000e004
-#define IOCTL_XINPUT_GET_LED_STATE 0x8000e008
-#define IOCTL_XINPUT_GET_GAMEPAD_STATE 0x8000e00c
-#define IOCTL_XINPUT_SET_GAMEPAD_STATE 0x8000a010
+#define IOCTL_XUSB_GET_INFORMATION 0x80006000
+#define IOCTL_XUSB_GET_CAPABILITIES 0x8000e004
+#define IOCTL_XUSB_GET_LED_STATE 0x8000e008
+#define IOCTL_XUSB_GET_GAMEPAD_STATE 0x8000e00c
+#define IOCTL_XUSB_SET_GAMEPAD_STATE 0x8000a010
 // (rest is unimportant or for higher protocol versions)
 
 atomic<UINT> gXUsbSequence;
@@ -123,7 +123,7 @@ struct XUsbVibration {
 static BOOL XUsbDeviceIoControl(DeviceIntf *device, DWORD dwIoControlCode, LPVOID lpInBuffer, DWORD nInBufferSize,
                                 LPVOID lpOutBuffer, DWORD nOutBufferSize, LPDWORD lpBytesReturned) {
     switch (dwIoControlCode) {
-    case IOCTL_XINPUT_GET_INFORMATION:
+    case IOCTL_XUSB_GET_INFORMATION:
         return ProcessDeviceIoControlOutput<XUsbInformation>(
             lpOutBuffer, nOutBufferSize, lpBytesReturned, [device](XUsbInformation *info) {
                 ZeroMemory(info, sizeof(XUsbInformation));
@@ -134,7 +134,7 @@ static BOOL XUsbDeviceIoControl(DeviceIntf *device, DWORD dwIoControlCode, LPVOI
                 return TRUE;
             });
 
-    case IOCTL_XINPUT_GET_CAPABILITIES:
+    case IOCTL_XUSB_GET_CAPABILITIES:
         // input is XUsbProtocolInput
         return ProcessDeviceIoControlOutput<XUsbCapabilities>(
             lpOutBuffer, nOutBufferSize, lpBytesReturned, [device](XUsbCapabilities *caps) {
@@ -147,7 +147,7 @@ static BOOL XUsbDeviceIoControl(DeviceIntf *device, DWORD dwIoControlCode, LPVOI
                 return TRUE;
             });
 
-    case IOCTL_XINPUT_GET_LED_STATE:
+    case IOCTL_XUSB_GET_LED_STATE:
         // input is XUsbProtocolInput
         return ProcessDeviceIoControlOutput<XUsbLedState>(
             lpOutBuffer, nOutBufferSize, lpBytesReturned, [device](XUsbLedState *state) {
@@ -155,7 +155,7 @@ static BOOL XUsbDeviceIoControl(DeviceIntf *device, DWORD dwIoControlCode, LPVOI
                 return TRUE;
             });
 
-    case IOCTL_XINPUT_GET_GAMEPAD_STATE:
+    case IOCTL_XUSB_GET_GAMEPAD_STATE:
         // input is XUsbProtocolInput
         return ProcessDeviceIoControlOutput<XUsbGamepadState>(
             lpOutBuffer, nOutBufferSize, lpBytesReturned, [device](XUsbGamepadState *xusb) {
@@ -190,7 +190,7 @@ static BOOL XUsbDeviceIoControl(DeviceIntf *device, DWORD dwIoControlCode, LPVOI
                 return TRUE;
             });
 
-    case IOCTL_XINPUT_SET_GAMEPAD_STATE:
+    case IOCTL_XUSB_SET_GAMEPAD_STATE:
         return ProcessDeviceIoControlInput<XUsbVibration>(lpInBuffer, nInBufferSize, [device](XUsbVibration *ptr) {
             switch (ptr->Cmd) {
             // case 1: led
