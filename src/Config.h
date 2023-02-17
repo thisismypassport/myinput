@@ -280,6 +280,7 @@ bool ConfigLoadInputLine(const string &line) {
         SharedPtr<ImplMapping> nextCfg;
         if (nextSrcKey) {
             nextCfg = SharedPtr<ImplMapping>::New(*cfg);
+            nextCfg->SrcKey = nextSrcKey;
         }
 
         if (cfg->Conds && !cfg->Persistent) {
