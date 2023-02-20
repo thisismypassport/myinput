@@ -27,7 +27,7 @@ UINT WINAPI GetRawInputDeviceList_Hook(PRAWINPUTDEVICELIST pRawInputDeviceList, 
     }
 
     UINT usersMask;
-    int usersCount = ImplGetUsers(&usersMask);
+    int usersCount = ImplGetUsers(&usersMask, [](DeviceIntf *dev) { return dev->IsHid; });
 
     UINT result = GetRawInputDeviceList_Real(pRawInputDeviceList, puiNumDevices, cbSize);
     bool ok = result != INVALID_UINT_VALUE;
@@ -129,7 +129,7 @@ UINT WINAPI GetRawInputDeviceInfoA_Hook(HANDLE hDevice, UINT uiCommand, LPVOID p
     }
 
     DeviceIntf *device = GetCustomHandleDevice(hDevice);
-    if (device) {
+    if (device && device->IsHid) {
         return GetRawCustomDeviceInfo(uiCommand, pData, pcbSize, device, false);
     } else {
         return GetRawInputDeviceInfoA_Real(hDevice, uiCommand, pData, pcbSize);
@@ -142,7 +142,7 @@ UINT WINAPI GetRawInputDeviceInfoW_Hook(HANDLE hDevice, UINT uiCommand, LPVOID p
     }
 
     DeviceIntf *device = GetCustomHandleDevice(hDevice);
-    if (device) {
+    if (device && device->IsHid) {
         return GetRawCustomDeviceInfo(uiCommand, pData, pcbSize, device, true);
     } else {
         return GetRawInputDeviceInfoW_Real(hDevice, uiCommand, pData, pcbSize);

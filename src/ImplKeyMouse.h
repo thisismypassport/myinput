@@ -131,20 +131,17 @@ static int ImplKeyboardRepeatTime() {
     return 400 - speed * 12;
 }
 
-static BufferList *ImplInputBuffers() {
-    static BufferList *inputBuffers = GBufferLists.Get(sizeof(INPUT));
-    return inputBuffers;
-}
+static BufferListOfSize<sizeof(INPUT)> GImplInputBuffers;
 
 static void ImplSendInputDelayed(void *param) {
     // We delay SendInput calls to avoid recursive/early hook calls
 
     SendInput_Real(1, (INPUT *)param, sizeof(INPUT));
-    ImplInputBuffers()->PutBack(param);
+    GImplInputBuffers.Get()->PutBack(param);
 }
 
 static void ImplGenerateMouseEventCommon(int flag, DWORD time, int data = 0) {
-    INPUT *input = (INPUT *)ImplInputBuffers()->Take();
+    INPUT *input = (INPUT *)GImplInputBuffers.Get()->Take();
     input->type = INPUT_MOUSE;
     input->mi = {};
     input->mi.dwFlags = flag;
@@ -156,7 +153,7 @@ static void ImplGenerateMouseEventCommon(int flag, DWORD time, int data = 0) {
 }
 
 static void ImplGenerateKey(int key, bool down, DWORD time) {
-    ImplInput *data = ImplGetInput(key);
+    ImplInput *data = ImplGetInput(key, 0);
     if (data) {
         data->PressGenerated = down;
     }
@@ -178,7 +175,7 @@ static void ImplGenerateKey(int key, bool down, DWORD time) {
     key = ImplReextend(key, &extended);
     int scan = MapVirtualKeyW(key, MAPVK_VK_TO_VSC);
 
-    INPUT *input = (INPUT *)ImplInputBuffers()->Take();
+    INPUT *input = (INPUT *)GImplInputBuffers.Get()->Take();
     input->type = INPUT_KEYBOARD;
     input->ki = {};
     input->ki.wVk = key;
@@ -208,7 +205,7 @@ static void ImplGenerateMouseMotion(double dx, double dy, DWORD time, ChangedMas
 }
 
 static void ImplGenerateMouseMotionFinish() {
-    INPUT *input = (INPUT *)ImplInputBuffers()->Take();
+    INPUT *input = (INPUT *)GImplInputBuffers.Get()->Take();
     input->type = INPUT_MOUSE;
     input->mi = {};
     input->mi.dwFlags = MOUSEEVENTF_MOVE;
@@ -220,4 +217,11 @@ static void ImplGenerateMouseMotionFinish() {
     PostAppCallback(ImplSendInputDelayed, input);
 
     G.Mouse.MotionChange = {};
+}
+
+static void ImplUpdateAsyncState() {
+    for (int i = 0; i < ImplKeyboard::Count; i++) {
+        G.Keyboard.Keys[i].AsyncDown = GetAsyncKeyState_Real(i) < 0;
+        // AsyncToggle?
+    }
 }

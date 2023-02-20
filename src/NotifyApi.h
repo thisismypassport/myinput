@@ -92,27 +92,29 @@ HDEVNOTIFY WINAPI RegisterDeviceNotification_Hook(HANDLE hRecepient, LPVOID Noti
                 HDEVNOTIFY notify = RegisterDeviceNotification_Real(hRecepient, NotificationFilter, Flags);
                 if (notify) {
                     GThreadPoolNotifications.Register(notify, [window](ImplUser *user, bool added) {
-                        bool unicode = IsWindowUnicode(window);
-                        size_t size = unicode ? // the DEV_BROADCAST_DEVICEINTERFACE_* sizeof includes the null char
-                                          sizeof(DEV_BROADCAST_DEVICEINTERFACE_W) + sizeof(wchar_t) * wcslen(user->Device->DevicePathW)
-                                              : sizeof(DEV_BROADCAST_DEVICEINTERFACE_A) + strlen(user->Device->DevicePathA);
+                        if (user->Device->IsHid) {
+                            bool unicode = IsWindowUnicode(window);
+                            size_t size = unicode ? // the DEV_BROADCAST_DEVICEINTERFACE_* sizeof includes the null char
+                                              sizeof(DEV_BROADCAST_DEVICEINTERFACE_W) + sizeof(wchar_t) * wcslen(user->Device->DevicePathW)
+                                                  : sizeof(DEV_BROADCAST_DEVICEINTERFACE_A) + strlen(user->Device->DevicePathA);
 
-                        DEV_BROADCAST_DEVICEINTERFACE_W *broadcast = (DEV_BROADCAST_DEVICEINTERFACE_W *)new byte[size];
-                        ZeroMemory(broadcast, sizeof(*broadcast));
-                        broadcast->dbcc_size = (int)size;
-                        broadcast->dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
-                        broadcast->dbcc_classguid = GUID_DEVINTERFACE_HID;
+                            DEV_BROADCAST_DEVICEINTERFACE_W *broadcast = (DEV_BROADCAST_DEVICEINTERFACE_W *)new byte[size];
+                            ZeroMemory(broadcast, sizeof(*broadcast));
+                            broadcast->dbcc_size = (int)size;
+                            broadcast->dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+                            broadcast->dbcc_classguid = GUID_DEVINTERFACE_HID;
 
-                        WPARAM event = added ? DBT_DEVICEARRIVAL : DBT_DEVICEREMOVECOMPLETE;
-                        if (unicode) {
-                            wcscpy(broadcast->dbcc_name, user->Device->DevicePathW);
-                            SendMessageW(window, WM_DEVICECHANGE, event, (LPARAM)broadcast);
-                        } else {
-                            strcpy(((DEV_BROADCAST_DEVICEINTERFACE_A *)broadcast)->dbcc_name, user->Device->DevicePathA);
-                            SendMessageA(window, WM_DEVICECHANGE, event, (LPARAM)broadcast);
+                            WPARAM event = added ? DBT_DEVICEARRIVAL : DBT_DEVICEREMOVECOMPLETE;
+                            if (unicode) {
+                                wcscpy(broadcast->dbcc_name, user->Device->DevicePathW);
+                                SendMessageW(window, WM_DEVICECHANGE, event, (LPARAM)broadcast);
+                            } else {
+                                strcpy(((DEV_BROADCAST_DEVICEINTERFACE_A *)broadcast)->dbcc_name, user->Device->DevicePathA);
+                                SendMessageA(window, WM_DEVICECHANGE, event, (LPARAM)broadcast);
+                            }
+
+                            delete[] broadcast;
                         }
-
-                        delete[] broadcast;
                     });
                 }
                 return notify;

@@ -88,11 +88,19 @@ void(WINAPI *MouseEvent_Real)(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData, U
 UINT(WINAPI *SendInput_Real)
 (UINT cInputs, LPINPUT pInputs, int cbSize) = SendInput;
 LPARAM(WINAPI *GetMessageExtraInfo_Real)
-() = GetMessageExtraInfo;
+(VOID) = GetMessageExtraInfo;
 BOOL(WINAPI *GetCurrentInputMessageSource_Real)
 (INPUT_MESSAGE_SOURCE *msg) = GetCurrentInputMessageSource;
 BOOL(WINAPI *GetCIMSSM_Real)
 (INPUT_MESSAGE_SOURCE *msg) = GetCIMSSM;
+
+int(WINAPI *ShowCursor_Real)(BOOL bShow) = ShowCursor;
+BOOL(WINAPI *GetCursorInfo_Real)
+(PCURSORINFO pci) = GetCursorInfo;
+BOOL(WINAPI *ClipCursor_Real)
+(const RECT *lpRect) = ClipCursor;
+BOOL(WINAPI *GetClipCursor_Real)
+(LPRECT lpRect) = GetClipCursor;
 
 #define INVALID_UINT_VALUE ((UINT)-1)
 
@@ -149,7 +157,6 @@ using AppCallback = void (*)(void *);
 void PostAppCallback(AppCallback cb, void *data);
 
 HANDLE GetCustomDeviceHandle(int user);
-void SetRumble(double lowFreq, double highFreq);
 void UpdateAll();
 void UpdateHideCursor();
 bool ProcessRawKeyboardEvent(int msg, int key, int scan, int flags, ULONG extraInfo, bool injected);

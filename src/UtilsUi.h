@@ -76,6 +76,43 @@ public:
     }
 };
 
+class EditBase : public Control {
+public:
+    Path Get() {
+        int size = GetWindowTextLengthW(mControl) + 1;
+
+        Path text(size);
+        if (!GetWindowTextW(mControl, text, size)) {
+            text[0] = L'\0';
+        }
+        return text;
+    }
+
+    void Set(const wchar_t *value) {
+        SetWindowTextW(mControl, value);
+    }
+};
+
+class EditLine : public EditBase {
+    function<void()> mChanged;
+
+public:
+    EditLine(HWND window, intptr_t id, function<void()> &&changed) {
+        mChanged = move(changed);
+        mControl = CreateWindowW(WC_EDITW, nullptr,
+                                 WS_TABSTOP | WS_CHILD | WS_VISIBLE | WS_BORDER |
+                                     ES_AUTOHSCROLL | ES_LEFT | ES_NOHIDESEL,
+                                 0, 0, 0, 0, window, (HMENU)id, nullptr, nullptr);
+        InitFont();
+    }
+
+    void OnCommand(WORD value) override {
+        if (value == EN_CHANGE) {
+            mChanged();
+        }
+    }
+};
+
 class ListBoxBase : public Control {
 public:
     int Add(const wchar_t *str) { return (int)SendMessageW(mControl, LB_ADDSTRING, 0, (LPARAM)str); }
@@ -112,7 +149,13 @@ public:
     }
 
     int GetSelected() { return (int)SendMessageW(mControl, LB_GETCURSEL, 0, 0); }
-    void SetSelected(int idx) { SendMessageW(mControl, LB_SETCURSEL, idx, 0); }
+
+    void SetSelected(int idx, bool action = true) {
+        SendMessageW(mControl, LB_SETCURSEL, idx, 0);
+        if (action) {
+            mAction(idx);
+        }
+    }
 
     void OnCommand(WORD value) override {
         if (value == LBN_SELCHANGE) {
@@ -141,10 +184,14 @@ public:
         return data;
     }
 
-    void SetSelected(const vector<int> &indices) {
+    void SetSelected(const vector<int> &indices, bool action = true) {
         SendMessageW(mControl, LB_SETSEL, FALSE, -1);
         for (int idx : indices) {
             SendMessageW(mControl, LB_SETSEL, TRUE, idx);
+        }
+
+        if (action) {
+            mAction(indices);
         }
     }
 
@@ -187,7 +234,13 @@ public:
     T GetData(int idx) { return idx >= 0 ? (T)SendMessage(mControl, CB_GETITEMDATA, idx, 0) : (T)0; }
 
     int GetSelected() { return (int)SendMessageW(mControl, CB_GETCURSEL, 0, 0); }
-    void SetSelected(int idx) { SendMessageW(mControl, CB_SETCURSEL, idx, 0); }
+
+    void SetSelected(int idx, bool action = true) {
+        SendMessageW(mControl, CB_SETCURSEL, idx, 0);
+        if (action) {
+            mAction(idx);
+        }
+    }
 
     void OnCommand(WORD value) override {
         if (value == CBN_SELCHANGE) {

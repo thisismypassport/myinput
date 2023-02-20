@@ -5,7 +5,7 @@
 #include <hidclass.h>
 #include <hidsdi.h>
 #include "State.h"
-#include "Log.h"
+#include "LogUtils.h"
 
 #define DEVICE_NAME_PREFIX R"(\\?\HID#)"
 #define DEVICE_NAME_PREFIX_W LR"(\\?\HID#)"
@@ -117,6 +117,10 @@ struct PreparsedHeader {
 #define HID_USAGE_GENERIC_PAIR(x) HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_##x
 
 struct DeviceIntf {
+    bool IsHid = true;
+    bool IsXUsb = false;
+    int UserIdx = 0;
+
     Path FinalPipePrefix;
     int FinalPipePrefixLen;
     const char *DevicePathA = nullptr;
@@ -131,10 +135,8 @@ struct DeviceIntf {
     int VersionNum = 0;
     const PreparsedHeader *Preparsed = nullptr;
     unsigned PreparsedSize = 0;
-    bool IsXInput = false;
     const char *XDevicePathA = nullptr;
     Path XDevicePathW;
-    int UserIdx = 0;
 
     virtual int CopyInputTo(uint8_t *dest) = 0;
     int CopyInputTo(uint8_t *dest, int size) {
@@ -184,18 +186,15 @@ struct DeviceIntf {
     }
 
     void Init(int userIdx) {
+        // TODO: need to vary devices, even if they end up in the same userIdx...
+
         UserIdx = userIdx;
 
         FinalPipePrefix = Path(MAX_PATH);
         FinalPipePrefixLen = wsprintfW(FinalPipePrefix, LR"(\Device\NamedPipe\MyInputHook_%d.%d.)", GetCurrentProcessId(), userIdx);
 
-        const wchar_t *igSuffix = IsXInput ? L"&IG_00" : L"";
+        const wchar_t *igSuffix = IsXUsb ? L"&IG_00" : L"";
         const wchar_t *uidSuffix = L"6&20f390fc&0&00";
-
-        DevicePathW = Path(MAX_PATH);
-        wsprintfW(DevicePathW, LR"(\\?\HID#VID_%04X&PID_%04X%s#%s%02x#{4d1e55b2-f16f-11cf-88cb-001111000030})",
-                  VendorId, ProductId, igSuffix, uidSuffix, userIdx);
-        DevicePathA = PathToStrTake(DevicePathW);
 
         DeviceBaseName = Path(MAX_PATH);
         wsprintfW(DeviceBaseName, LR"(HID\VID_%04X&PID_%04X%s)", VendorId, ProductId, igSuffix);
@@ -203,7 +202,14 @@ struct DeviceIntf {
         DeviceInstName = Path(MAX_PATH);
         wsprintfW(DeviceInstName, LR"(%s\%s%02x)", DeviceBaseName.Get(), uidSuffix, userIdx);
 
-        if (IsXInput) {
+        if (IsHid) {
+            DevicePathW = Path(MAX_PATH);
+            wsprintfW(DevicePathW, LR"(\\?\HID#VID_%04X&PID_%04X%s#%s%02x#{4d1e55b2-f16f-11cf-88cb-001111000030})",
+                      VendorId, ProductId, igSuffix, uidSuffix, userIdx);
+            DevicePathA = PathToStrTake(DevicePathW);
+        }
+
+        if (IsXUsb) {
             XDevicePathW = Path(MAX_PATH);
             wsprintfW(XDevicePathW, LR"(\\?\HID#VID_%04X&PID_%04X%s#%s%02x#{ec87f1e3-c13b-4100-b5f7-8b84d54260cb})",
                       VendorId, ProductId, igSuffix, uidSuffix, userIdx);

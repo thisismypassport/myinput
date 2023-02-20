@@ -1,5 +1,5 @@
 #pragma once
-#include "Log.h"
+#include "LogUtils.h"
 #include <detours.h>
 
 void CheckHookError(LONG error) {
@@ -8,17 +8,17 @@ void CheckHookError(LONG error) {
 
 class Hook {
 public:
-    void **pReal;
+    void *pReal;
     void *hook;
 
-    void Attach() { CheckHookError(DetourAttach(pReal, hook)); }
-    void Detach() { CheckHookError(DetourDetach(pReal, hook)); }
+    void Attach() { CheckHookError(DetourAttach((void **)pReal, hook)); }
+    void Detach() { CheckHookError(DetourDetach((void **)pReal, hook)); }
 };
 
 vector<Hook> GHooks;
 
 void AddGlobalHook(void *pReal, void *hook) {
-    GHooks.push_back(Hook{(void **)pReal, hook});
+    GHooks.push_back(Hook{pReal, hook});
 }
 
 void SetGlobalHooks() {
@@ -30,7 +30,8 @@ void SetGlobalHooks() {
     CheckHookError(DetourTransactionCommit());
 }
 
-void ClearGlobalHooks() {
+void ClearGlobalHooks() // (NOT safe like this, must go over threads)
+{
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     for (auto &hook : GHooks) {

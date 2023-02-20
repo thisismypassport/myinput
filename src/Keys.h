@@ -88,16 +88,23 @@ enum {
     MY_VK_LAST_PAD_MODIFIER,
 
     MY_VK_FIRST_CMD = 0xc000,
+    MY_VK_NONE,
     MY_VK_RELOAD,
     MY_VK_TOGGLE_DISABLE,
     MY_VK_TOGGLE_HIDE_CURSOR,
-    MY_VK_NONE,
+    MY_VK_TOGGLE_ALWAYS,
+    MY_VK_CUSTOM,
     MY_VK_LAST_CMD,
 
     MY_VK_FIRST_USER_CMD = 0xc500,
     MY_VK_SET_ACTIVE_USER,
     MY_VK_HOLD_ACTIVE_USER,
     MY_VK_LAST_USER_CMD,
+
+    MY_VK_FIRST_PAD_OUTPUT = 0xd500, // currently not covered by MyVkType/etc
+    MY_VK_PAD_RUMBLE_LOW,
+    MY_VK_PAD_RUMBLE_HIGH,
+    MY_VK_LAST_PAD_OUTPUT,
 
     MY_VK_FIRST_META = 0xf000,
     MY_VK_META_COND_AND,
@@ -141,7 +148,8 @@ enum {
     e('6', "6");             \
     e('7', "7");             \
     e('8', "8");             \
-    e('9', "9");
+    e('9', "9");             \
+    //
 
 #define ENUMERATE_MISC_VKS(e)                              \
     e(VK_LBUTTON, "lbutton");                              \
@@ -269,7 +277,8 @@ enum {
     e(VK_MEDIA_PREV_TRACK, "mediaprev");                   \
     e(VK_VOLUME_UP, "volumeup");                           \
     e(VK_VOLUME_DOWN, "volumedown");                       \
-    e(VK_VOLUME_MUTE, "volumemute");
+    e(VK_VOLUME_MUTE, "volumemute");                       \
+    //
 
 #define ENUMERATE_PAD_VKS(e)                          \
     e(MY_VK_PAD_A, "%a");                             \
@@ -326,15 +335,18 @@ enum {
     e(MY_VK_PAD_RTHUMB_UP_ROTATOR, "%rotrup");        \
     e(MY_VK_PAD_RTHUMB_DOWN_ROTATOR, "%rotrdown");    \
     e(MY_VK_PAD_RTHUMB_RIGHT_ROTATOR, "%rotrright");  \
-    e(MY_VK_PAD_RTHUMB_LEFT_ROTATOR, "%rotrleft");
+    e(MY_VK_PAD_RTHUMB_LEFT_ROTATOR, "%rotrleft");    \
+    //
 
 #define ENUMERATE_CMD_VKS(e)                         \
+    e(MY_VK_NONE, "none");                           \
     e(MY_VK_RELOAD, "reload");                       \
     e(MY_VK_TOGGLE_DISABLE, "toggledisable");        \
     e(MY_VK_TOGGLE_HIDE_CURSOR, "togglehidecursor"); \
+    e(MY_VK_TOGGLE_ALWAYS, "togglealways");          \
     e(MY_VK_SET_ACTIVE_USER, "setactive");           \
     e(MY_VK_HOLD_ACTIVE_USER, "holdactive");         \
-    e(MY_VK_NONE, "none");
+    //
 
 enum class MyVkSource : byte {
     Unknown = 0,

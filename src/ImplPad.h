@@ -1,5 +1,7 @@
 #pragma once
 #include "State.h"
+#include "Header.h"
+#include "ImplFeedback.h"
 
 static void CALLBACK ImplRepeatTimerProc(HWND window, UINT msg, UINT_PTR id, DWORD time);
 static void ImplGenerateMouseMotionFinish();
@@ -271,13 +273,10 @@ static bool ImplUpdateMotion(ImplMotionState &motion, DWORD time) {
         dim->FinalAccel = newAccel / ImplMotionState::GScale;
     }
 
-    auto [sx, cx] = SinCos(motion.RX.NewValue);
-    auto [sy, cy] = SinCos(motion.RY.NewValue);
-    auto [sz, cz] = SinCos(motion.RZ.NewValue);
-    auto sxy = sx * sy;
-    motion.X.FinalAccel -= sxy * cz - cy * sz;
-    motion.Y.FinalAccel -= sxy * sz + cy * cz;
-    motion.Z.FinalAccel -= sy * cx;
+    auto yaxis = motion.YAxis();
+    motion.X.FinalAccel -= yaxis.X;
+    motion.Y.FinalAccel -= yaxis.Y;
+    motion.Z.FinalAccel -= yaxis.Z;
 
     motion.PrevTime = time;
     return changed;
@@ -314,4 +313,278 @@ static void ImplHandleMotionDimChange(ImplMotionDimState &dimState, ImplUser *us
         motion.PrevTime = v.Time;
         motion.Timer.StartMs(10, ImplMotionTimerProc, user);
     }
+}
+
+static void ImplHandleMotionRelDimChange(ImplMotionState &state, ImplUser *user, double scale, Vector3 axis, const InputValue &v, bool add = false) {
+    ImplHandleMotionDimChange(state.X, user, scale * axis.X, v, add);
+    ImplHandleMotionDimChange(state.Y, user, scale * axis.Y, v, add);
+    ImplHandleMotionDimChange(state.Z, user, scale * axis.Z, v, add);
+}
+
+static bool ImplPadGetState(ImplUser *user, int key, int type, void *dest) {
+    auto &state = user->State;
+    switch (type) {
+    case 'b': {
+        bool &out = *(bool *)dest;
+        switch (key) {
+        case MY_VK_PAD_A:
+            out = state.A.State;
+            break;
+        case MY_VK_PAD_B:
+            out = state.B.State;
+            break;
+        case MY_VK_PAD_X:
+            out = state.X.State;
+            break;
+        case MY_VK_PAD_Y:
+            out = state.Y.State;
+            break;
+        case MY_VK_PAD_START:
+            out = state.Start.State;
+            break;
+        case MY_VK_PAD_BACK:
+            out = state.Back.State;
+            break;
+        case MY_VK_PAD_DPAD_LEFT:
+            out = state.DL.State;
+            break;
+        case MY_VK_PAD_DPAD_RIGHT:
+            out = state.DR.State;
+            break;
+        case MY_VK_PAD_DPAD_UP:
+            out = state.DU.State;
+            break;
+        case MY_VK_PAD_DPAD_DOWN:
+            out = state.DD.State;
+            break;
+        case MY_VK_PAD_LSHOULDER:
+            out = state.LB.State;
+            break;
+        case MY_VK_PAD_RSHOULDER:
+            out = state.RB.State;
+            break;
+        case MY_VK_PAD_LTHUMB_PRESS:
+            out = state.L.State;
+            break;
+        case MY_VK_PAD_RTHUMB_PRESS:
+            out = state.R.State;
+            break;
+        case MY_VK_PAD_GUIDE:
+            out = state.Guide.State;
+            break;
+        case MY_VK_PAD_EXTRA:
+            out = state.Extra.State;
+            break;
+        case MY_VK_PAD_LTRIGGER:
+            out = state.LT.State;
+            break;
+        case MY_VK_PAD_RTRIGGER:
+            out = state.RT.State;
+            break;
+        default:
+            return false;
+        }
+    } break;
+
+    case 'd': {
+        double &out = *(double *)dest;
+        switch (key) {
+        case MY_VK_PAD_LTRIGGER:
+            out = state.LT.Value;
+            break;
+        case MY_VK_PAD_RTRIGGER:
+            out = state.RT.Value;
+            break;
+        case MY_VK_PAD_LTHUMB_UP:
+            out = state.LA.Y.Value;
+            break;
+        case MY_VK_PAD_LTHUMB_DOWN:
+            out = -state.LA.Y.Value;
+            break;
+        case MY_VK_PAD_LTHUMB_LEFT:
+            out = -state.LA.X.Value;
+            break;
+        case MY_VK_PAD_LTHUMB_RIGHT:
+            out = state.LA.X.Value;
+            break;
+        case MY_VK_PAD_RTHUMB_UP:
+            out = state.RA.Y.Value;
+            break;
+        case MY_VK_PAD_RTHUMB_DOWN:
+            out = -state.RA.Y.Value;
+            break;
+        case MY_VK_PAD_RTHUMB_LEFT:
+            out = -state.RA.X.Value;
+            break;
+        case MY_VK_PAD_RTHUMB_RIGHT:
+            out = state.RA.X.Value;
+            break;
+        case MY_VK_PAD_MOTION_UP:
+            out = state.Motion.Y.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_DOWN:
+            out = -state.Motion.Y.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_RIGHT:
+            out = state.Motion.X.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_LEFT:
+            out = -state.Motion.X.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_NEAR:
+            out = state.Motion.Z.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_FAR:
+            out = -state.Motion.Z.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_ROT_UP:
+            out = -state.Motion.RX.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_ROT_DOWN:
+            out = state.Motion.RX.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_ROT_RIGHT:
+            out = state.Motion.RY.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_ROT_LEFT:
+            out = -state.Motion.RY.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_ROT_CW:
+            out = -state.Motion.RZ.NewValue;
+            break;
+        case MY_VK_PAD_MOTION_ROT_CCW:
+            out = state.Motion.RZ.NewValue;
+            break;
+        default:
+            return false;
+        }
+    } break;
+
+    case 'V': {
+        double &out = *(double *)dest;
+        switch (key) {
+        case MY_VK_PAD_MOTION_UP:
+            out = state.Motion.Y.Speed;
+            break;
+        case MY_VK_PAD_MOTION_DOWN:
+            out = -state.Motion.Y.Speed;
+            break;
+        case MY_VK_PAD_MOTION_RIGHT:
+            out = state.Motion.X.Speed;
+            break;
+        case MY_VK_PAD_MOTION_LEFT:
+            out = -state.Motion.X.Speed;
+            break;
+        case MY_VK_PAD_MOTION_NEAR:
+            out = state.Motion.Z.Speed;
+            break;
+        case MY_VK_PAD_MOTION_FAR:
+            out = -state.Motion.Z.Speed;
+            break;
+        case MY_VK_PAD_MOTION_ROT_UP:
+            out = -state.Motion.RX.Speed;
+            break;
+        case MY_VK_PAD_MOTION_ROT_DOWN:
+            out = state.Motion.RX.Speed;
+            break;
+        case MY_VK_PAD_MOTION_ROT_RIGHT:
+            out = state.Motion.RY.Speed;
+            break;
+        case MY_VK_PAD_MOTION_ROT_LEFT:
+            out = -state.Motion.RY.Speed;
+            break;
+        case MY_VK_PAD_MOTION_ROT_CW:
+            out = -state.Motion.RZ.Speed;
+            break;
+        case MY_VK_PAD_MOTION_ROT_CCW:
+            out = state.Motion.RZ.Speed;
+            break;
+        default:
+            return false;
+        }
+    } break;
+
+    case 'A': {
+        double &out = *(double *)dest;
+        switch (key) {
+        case MY_VK_PAD_MOTION_UP:
+            out = state.Motion.Y.Accel;
+            break;
+        case MY_VK_PAD_MOTION_DOWN:
+            out = -state.Motion.Y.Accel;
+            break;
+        case MY_VK_PAD_MOTION_RIGHT:
+            out = state.Motion.X.Accel;
+            break;
+        case MY_VK_PAD_MOTION_LEFT:
+            out = -state.Motion.X.Accel;
+            break;
+        case MY_VK_PAD_MOTION_NEAR:
+            out = state.Motion.Z.Accel;
+            break;
+        case MY_VK_PAD_MOTION_FAR:
+            out = -state.Motion.Z.Accel;
+            break;
+        case MY_VK_PAD_MOTION_ROT_UP:
+            out = -state.Motion.RX.Accel;
+            break;
+        case MY_VK_PAD_MOTION_ROT_DOWN:
+            out = state.Motion.RX.Accel;
+            break;
+        case MY_VK_PAD_MOTION_ROT_RIGHT:
+            out = state.Motion.RY.Accel;
+            break;
+        case MY_VK_PAD_MOTION_ROT_LEFT:
+            out = -state.Motion.RY.Accel;
+            break;
+        case MY_VK_PAD_MOTION_ROT_CW:
+            out = -state.Motion.RZ.Accel;
+            break;
+        case MY_VK_PAD_MOTION_ROT_CCW:
+            out = state.Motion.RZ.Accel;
+            break;
+        default:
+            return false;
+        }
+    } break;
+
+    default:
+        return false;
+    }
+    return true;
+}
+
+static void ImplSetRumble(ImplUser *user, double lowFreq, double highFreq) {
+    if (G.Debug) {
+        LOG << "Rumble " << lowFreq << ", " << highFreq << END;
+    }
+
+    user->State.Feedback.LowRumble = lowFreq;
+    user->State.Feedback.HighRumble = highFreq;
+
+    if (G.RumbleWindow) {
+        ShowWindowRumble(lowFreq, highFreq);
+    }
+}
+
+static bool ImplPadSetState(ImplUser *user, int key, int type, const void *src) {
+    switch (type) {
+    case 'd': {
+        double val = *(const double *)src;
+        switch (key) {
+        case MY_VK_PAD_RUMBLE_LOW:
+            ImplSetRumble(user, val, user->State.Feedback.HighRumble);
+            break;
+        case MY_VK_PAD_RUMBLE_HIGH:
+            ImplSetRumble(user, user->State.Feedback.LowRumble, val);
+            break;
+        default:
+            return false;
+        }
+    } break;
+
+    default:
+        return false;
+    }
+    return true;
 }

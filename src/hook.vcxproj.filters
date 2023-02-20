@@ -27,10 +27,7 @@
     </ClInclude>
     <ClInclude Include="Devices.h" />
     <ClInclude Include="WinHooks.h" />
-    <ClInclude Include="Log.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
-    <ClInclude Include="WinFeatures.h" />
+    <ClInclude Include="ImplFeedback.h" />
     <ClInclude Include="UtilsUi.h">
       <Filter>Utils</Filter>
     </ClInclude>
@@ -49,6 +46,12 @@
     <ClInclude Include="WinUtils.h">
       <Filter>Utils</Filter>
     </ClInclude>
+    <ClInclude Include="MyInputHook.h" />
+    <ClInclude Include="LogUtils.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="Log.h" />
+    <ClInclude Include="WinCursor.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Utils">

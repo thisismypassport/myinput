@@ -1,4 +1,5 @@
 #include "UtilsPath.h"
+#include "UtilsStr.h"
 #include "UtilsUi.h"
 #include <Windows.h>
 
@@ -94,24 +95,43 @@ public:
 };
 
 RegKey *gIfeoKey;
-wstring gInjectCmdLine;
+Path gInjectExePath;
 
-bool IsRegisteredExe(const wchar_t *exeName, Path *outPath) {
+bool GetRegisteredExe(const wchar_t *exeName, Path *outPath, Path *outConfig) {
     RegKey exeKey(*gIfeoKey, exeName);
     bool isRegistered = false;
     if (exeKey) {
         Path exeDebugger = exeKey.GetStringValue(DEBUGGER_VALUE);
         if (exeDebugger) {
-            isRegistered = wcscmp(exeDebugger, gInjectCmdLine.c_str()) == 0;
-            *outPath = move(exeDebugger);
+            int numArgs = 0;
+            LPWSTR *args = CommandLineToArgvW(exeDebugger, &numArgs);
+
+            if (args && numArgs) {
+                *outPath = args[0];
+                isRegistered = wcseq(args[0], gInjectExePath);
+
+                for (int argI = 1; argI < numArgs; argI++) {
+                    if (wcseq(args[argI], L"-c") && argI + 1 < numArgs) {
+                        *outConfig = args[argI + 1], argI++;
+                    }
+                }
+            }
+
+            LocalFree(args);
         }
     }
     return isRegistered;
 }
 
-bool RegisterExe(const wchar_t *exeName) {
+bool RegisterExe(const wchar_t *exeName, const wchar_t *config) {
     RegKey exeKey(*gIfeoKey, exeName, true);
-    if (!exeKey.SetStringValue(DEBUGGER_VALUE, gInjectCmdLine.c_str())) {
+
+    wstring cmdLine = L"\"" + wstring(gInjectExePath) + L"\" -r";
+    if (config) {
+        cmdLine += L" -c \"" + wstring(config) + L"\"";
+    }
+
+    if (!exeKey.SetStringValue(DEBUGGER_VALUE, cmdLine.c_str())) {
         Alert(L"Failed to set Debugger value in registry");
         return false;
     }
@@ -137,17 +157,18 @@ bool UnregisterExe(const wchar_t *exeName) {
 
 struct RegisteredExe {
     Path Name;
+    Path Config;
     bool Exact;
 };
 
 vector<RegisteredExe> GetRegisteredExes() {
     vector<RegisteredExe> exeNames;
     for (Path &exeName : gIfeoKey->GetChildKeys()) {
-        Path regPath;
-        if (IsRegisteredExe(exeName, &regPath)) {
-            exeNames.push_back({move(exeName), true});
+        Path regPath, regConfig;
+        if (GetRegisteredExe(exeName, &regPath, &regConfig)) {
+            exeNames.push_back({move(exeName), move(regConfig), true});
         } else if (regPath && wcsstr(regPath, MYINPUT_INJECT_EXE)) {
-            exeNames.push_back({move(exeName), false});
+            exeNames.push_back({move(exeName), move(regConfig), false});
         }
     }
     return exeNames;
@@ -174,6 +195,9 @@ class RegisterUnregisterWindow : public Window {
     Button *mRegBtn = nullptr;
     Button *mUnregBtn = nullptr;
     Button *mReregBtn = nullptr;
+    CheckBox *mCustomCfgChk = nullptr;
+    EditLine *mCustomCfgEdit = nullptr;
+    Button *mCustomCfgBtn = nullptr;
     Button *mEditCfgBtn = nullptr;
     Button *mEditDefCfgBtn = nullptr;
     Button *mViewLogsBtn = nullptr;
@@ -184,19 +208,28 @@ class RegisterUnregisterWindow : public Window {
     const wchar_t *InitialTitle() override { return L"Register Apps"; }
     SIZE InitialSize() override { return SIZE{500, 400}; }
 
-    void UpdateList() {
+    void UpdateList(const wchar_t *initialSel = nullptr) {
         mRegisteredExes = GetRegisteredExes();
 
         mRegList->Clear();
 
-        for (const auto &regExe : mRegisteredExes) {
+        vector<int> selection;
+        for (int i = 0; i < (int)mRegisteredExes.size(); i++) {
+            auto &regExe = mRegisteredExes[i];
             if (regExe.Exact) {
                 mRegList->Add(regExe.Name);
             } else {
                 mHasInexact = true;
                 mRegList->Add((wstring(regExe.Name) + L" (*)").c_str());
             }
+
+            if (initialSel && wcseq(regExe.Name, initialSel)) {
+                selection.push_back(i);
+            }
         }
+
+        mRegList->SetSelected(selection);
+        mRegLbl->Show(mHasInexact);
     }
 
     void OnCreate() override {
@@ -214,79 +247,111 @@ class RegisterUnregisterWindow : public Window {
             mUnregBtn->Enable(anySelected);
             mReregBtn->Enable(anySelected && !anyExact);
 
-            bool oneSelected = indices.size() == 1;
+            RegisteredExe *oneSelected = indices.size() == 1 ? &mRegisteredExes[indices.front()] : nullptr;
             mEditCfgBtn->Enable(oneSelected);
             mViewLogsBtn->Enable(oneSelected);
-        });
-        UpdateList();
+            mCustomCfgChk->Enable(oneSelected);
 
-        (mRegLbl = Add<Label>(L"(*) - Registered to another instance"))->Show(mHasInexact);
+            bool hasConfig = oneSelected && oneSelected->Config;
+            mCustomCfgChk->Set(hasConfig);
+            mCustomCfgEdit->Enable(hasConfig);
+            mCustomCfgEdit->Set(hasConfig ? oneSelected->Config.Get() : oneSelected ? PathGetBaseNameWithoutExt(oneSelected->Name).Get()
+                                                                                    : L"");
+
+            mCustomCfgBtn->Enable(false);
+        });
+
+        mRegLbl = Add<Label>(L"(*) - Registered to another instance");
 
         mRegBtn = Add<Button>(L"Register New", [this]() {
             Path selected = SelectFileForOpen(L"Executables\0*.EXE\0", L"Choose Executable", false);
             if (selected) {
                 Path exeName = PathGetBaseName(selected);
-                Path regValue;
-                if (IsRegisteredExe(exeName, &regValue)) {
+                Path regValue, regConfig;
+                if (GetRegisteredExe(exeName, &regValue, &regConfig)) {
                     Alert(L"%ws is already registered.", exeName.Get());
                 } else if (!regValue || Question(L"%ws is registered to %ws\nRe-register it?", exeName.Get(), regValue.Get())) {
-                    RegisterExe(exeName);
+                    RegisterExe(exeName, regConfig);
                 }
 
-                UpdateList();
+                UpdateList(exeName);
             }
         });
 
-        (mUnregBtn = Add<Button>(L"Unregister", [this]() {
-             auto indices = mRegList->GetSelected();
-             for (int idx : indices) {
-                 UnregisterExe(mRegisteredExes[idx].Name);
-             }
+        mUnregBtn = Add<Button>(L"Unregister", [this]() {
+            auto indices = mRegList->GetSelected();
+            for (int idx : indices) {
+                UnregisterExe(mRegisteredExes[idx].Name);
+            }
 
-             UpdateList();
-         }))->Disable();
+            UpdateList();
+        });
 
-        (mReregBtn = Add<Button>(L"Reregister", [this]() {
-             auto indices = mRegList->GetSelected();
-             for (int idx : indices) {
-                 RegisterExe(mRegisteredExes[idx].Name);
-             }
+        mReregBtn = Add<Button>(L"Reregister", [this]() {
+            auto indices = mRegList->GetSelected();
+            for (int idx : indices) {
+                RegisterExe(mRegisteredExes[idx].Name, mRegisteredExes[idx].Config);
+            }
 
-             UpdateList();
-         }))->Disable();
+            UpdateList();
+        });
 
-        (mEditCfgBtn = Add<Button>(L"Edit Config", [this]() {
-             auto indices = mRegList->GetSelected();
-             if (!indices.empty()) {
-                 const Path &name = mRegisteredExes[indices.front()].Name;
-                 Path config = GetPath(L"Configs", name, L"ini");
-                 if (GetFileAttributesW(config) == INVALID_FILE_ATTRIBUTES) {
-                     if (!Question(L"%ws currently uses the global config file - change it to use its own config file?", name.Get())) {
-                         return;
-                     }
+        mCustomCfgChk = Add<CheckBox>(L"Use Config", [this](bool value) {
+            mCustomCfgEdit->Enable(value);
+            mCustomCfgBtn->Enable(true);
+        });
 
-                     CopyFileW(GetDefaultConfigPath(), config, false);
-                 }
-                 OpenEditor(config);
-             }
-         }))->Disable();
+        mCustomCfgEdit = Add<EditLine>([this]() {
+            mCustomCfgBtn->Enable(true);
+        });
+
+        mCustomCfgBtn = Add<Button>(L"Apply", [this]() {
+            auto indices = mRegList->GetSelected();
+            if (!indices.empty()) {
+                int idx = indices.front();
+                mRegisteredExes[idx].Config = mCustomCfgChk->Get() ? mCustomCfgEdit->Get() : Path();
+                RegisterExe(mRegisteredExes[idx].Name, mRegisteredExes[idx].Config);
+                mCustomCfgBtn->Enable(false);
+            }
+        });
+
+        mEditCfgBtn = Add<Button>(L"Edit Config", [this]() {
+            auto indices = mRegList->GetSelected();
+            if (!indices.empty()) {
+                auto idx = indices.front();
+                const Path &name = mRegisteredExes[idx].Name;
+                const Path &config = mRegisteredExes[idx].Config;
+
+                Path configPath = GetPath(L"Configs", config ? config : name, L"ini");
+                if (GetFileAttributesW(configPath) == INVALID_FILE_ATTRIBUTES) {
+                    if (!config && !Question(L"%ws currently uses the global config file - change it to use its own config file?", name.Get())) {
+                        return;
+                    }
+
+                    CopyFileW(GetDefaultConfigPath(), configPath, false);
+                }
+                OpenEditor(configPath);
+            }
+        });
 
         mEditDefCfgBtn = Add<Button>(L"Edit Global Config", [this]() {
             OpenEditor(GetDefaultConfigPath());
         });
 
-        (mViewLogsBtn = Add<Button>(L"View Logs", [this]() {
-             auto indices = mRegList->GetSelected();
-             if (!indices.empty()) {
-                 const Path &name = mRegisteredExes[indices.front()].Name;
-                 Path log = GetPath(L"Logs", name, L"log");
-                 if (GetFileAttributesW(log) == INVALID_FILE_ATTRIBUTES) {
-                     Alert(L"%ws doesn't have any logs - wasn't run?", name.Get());
-                 } else {
-                     OpenEditor(log);
-                 }
-             }
-         }))->Disable();
+        mViewLogsBtn = Add<Button>(L"View Logs", [this]() {
+            auto indices = mRegList->GetSelected();
+            if (!indices.empty()) {
+                const Path &name = mRegisteredExes[indices.front()].Name;
+                Path log = GetPath(L"Logs", name, L"log");
+                if (GetFileAttributesW(log) == INVALID_FILE_ATTRIBUTES) {
+                    Alert(L"%ws doesn't have any logs - wasn't run?", name.Get());
+                } else {
+                    OpenEditor(log);
+                }
+            }
+        });
+
+        UpdateList();
     }
 
     void OnResize(SIZE size) override {
@@ -298,6 +363,12 @@ class RegisterUnregisterWindow : public Window {
         cfgLayout.OnLeft(mEditCfgBtn, buttonWidth);
         cfgLayout.OnLeft(mViewLogsBtn, buttonWidth);
         cfgLayout.OnRight(mEditDefCfgBtn, buttonWidth);
+
+        Layout custCfgLayout = layout.SubLayout();
+        layout.OnBottom(&custCfgLayout, 25);
+        custCfgLayout.OnLeft(mCustomCfgChk, 75);
+        custCfgLayout.OnLeft(mCustomCfgEdit, 150);
+        custCfgLayout.OnLeft(mCustomCfgBtn, buttonWidth);
 
         Layout regLayout = layout.SubLayout();
         layout.OnBottom(&regLayout, 25);
@@ -318,18 +389,31 @@ void WindowRegisterUnregister() {
 }
 
 void CmdLineRegisterUnregister(int numArgs, LPWSTR *args) {
-    Path exeName = PathGetBaseName(args[1]);
+    bool reg = false, unreg = false;
+    Path exeName, config;
 
-    bool reg = false;
-    bool unreg = false;
-    if (numArgs > 2) {
-        reg = wcscmp(args[2], L"-r");
-        unreg = wcscmp(args[2], L"-u");
+    for (int argI = 1; argI < numArgs; argI++) {
+        if (wcseq(args[argI], L"-r")) {
+            reg = true;
+        } else if (wcseq(args[argI], L"-u")) {
+            unreg = true;
+        } else if (wcseq(args[argI], L"-c") && argI + 1 < numArgs) {
+            config = args[++argI];
+        } else if (!exeName && args[argI][0] != L'-') {
+            exeName = PathGetBaseName(args[argI]);
+        } else {
+            Alert(L"Unrecognized option: %ws", args[argI]);
+        }
+    }
+
+    if (!exeName) {
+        Alert(L"No executable supplied with arguments");
+        return;
     }
 
     if (!reg && !unreg) {
         Path regValue;
-        if (IsRegisteredExe(exeName, &regValue)) {
+        if (GetRegisteredExe(exeName, &regValue, &config)) {
             unreg = Question(L"%ws is already registered\nUnregister it?", exeName.Get());
         } else if (regValue) {
             reg = Question(L"%ws is registered to %ws\nRe-register it?", exeName.Get(), regValue.Get());
@@ -340,7 +424,7 @@ void CmdLineRegisterUnregister(int numArgs, LPWSTR *args) {
 
     int code = 2;
     if (reg) {
-        code = RegisterExe(exeName) ? 0 : 1;
+        code = RegisterExe(exeName, config) ? 0 : 1;
     } else if (unreg) {
         code = UnregisterExe(exeName) ? 0 : 1;
     }
@@ -355,8 +439,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         return 1;
     }
 
-    Path injectPath = PathCombine(PathGetDirName(PathGetModulePath(nullptr)), MYINPUT_INJECT_EXE);
-    gInjectCmdLine = L"\"" + wstring(injectPath) + L"\" -r";
+    gInjectExePath = PathCombine(PathGetDirName(PathGetModulePath(nullptr)), MYINPUT_INJECT_EXE);
 
     LPWSTR cmdLine = GetCommandLineW();
 

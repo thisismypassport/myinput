@@ -23,7 +23,7 @@ struct ImplTriggerState : public ImplButtonState {
     double Value = 0; // 0 .. 1
     double Threshold = 0.12;
 
-    uint8_t Value8() const { return (uint8_t)round(Value * 0xff); }
+    uint8_t Value8() const { return (uint8_t)nearbyint(Value * 0xff); }
 };
 
 struct ImplAxisState {
@@ -33,8 +33,8 @@ struct ImplAxisState {
     double RotateModifier = 1;
     bool RotateFakePressed = false;
 
-    int8_t Value8() const { return (int8_t)round(Value * 0x7f); }
-    int16_t Value16() const { return (int16_t)round(Value * 0x7fff); }
+    int8_t Value8() const { return (int8_t)nearbyint(Value * 0x7f); }
+    int16_t Value16() const { return (int16_t)nearbyint(Value * 0x7fff); }
 };
 
 struct ImplAxesState {
@@ -62,11 +62,37 @@ struct ImplMotionDimState {
 
 static constexpr double DegreesToRadians = std::numbers::pi / 180;
 
+struct Vector3 {
+    double X, Y, Z;
+};
+
 struct ImplMotionState {
     ImplMotionDimState X, Y, Z;    // value is metres
     ImplMotionDimState RX, RY, RZ; // value is radians
     UserTimer Timer;
     DWORD PrevTime = 0;
+
+    Vector3 XAxis() {
+        auto [sy, cy] = SinCos(RY.NewValue);
+        auto [sz, cz] = SinCos(RZ.NewValue);
+        return {cz * cy, sz * cy, -sy};
+    }
+
+    Vector3 YAxis() {
+        auto [sx, cx] = SinCos(RX.NewValue);
+        auto [sy, cy] = SinCos(RY.NewValue);
+        auto [sz, cz] = SinCos(RZ.NewValue);
+        auto sxy = sx * sy;
+        return {sxy * cz - cx * sz, sxy * sz + cx * cz, sx * cy};
+    }
+
+    Vector3 ZAxis() {
+        auto [sx, cx] = SinCos(RX.NewValue);
+        auto [sy, cy] = SinCos(RY.NewValue);
+        auto [sz, cz] = SinCos(RZ.NewValue);
+        auto cxsy = cx * sy;
+        return {cxsy * cz + sx * sz, cxsy * sz - sx * cz, cx * cy};
+    }
 
     static constexpr double PosScale = 0.01; // cm -> metres
     static constexpr double RotScale = DegreesToRadians;
@@ -75,12 +101,17 @@ struct ImplMotionState {
     ImplMotionState() { Y.FinalAccel = -1; } // gravity
 };
 
+struct ImplFeedbackState {
+    double LowRumble = 0, HighRumble = 0;
+};
+
 struct ImplState {
     mutable mutex Mutex;
     ImplButtonState A, B, X, Y, LB, RB, L, R, DL, DR, DU, DD, Start, Back, Guide, Extra;
     ImplTriggerState LT, RT;
     ImplAxesState LA, RA;
     ImplMotionState Motion;
+    ImplFeedbackState Feedback;
     DWORD Time = 0;
     int Version = 0;
 };
@@ -99,6 +130,7 @@ using ImplUserCb = decltype(ImplUser::Callbacks)::CbIter;
 
 struct ImplCond {
     int Key = 0;
+    int User = 0;
     bool State = false;
     bool Toggle = false;
     SharedPtr<ImplCond> Child;
@@ -110,7 +142,8 @@ struct ImplMapping {
     int DestKey = 0;
     MyVkType SrcType = {};
     MyVkType DestType = {};
-    int8_t User = 0; // -1 to use active
+    int SrcUser = 0;
+    int DestUser = 0; // -1 to use active
 
     bool Forward : 1 = false;
     bool Turbo : 1 = false;
@@ -119,8 +152,8 @@ struct ImplMapping {
     bool PassedCond : 1 = false;
     bool TurboValue : 1 = false;
     bool ToggleValue : 1 = false;
-    bool Replace : 1 = false;    // r/w only
-    bool Persistent : 1 = false; // r/w only
+    bool Replace : 1 = false; // r/w only
+    bool Reset : 1 = false;   // r/w only
 
     double Rate = 0;
     double Strength = 0;
@@ -211,18 +244,26 @@ struct ImplMouse : public ImplDeviceBase {
     }
 };
 
-struct ImplDelayedHooks {
-    Path WaitDll;
-    vector<Path> Hooks;
-    WeakAtomic<bool> Loaded = false;
+struct InputValue {
+    bool Down;
+    DWORD Time;
+    double Strength;
+
+    InputValue(bool down, double strength, DWORD time) : Down(down), Strength(strength), Time(time) {}
+};
+
+struct ImplCustomKey {
+    ImplInput Key;
+    function<void(const InputValue &)> Callback;
 };
 
 struct ImplG {
     ImplUser Users[IMPL_MAX_USERS];
     ImplKeyboard Keyboard; // also includes mouse buttons, though...
     ImplMouse Mouse;
-    int8_t ActiveUser = 0;
-    int8_t DefaultActiveUser = 0;
+    vector<UniquePtr<ImplCustomKey>> CustomKeys;
+    int ActiveUser = 0;
+    int DefaultActiveUser = 0;
     bool InForeground = false;
 
     bool Trace = false;
@@ -240,10 +281,27 @@ struct ImplG {
     HINSTANCE HInstance = nullptr;
     DWORD DllThread = 0;
     HWND DllWindow = nullptr;
-    vector<Path> ExtraHooks;
-    vector<ImplDelayedHooks> ExtraDelayedHooks;
 
     CallbackList<void(ImplUser *, bool)> GlobalCallbacks;
+
+    void Reset() {
+        G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = false;
+        G.Forward = G.Always = G.Disable = G.HideCursor = false;
+        G.InjectChildren = G.RumbleWindow = false;
+        G.Keyboard.IsMapped = G.Mouse.IsMapped = false;
+
+        for (int i = 0; i < IMPL_MAX_USERS; i++) {
+            G.Users[i].Connected = G.Users[i].DeviceSpecified = false;
+        }
+
+        G.Keyboard.Reset();
+        G.Mouse.Reset();
+        G.ActiveUser = 0;
+
+        for (auto &custom : CustomKeys) {
+            custom->Key.Reset();
+        }
+    }
 } G;
 
 using ImplGlobalCb = decltype(ImplG::GlobalCallbacks)::CbIter;
@@ -261,11 +319,12 @@ static DeviceIntf *ImplGetDevice(DWORD user) {
     return data ? data->Device : nullptr;
 }
 
-static int ImplGetUsers(UINT *outMask, int minUser = 0) {
+template <class TCond>
+static int ImplGetUsers(UINT *outMask, TCond &&cond, int minUser = 0) {
     UINT mask = 0;
     int count = 0;
     for (int i = minUser; i < IMPL_MAX_USERS; i++) {
-        if (G.Users[i].Connected) {
+        if (G.Users[i].Connected && cond(G.Users[i].Device)) {
             mask |= (1 << i);
             count++;
         }
@@ -275,6 +334,11 @@ static int ImplGetUsers(UINT *outMask, int minUser = 0) {
     return count;
 }
 
+static int ImplGetUsers(UINT *outMask, int minUser = 0) {
+    return ImplGetUsers(
+        outMask, [](DeviceIntf *device) { return true; }, minUser);
+}
+
 static int ImplNextUser(UINT *refMask) {
     DWORD userIdx = 0;
     BitScanForward(&userIdx, *refMask);
@@ -282,7 +346,7 @@ static int ImplNextUser(UINT *refMask) {
     return userIdx;
 }
 
-ImplInput *ImplGetInput(int key) {
+ImplInput *ImplGetInput(int key, int userIndex) {
     ImplInput *input = G.Keyboard.Get(key);
     if (input) {
         return input;
@@ -305,6 +369,12 @@ ImplInput *ImplGetInput(int key) {
         return &G.Mouse.Motion.Horz.Forward;
     case MY_VK_MOUSE_LEFT:
         return &G.Mouse.Motion.Horz.Backward;
+
+    case MY_VK_CUSTOM:
+        if ((size_t)userIndex < G.CustomKeys.size()) {
+            return &G.CustomKeys[userIndex]->Key;
+        }
+        break;
     }
     return nullptr;
 }
@@ -316,13 +386,8 @@ int ImplChooseBestKeyInPair(int key) {
     return (!scan1 && scan2) ? key2 : key1;
 }
 
-struct InputValue {
-    bool Down;
-    DWORD Time;
-    double Strength;
-
-    InputValue(bool down, double strength, DWORD time) : Down(down), Strength(strength), Time(time) {}
-};
+#define CUSTOM_ASSERT_DLL_THREAD(assert) \
+    assert(GetCurrentThreadId() == G.DllThread, "wrong thread in call")
 
 #define DBG_ASSERT_DLL_THREAD() \
-    DBG_ASSERT(GetCurrentThreadId() == G.DllThread, "wrong thread in call")
+    CUSTOM_ASSERT_DLL_THREAD(DBG_ASSERT)

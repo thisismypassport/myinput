@@ -99,6 +99,12 @@
       <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X86</AdditionalLibraryDirectories>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ForceFileOutput>
+      </ForceFileOutput>
+      <IgnoreAllDefaultLibraries>
+      </IgnoreAllDefaultLibraries>
+      <IgnoreSpecificDefaultLibraries>
+      </IgnoreSpecificDefaultLibraries>
     </Link>
     <PostBuildEvent>
       <Command>
@@ -119,6 +125,12 @@
       <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X64</AdditionalLibraryDirectories>
       <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
+      <ForceFileOutput>
+      </ForceFileOutput>
+      <IgnoreAllDefaultLibraries>
+      </IgnoreAllDefaultLibraries>
+      <IgnoreSpecificDefaultLibraries>
+      </IgnoreSpecificDefaultLibraries>
     </Link>
     <PostBuildEvent>
       <Command>
@@ -144,6 +156,12 @@
       <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X86</AdditionalLibraryDirectories>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ForceFileOutput>
+      </ForceFileOutput>
+      <IgnoreAllDefaultLibraries>
+      </IgnoreAllDefaultLibraries>
+      <IgnoreSpecificDefaultLibraries>
+      </IgnoreSpecificDefaultLibraries>
     </Link>
     <PostBuildEvent>
       <Command>
@@ -169,6 +187,12 @@
       <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X64</AdditionalLibraryDirectories>
       <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
+      <ForceFileOutput>
+      </ForceFileOutput>
+      <IgnoreAllDefaultLibraries>
+      </IgnoreAllDefaultLibraries>
+      <IgnoreSpecificDefaultLibraries>
+      </IgnoreSpecificDefaultLibraries>
     </Link>
     <PostBuildEvent>
       <Command>
@@ -189,7 +213,9 @@
     <ClInclude Include="CfgMgr.h" />
     <ClInclude Include="ImplKeyMouse.h" />
     <ClInclude Include="ImplPad.h" />
+    <ClInclude Include="LogUtils.h" />
     <ClInclude Include="MiscApi.h" />
+    <ClInclude Include="MyInputHook.h" />
     <ClInclude Include="NotifyApi.h" />
     <ClInclude Include="RawRegister.h" />
     <ClInclude Include="Thunk.h" />
@@ -203,7 +229,8 @@
     <ClInclude Include="UtilsUi.h" />
     <ClInclude Include="UtilsUiBase.h" />
     <ClInclude Include="Keys.h" />
-    <ClInclude Include="WinFeatures.h" />
+    <ClInclude Include="ImplFeedback.h" />
+    <ClInclude Include="WinCursor.h" />
     <ClInclude Include="WinHooks.h" />
     <ClInclude Include="WinInput.h" />
     <ClInclude Include="WinUtils.h" />

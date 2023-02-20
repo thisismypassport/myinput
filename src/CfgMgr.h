@@ -158,7 +158,7 @@ static bool DeviceIDListFilterMatches(PCWSTR pszFilter, ULONG ulFlags) {
         return true;
     }
 
-    if (ulFlags == CM_GETIDLIST_FILTER_ENUMERATOR && pszFilter && wcscmp(pszFilter, L"ROOT") == 0) {
+    if (ulFlags == CM_GETIDLIST_FILTER_ENUMERATOR && pszFilter && wcseq(pszFilter, L"ROOT")) {
         return true;
     }
 
@@ -212,7 +212,7 @@ CONFIGRET WINAPI CM_Get_Device_ID_ListW_Hook(PCWSTR pszFilter, PZZWSTR buffer, U
 static DEVINST LocateCustomDevNode(DEVINSTID_W pDeviceID) {
     for (int i = 0; i < XUSER_MAX_COUNT; i++) {
         DeviceIntf *device = ImplGetDevice(i);
-        if (device && wcscmp(pDeviceID, device->DeviceInstName) == 0) {
+        if (device && wcseq(pDeviceID, device->DeviceInstName)) {
             if (G.ApiDebug) {
                 LOG << "CM_Locate_DevNodeW " << pDeviceID << END;
             }
@@ -469,7 +469,8 @@ struct FilterResult {
 
     bool Matches(DeviceIntf *device, int xusb = -1) const {
         return (User < 0 || User == device->UserIdx) &&
-               !(XUsb == (int)true && !device->IsXInput) &&
+               !(XUsb == (int)true && !device->IsXUsb) &&
+               !(XUsb == (int)false && !device->IsHid) &&
                (xusb < 0 || XUsb < 0 || XUsb == xusb);
     }
 };
@@ -489,7 +490,7 @@ static bool DeviceInterfaceListFilterMatches(LPGUID clsGuid, DEVINSTID_W pDevice
     if (pDeviceID && *pDeviceID) {
         for (int i = 0; i < XUSER_MAX_COUNT; i++) {
             DeviceIntf *device = ImplGetDevice(i);
-            if (device && wcscmp(pDeviceID, device->DeviceInstName) == 0 &&
+            if (device && wcseq(pDeviceID, device->DeviceInstName) &&
                 filter.Matches(device)) {
                 filter.User = i;
                 *outFilter = filter;
@@ -516,10 +517,10 @@ CONFIGRET WINAPI CM_Get_Device_Interface_List_SizeW_Hook(PULONG pulLen, LPGUID c
         for (int i = 0; i < XUSER_MAX_COUNT; i++) {
             DeviceIntf *device = ImplGetDevice(i);
             if (device) {
-                if (filter.Matches(device, false)) {
+                if (device->IsHid && filter.Matches(device, false)) {
                     *pulLen += (ULONG)wcslen(device->DevicePathW) + 1;
                 }
-                if (device->IsXInput && filter.Matches(device, true)) {
+                if (device->IsXUsb && filter.Matches(device, true)) {
                     *pulLen += (ULONG)wcslen(device->XDevicePathW) + 1;
                 }
             }
@@ -548,10 +549,10 @@ CONFIGRET WINAPI CM_Get_Device_Interface_ListW_Hook(LPGUID clsGuid, DEVINSTID_W 
         for (int i = 0; i < XUSER_MAX_COUNT; i++) {
             DeviceIntf *device = ImplGetDevice(i);
             if (device) {
-                if (ok && filter.Matches(device, false)) {
+                if (ok && device->IsHid && filter.Matches(device, false)) {
                     ok = ZZWStrAppend(buffer, bufferLen, device->DevicePathW);
                 }
-                if (ok && device->IsXInput && filter.Matches(device, true)) {
+                if (ok && device->IsXUsb && filter.Matches(device, true)) {
                     ok = ZZWStrAppend(buffer, bufferLen, device->XDevicePathW);
                 }
             }
@@ -576,8 +577,8 @@ CONFIGRET WINAPI CM_Get_Device_Interface_Property_KeysW_Hook(LPCWSTR pszIntf, DE
         for (int i = 0; i < XUSER_MAX_COUNT; i++) {
             DeviceIntf *device = ImplGetDevice(i);
             if (device &&
-                (wcscmp(pszIntf, device->DevicePathW) == 0 ||
-                 (device->IsXInput && wcscmp(pszIntf, device->XDevicePathW) == 0))) {
+                ((device->IsHid && wcseq(pszIntf, device->DevicePathW)) ||
+                 (device->IsXUsb && wcseq(pszIntf, device->XDevicePathW)))) {
                 ret = CMGetPropertyKeys(propKeys, propKeyCount, {
                                                                     DEVPKEY_DeviceInterface_ClassGuid,
                                                                     DEVPKEY_DeviceInterface_Enabled,
@@ -611,8 +612,8 @@ CONFIGRET WINAPI CM_Get_Device_Interface_PropertyW_Hook(LPCWSTR pszIntf, const D
             DeviceIntf *device = ImplGetDevice(i);
             bool isXUsb = false;
             if (device &&
-                (wcscmp(pszIntf, device->DevicePathW) == 0 ||
-                 (isXUsb = (device->IsXInput && wcscmp(pszIntf, device->XDevicePathW) == 0)))) {
+                ((device->IsHid && wcseq(pszIntf, device->DevicePathW)) ||
+                 (isXUsb = (device->IsXUsb && wcseq(pszIntf, device->XDevicePathW))))) {
                 if (*propKey == DEVPKEY_DeviceInterface_ClassGuid) {
                     ret = CMGetPropertyValue(propType, propBuf, propSize, isXUsb ? GUID_DEVINTERFACE_XUSB : GUID_DEVINTERFACE_HID);
                 } else if (*propKey == DEVPKEY_DeviceInterface_Enabled) {
@@ -654,17 +655,19 @@ CONFIGRET WINAPI CM_Register_Notification_Hook(PCM_NOTIFY_FILTER pFilter, PVOID 
                 if (ret == CR_SUCCESS) {
                     HCMNOTIFICATION notify = *pNotifyContext;
                     GThreadPoolNotifications.Register(notify, [pContext, pCallback, notify](ImplUser *user, bool added) {
-                        CM_NOTIFY_ACTION action = added ? CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL : CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL;
+                        if (user->Device->IsHid) {
+                            CM_NOTIFY_ACTION action = added ? CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL : CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL;
 
-                        size_t size = sizeof(CM_NOTIFY_EVENT_DATA) + wcslen(user->Device->DevicePathW) * sizeof(wchar_t);
-                        CM_NOTIFY_EVENT_DATA *event = (CM_NOTIFY_EVENT_DATA *)new byte[size];
-                        ZeroMemory(event, sizeof(*event));
-                        event->FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
-                        event->u.DeviceInterface.ClassGuid = GUID_DEVINTERFACE_HID;
-                        wcscpy(event->u.DeviceInterface.SymbolicLink, user->Device->DevicePathW);
+                            size_t size = sizeof(CM_NOTIFY_EVENT_DATA) + wcslen(user->Device->DevicePathW) * sizeof(wchar_t);
+                            CM_NOTIFY_EVENT_DATA *event = (CM_NOTIFY_EVENT_DATA *)new byte[size];
+                            ZeroMemory(event, sizeof(*event));
+                            event->FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
+                            event->u.DeviceInterface.ClassGuid = GUID_DEVINTERFACE_HID;
+                            wcscpy(event->u.DeviceInterface.SymbolicLink, user->Device->DevicePathW);
 
-                        pCallback(notify, pContext, action, event, (int)size);
-                        delete[] event;
+                            pCallback(notify, pContext, action, event, (int)size);
+                            delete[] event;
+                        }
                     });
                 }
                 return ret;

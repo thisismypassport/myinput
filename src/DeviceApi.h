@@ -13,16 +13,16 @@ class ImplProcessPipeThread {
     Path FinalName;
     HANDLE Pipe;
     HANDLE ReadEvent, WriteEvent, SendEvent, CancelEvent;
-    deque<Buffer> Reports;
-    mutex ReportsMutex;
     BufferList *ReportBuffers;
     BufferList *OutputBuffers;
     ImplUserCb CbIter;
 
+    // protected by mutex
+    mutex LocalMutex;
+    deque<Buffer> Reports;
     WeakAtomic<ULONG> MaxBuffers = 0x20;
     WeakAtomic<ULONG> PollFreq = 0x10;
     WeakAtomic<bool> Immediate = false;
-    WeakAtomic<ULONG> EffectiveMaxBuffers;
 
     ImplUser *User() { return &G.Users[Device->UserIdx]; }
 
@@ -32,9 +32,8 @@ class ImplProcessPipeThread {
         return buffer;
     }
 
-    void SendReport(Buffer &&buffer) {
-        lock_guard<mutex> local_lock(ReportsMutex);
-        if (Reports.size() >= EffectiveMaxBuffers) {
+    void SendReport(lock_guard<mutex> &local_lock, Buffer &&buffer) {
+        if (Reports.size() >= MaxBuffers) {
             Reports.pop_front();
         }
         Reports.push_back(move(buffer));
@@ -44,13 +43,13 @@ class ImplProcessPipeThread {
     }
 
     bool GetNextReport(Buffer *report) {
+        lock_guard<mutex> local_lock(LocalMutex);
         if (Immediate) {
             // latest report
             *report = CreateReport();
             return true;
         }
 
-        lock_guard<mutex> local_lock(ReportsMutex);
         if (Reports.empty()) {
             return false;
         }
@@ -166,11 +165,10 @@ class ImplProcessPipeThread {
 
     void OnEnded();
 
-    void UpdateMaxBuffers() {
-        EffectiveMaxBuffers = Immediate ? 0 : MaxBuffers.get();
+    void RemoveExcess(lock_guard<mutex> &local_lock) {
+        DWORD effectiveMaxBuffers = Immediate ? 0 : MaxBuffers.get();
 
-        lock_guard<mutex> local_lock(ReportsMutex);
-        while (Reports.size() > EffectiveMaxBuffers) {
+        while (Reports.size() > effectiveMaxBuffers) {
             Reports.pop_front();
         }
     }
@@ -181,7 +179,6 @@ public:
         WriteEvent = CreateEventW(nullptr, false, false, nullptr);
         SendEvent = CreateEventW(nullptr, false, false, nullptr);
         CancelEvent = CreateEventW(nullptr, false, false, nullptr);
-        UpdateMaxBuffers();
     }
 
     ~ImplProcessPipeThread() {
@@ -196,32 +193,38 @@ public:
     }
 
     bool Matches(const wchar_t *path) {
-        return wcscmp(path, FinalName) == 0;
+        return wcseq(path, FinalName);
     }
 
     ULONG GetPollFreq() { return PollFreq; }
     ULONG GetMaxBuffers() { return MaxBuffers; }
 
     void SetPollFreq(ULONG value) {
+        lock_guard<mutex> local_lock(LocalMutex);
         PollFreq = Clamp<ULONG>(value, 0, 10000);
 
         bool immediate = value == 0;
         bool oldImmediate = Immediate.exchange(immediate);
-        UpdateMaxBuffers();
+        RemoveExcess(local_lock);
         if (immediate && !oldImmediate) {
             SetEvent(SendEvent);
         }
     }
 
     void SetMaxBuffers(ULONG value) {
+        lock_guard<mutex> local_lock(LocalMutex);
         MaxBuffers = Clamp<ULONG>(value, 2, 0x200);
-        UpdateMaxBuffers();
+        RemoveExcess(local_lock);
+    }
+
+    void FlushReports(lock_guard<mutex> &local_lock) {
+        Reports.clear();
+        SetEvent(CancelEvent);
     }
 
     void FlushReports() {
-        lock_guard<mutex> local_lock(ReportsMutex);
-        Reports.clear();
-        SetEvent(CancelEvent);
+        lock_guard<mutex> local_lock(LocalMutex);
+        FlushReports(local_lock);
     }
 
     void Stop() {
@@ -235,10 +238,11 @@ public:
         OutputBuffers = GBufferLists.Get(Device->Preparsed->Output.Bytes);
 
         CbIter = User()->Callbacks.Add([this](ImplUser *user) {
+            lock_guard<mutex> local_lock(LocalMutex);
             if (Immediate) {
-                FlushReports();
+                FlushReports(local_lock);
             } else {
-                SendReport(CreateReport());
+                SendReport(local_lock, CreateReport());
             }
         });
         GInfiniteThreadPool.CreateThread(ImplProcessPipeThread::ProcessThread, this);
@@ -325,7 +329,7 @@ DeviceIntf *GetDeviceByHandle(HANDLE handle, Path *outPath = nullptr) {
         if (finalPath) {
             for (int i = 0; i < IMPL_MAX_USERS; i++) {
                 DeviceIntf *device = ImplGetDevice(i);
-                if (device && wcsncmp(finalPath, device->FinalPipePrefix, device->FinalPipePrefixLen) == 0) {
+                if (device && wcsneq(finalPath, device->FinalPipePrefix, device->FinalPipePrefixLen)) {
                     if (outPath) {
                         *outPath = move(finalPath);
                     }
@@ -340,15 +344,15 @@ DeviceIntf *GetDeviceByHandle(HANDLE handle, Path *outPath = nullptr) {
 
 HANDLE WINAPI CreateFileA_Hook(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
                                DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
-    if (lpFileName && _strnicmp(lpFileName, DEVICE_NAME_PREFIX, DEVICE_NAME_PREFIX_LEN) == 0) {
+    if (lpFileName && strnieq(lpFileName, DEVICE_NAME_PREFIX, DEVICE_NAME_PREFIX_LEN)) {
         for (int i = 0; i < IMPL_MAX_USERS; i++) {
             DeviceIntf *device = ImplGetDevice(i);
-            if (device && _stricmp(lpFileName, device->DevicePathA) == 0) {
+            if (device && device->IsHid && strieq(lpFileName, device->DevicePathA)) {
                 if (G.ApiDebug) {
                     LOG << "CreateFileA (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
                 }
                 return GPipeThreads.CreatePipeHandle(device, dwFlagsAndAttributes);
-            } else if (device && device->IsXInput && _stricmp(lpFileName, device->XDevicePathA) == 0) {
+            } else if (device && device->IsXUsb && strieq(lpFileName, device->XDevicePathA)) {
                 if (G.ApiDebug) {
                     LOG << "CreateFileA (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
                 }
@@ -362,15 +366,15 @@ HANDLE WINAPI CreateFileA_Hook(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD d
 
 HANDLE WINAPI CreateFileW_Hook(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
                                DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
-    if (lpFileName && _wcsnicmp(lpFileName, DEVICE_NAME_PREFIX_W, DEVICE_NAME_PREFIX_LEN) == 0) {
+    if (lpFileName && wcsnieq(lpFileName, DEVICE_NAME_PREFIX_W, DEVICE_NAME_PREFIX_LEN)) {
         for (int i = 0; i < IMPL_MAX_USERS; i++) {
             DeviceIntf *device = ImplGetDevice(i);
-            if (device && _wcsicmp(lpFileName, device->DevicePathW) == 0) {
+            if (device && device->IsHid && wcsieq(lpFileName, device->DevicePathW)) {
                 if (G.ApiDebug) {
                     LOG << "CreateFileW (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
                 }
                 return GPipeThreads.CreatePipeHandle(device, dwFlagsAndAttributes);
-            } else if (device && device->IsXInput && _wcsicmp(lpFileName, device->XDevicePathW) == 0) {
+            } else if (device && device->IsXUsb && wcsieq(lpFileName, device->XDevicePathW)) {
                 if (G.ApiDebug) {
                     LOG << "CreateFileW (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
                 }

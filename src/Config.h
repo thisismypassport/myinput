@@ -8,6 +8,9 @@ struct ConfigState {
     unordered_set<wstring_view> LoadedFilesSet;
     Path MainFile;
     Path Directory;
+
+    unordered_map<string, int> CustomKeys;
+    unordered_map<string, function<void(const string &)>> CustomVars;
 } GConfig;
 
 bool ConfigLoadFrom(const wchar_t *filename);
@@ -34,7 +37,7 @@ string ConfigReadToken(const string &str, intptr_t *startPtr) {
     return str.substr(start, end - start);
 }
 
-int ConfigReadKey(const string &str, bool output = false) {
+int ConfigReadKey(const string &str, int *outUser, bool output = false) {
 #define CONFIG_ON_KEY(vk, name, ...) \
     if (strLow == name)              \
         return vk;                   \
@@ -55,6 +58,12 @@ int ConfigReadKey(const string &str, bool output = false) {
 
     if (output) {
         ENUMERATE_CMD_VKS(CONFIG_ON_KEY);
+    }
+
+    auto customKeyIter = GConfig.CustomKeys.find(strLow);
+    if (customKeyIter != GConfig.CustomKeys.end()) {
+        *outUser = customKeyIter->second;
+        return MY_VK_CUSTOM;
     }
 
     LOG << "ERROR: Invalid key: " << str << END;
@@ -151,7 +160,7 @@ SharedPtr<ImplCond> ConfigReadCond(const string &line, intptr_t *idxPtr) {
 
         cond->Key = condType ? condType : MY_VK_META_COND_AND;
     } else {
-        cond->Key = ConfigReadKey(condStr);
+        cond->Key = ConfigReadKey(condStr, &cond->User);
 
         if (GetKeyType(cond->Key).Pair) {
             auto cond1 = SharedPtr<ImplCond>::New(*cond);
@@ -200,8 +209,8 @@ SharedPtr<ImplMapping> ConfigReadInputLine(const string &line) {
                 cfg->Toggle = true;
             } else if (optStr == "add") {
                 cfg->Add = true;
-            } else if (optStr == "persistent") {
-                cfg->Persistent = true;
+            } else if (optStr == "reset") {
+                cfg->Reset = true;
             } else {
                 LOG << "ERROR: Invalid option: " << optStr << END;
             }
@@ -221,20 +230,22 @@ SharedPtr<ImplMapping> ConfigReadInputLine(const string &line) {
         }
     }
 
-    cfg->SrcKey = ConfigReadKey(inputStr);
-    cfg->DestKey = ConfigReadKey(outputStr, true);
+    cfg->SrcKey = ConfigReadKey(inputStr, &cfg->SrcUser);
+    cfg->DestKey = ConfigReadKey(outputStr, &cfg->DestUser, true);
     cfg->Strength = ConfigReadStrength(strengthStr);
     cfg->Rate = ConfigReadRate(rateStr);
-    cfg->User = ConfigReadUser(userStr);
+    if (cfg->DestKey != MY_VK_CUSTOM) {
+        cfg->DestUser = ConfigReadUser(userStr);
+    }
 
-    LOG << "Mapping " << inputStr << " to " << outputStr << " of player " << (cfg->User + 1) << " (strength " << cfg->Strength << ")" << END;
+    LOG << "Mapping " << inputStr << " to " << outputStr << " of player " << (cfg->DestUser + 1) << " (strength " << cfg->Strength << ")" << END;
 
     return cfg;
 }
 
 void ConfigCreateResets(const SharedPtr<ImplMapping> &mapping, ImplCond *cond) {
     do {
-        ImplInput *input = ImplGetInput(cond->Key);
+        ImplInput *input = ImplGetInput(cond->Key, cond->User);
         if (input) {
             auto reset = SharedPtr<ImplReset>::New();
             reset->Mapping = mapping;
@@ -263,8 +274,6 @@ bool ConfigLoadInputLine(const string &line) {
         cfg->SrcType.Pair = false;
     }
 
-    int userIndex = cfg->User >= 0 ? cfg->User : 0;
-
     if (cfg->SrcType.Relative && (cfg->Toggle || cfg->Turbo)) {
         LOG << "ERROR: toggle & turbo aren't supported for relative input" << END;
         cfg->Toggle = cfg->Turbo = false;
@@ -283,11 +292,11 @@ bool ConfigLoadInputLine(const string &line) {
             nextCfg->SrcKey = nextSrcKey;
         }
 
-        if (cfg->Conds && !cfg->Persistent) {
+        if (cfg->Conds && (!cfg->Add || cfg->Reset)) {
             ConfigCreateResets(cfg, cfg->Conds);
         }
 
-        ImplInput *input = ImplGetInput(cfg->SrcKey);
+        ImplInput *input = ImplGetInput(cfg->SrcKey, cfg->SrcUser);
         if (input) {
             if (!cfg->Replace) {
                 cfg->Next = input->Mappings;
@@ -300,8 +309,10 @@ bool ConfigLoadInputLine(const string &line) {
                 G.Mouse.IsMapped = true;
             }
 
+            int destUserIdx = cfg->DestUser >= 0 ? cfg->DestUser : 0;
+
             if (cfg->DestType.OfUser) {
-                G.Users[userIndex].Connected = true;
+                G.Users[destUserIdx].Connected = true;
             }
         }
 
@@ -324,6 +335,8 @@ void ConfigLoadDevice(const string &key, const string &type) {
             device = new XDeviceIntf(userIdx);
         } else if (typeLow == "ds4" || typeLow == "ps4") {
             device = new Ds4DeviceIntf(userIdx);
+        } else if (typeLow == "none") {
+            device = new NoDeviceIntf(userIdx);
         } else {
             LOG << "ERROR: Invalid device: " << type << END;
         }
@@ -349,26 +362,47 @@ void ConfigLoadInclude(const string &val) {
     ConfigLoadFrom(filename);
 }
 
-void ConfigLoadExtraHook(const string &line, intptr_t idx) {
-    Path dllPath = PathFromStr(ConfigReadToken(line, &idx).c_str());
-    Path dllWait = PathFromStr(ConfigReadToken(line, &idx).c_str());
+void ConfigLoadExtraHook(const string &val) {
+    int numArgs = 0;
+    LPWSTR *args = CommandLineToArgvW(PathFromStr(val.c_str()), &numArgs);
 
-    if (*dllWait) {
-        dllWait = PathGetBaseNameWithoutExt(dllWait); // won't support non-dlls
-
-        for (auto &delayedHook : G.ExtraDelayedHooks) {
-            if (delayedHook.WaitDll == dllWait) {
-                delayedHook.Hooks.push_back(move(dllPath));
-                return;
-            }
+    Path dllPath;
+    bool is32 = false, is64 = false;
+    for (int argI = 0; argI < numArgs; argI++) {
+        if (wcseq(args[argI], L"-32")) {
+            is32 = true;
+        } else if (wcseq(args[argI], L"-64")) {
+            is64 = true;
+        } else if (!dllPath && args[argI][0] != L'-') {
+            dllPath = args[argI];
+        } else {
+            LOG << "ERROR: Invalid argument to !ExtraHook: " << args[argI] << END;
         }
+    }
 
-        G.ExtraDelayedHooks.emplace_back();
-        auto &delayedHook = G.ExtraDelayedHooks.back();
-        delayedHook.WaitDll = move(dllWait);
-        delayedHook.Hooks.push_back(move(dllPath));
-    } else {
-        G.ExtraHooks.push_back(move(dllPath));
+    if (!dllPath) {
+        LOG << "ERROR: dll path not supplied to !ExtraHook" << END;
+        return;
+    }
+
+#ifdef _WIN64
+    if (is32) {
+        return;
+    }
+#else
+    if (is64) {
+        return;
+    }
+#endif
+
+    if (G.Debug) {
+        LOG << "Loading extra hook: " << dllPath << END;
+    }
+
+    // Load it immediately, to allow registering config extensions
+    // (note: this means calling dll load from dllmain, which is not legal but seems-ok)
+    if (!LoadLibraryExW(dllPath, nullptr, 0)) {
+        LOG << "Failed loading extra hook: " << dllPath << " due to: " << GetLastError() << END;
     }
 }
 
@@ -390,13 +424,13 @@ bool ConfigLoadVarLine(const string &line) {
     string key = ConfigReadToken(line, &idx);
     string keyLow = StrLowerCase(key);
 
-    intptr_t valIdx = idx;
-    if (ConfigReadToken(line, &idx) == "=") { // optional '='
-        valIdx = idx;
-    } else {
-        idx = valIdx;
-    }
+    intptr_t validx = idx;
     string val = ConfigReadToken(line, &idx);
+    if (val == "=") // optional '='
+    {
+        validx = idx;
+        val = ConfigReadToken(line, &idx);
+    }
 
     if (keyLow == "trace") {
         G.Trace = ConfigReadBoolVar(val);
@@ -425,9 +459,14 @@ bool ConfigLoadVarLine(const string &line) {
     } else if (keyLow == "include") {
         ConfigLoadInclude(val);
     } else if (keyLow == "extrahook") {
-        ConfigLoadExtraHook(line, valIdx);
+        ConfigLoadExtraHook(StrTrimmed(line.substr(validx)));
     } else {
-        LOG << "ERROR: Invalid variable: " << key << END;
+        auto customIter = GConfig.CustomVars.find(keyLow);
+        if (customIter != GConfig.CustomVars.end()) {
+            customIter->second(StrTrimmed(line.substr(validx)));
+        } else {
+            LOG << "ERROR: Invalid variable: " << key << END;
+        }
     }
 
     return true;
@@ -480,18 +519,7 @@ bool ConfigLoadFrom(const wchar_t *filename) {
 }
 
 void ConfigReset() {
-    G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = false;
-    G.Forward = G.Always = G.Disable = G.HideCursor = false;
-    G.InjectChildren = G.RumbleWindow = false;
-    G.Keyboard.IsMapped = G.Mouse.IsMapped = false;
-
-    for (int i = 0; i < IMPL_MAX_USERS; i++) {
-        G.Users[i].Connected = G.Users[i].DeviceSpecified = false;
-    }
-
-    G.Keyboard.Reset();
-    G.Mouse.Reset();
-    G.ActiveUser = 0;
+    G.Reset();
 
     GConfig.LoadedFilesSet.clear();
     GConfig.LoadedFiles.clear();
@@ -521,7 +549,7 @@ static bool ConfigReloadNoUpdate() {
     return true;
 }
 
-bool ConfigLoad(Path &&path, Path &&name) {
+bool ConfigInit(Path &&path, Path &&name) {
     GConfig.Directory = move(path);
     GConfig.MainFile = move(name);
     return ConfigReloadNoUpdate();
@@ -533,4 +561,25 @@ void ConfigReload() {
     ConfigReloadNoUpdate();
     ConfigSendGlobalEvents(true);
     UpdateAll();
+}
+
+int ConfigRegisterCustomKey(const char *name, function<void(const InputValue &)> &&cb) {
+    int index = (int)G.CustomKeys.size();
+
+    auto custKey = UniquePtr<ImplCustomKey>::New();
+    custKey->Callback = move(cb);
+    G.CustomKeys.push_back(move(custKey));
+
+    string nameLow = name;
+    StrToLowerCase(nameLow);
+    StrReplaceAll(nameLow, ".", "");
+    GConfig.CustomKeys[nameLow] = index;
+
+    return index;
+}
+
+void ConfigRegisterCustomVar(const char *name, function<void(const string &)> &&cb) {
+    string nameLow = name;
+    StrToLowerCase(nameLow);
+    GConfig.CustomVars[nameLow] = move(cb);
 }

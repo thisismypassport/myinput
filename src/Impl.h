@@ -1,7 +1,7 @@
 #pragma once
 #include "State.h"
 #include "Config.h"
-#include "Log.h"
+#include "LogUtils.h"
 #include "Header.h"
 #include "UtilsBuffer.h"
 #include "ImplPad.h"
@@ -12,7 +12,7 @@ static bool ImplProcessMapping(ImplMapping *mapping, const InputValue &v, Change
 static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *changes) {
     int key = mapping.DestKey;
     if (mapping.DestType.OfUser) {
-        int userIndex = mapping.User;
+        int userIndex = mapping.DestUser;
         if (userIndex < 0) {
             userIndex = G.ActiveUser;
         }
@@ -117,22 +117,22 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
             break;
 
         case MY_VK_PAD_MOTION_UP:
-            ImplHandleMotionDimChange(state.Motion.Y, user, ImplMotionState::PosScale, v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale, state.Motion.YAxis(), v, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_DOWN:
-            ImplHandleMotionDimChange(state.Motion.Y, user, -ImplMotionState::PosScale, v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale, state.Motion.YAxis(), v, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_RIGHT:
-            ImplHandleMotionDimChange(state.Motion.X, user, ImplMotionState::PosScale, v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale, state.Motion.XAxis(), v, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_LEFT:
-            ImplHandleMotionDimChange(state.Motion.X, user, -ImplMotionState::PosScale, v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale, state.Motion.XAxis(), v, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_NEAR:
-            ImplHandleMotionDimChange(state.Motion.Z, user, ImplMotionState::PosScale, v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale, state.Motion.ZAxis(), v, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_FAR:
-            ImplHandleMotionDimChange(state.Motion.Z, user, -ImplMotionState::PosScale, v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale, state.Motion.ZAxis(), v, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_ROT_UP:
             ImplHandleMotionDimChange(state.Motion.RX, user, -ImplMotionState::RotScale, v, mapping.Add);
@@ -265,10 +265,27 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
             }
             break;
 
+        case MY_VK_TOGGLE_ALWAYS:
+            if (!v.Down) {
+                ImplPreMappingsChanged();
+                G.Always = !G.Always;
+                UpdateAll();
+            }
+            break;
+
         case MY_VK_TOGGLE_HIDE_CURSOR:
             if (!v.Down) {
                 G.HideCursor = !G.HideCursor;
                 UpdateHideCursor();
+            }
+            break;
+
+        case MY_VK_CUSTOM:
+            if ((size_t)mapping.DestUser < G.CustomKeys.size()) {
+                auto custKey = G.CustomKeys[mapping.DestUser].get();
+                if (custKey->Callback) {
+                    custKey->Callback(v);
+                }
             }
             break;
 
@@ -359,7 +376,7 @@ static bool ImplCheckCondsOr(ImplCond *cond);
 static bool ImplCheckCondsAnd(ImplCond *cond);
 
 static bool ImplCheckCond(ImplCond *cond) {
-    ImplInput *input = ImplGetInput(cond->Key);
+    ImplInput *input = ImplGetInput(cond->Key, cond->User);
     if (!input) {
         switch (cond->Key) {
         case MY_VK_META_COND_AND:
@@ -488,7 +505,7 @@ static void ImplPostProcess(ImplMapping *mapping, InputValue &v, bool oldDown) {
         } else {
             mapping->EndTimer();
         }
-    } else if (!mapping->SrcType.Relative && mapping->DestType.Relative) // e.g. keyboard -> mouse motion
+    } else if (!mapping->SrcType.Relative && (mapping->DestType.Relative || mapping->Add)) // e.g. keyboard -> mouse motion
     {
         if (v.Down != oldDown) {
             // Repeat is unreliable for this
@@ -613,6 +630,21 @@ static bool ImplMouseWheelHook(bool horiz, int delta, DWORD time, ChangedMask *c
 
     constexpr double scale = (double)1 / WHEEL_DELTA;
     return ImplProcessMouseAxis(input, delta, time, changes, scale);
+}
+
+static void ImplOnCustomKey(int index, const InputValue &value) {
+    DBG_ASSERT_DLL_THREAD();
+
+    ChangedMask changes;
+    if ((size_t)index < G.CustomKeys.size()) {
+        auto customKey = G.CustomKeys[index].get();
+
+        if (!ImplProcessInput(&customKey->Key, value, &changes)) {
+            if (customKey->Callback) {
+                customKey->Callback(value);
+            }
+        }
+    }
 }
 
 static bool ImplCheckInput(ImplInput *input, bool down) {

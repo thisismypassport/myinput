@@ -1,6 +1,7 @@
 #pragma once
 #include <mutex>
 #include <string>
+#include <sstream>
 #include <vector>
 #include <iomanip>
 #include <list>
@@ -33,6 +34,7 @@ using std::max;
 using std::min;
 using std::move;
 using std::ostream;
+using std::size;
 using std::string;
 using std::string_view;
 using std::stringstream;
@@ -45,6 +47,7 @@ using std::vector;
 using std::wstring;
 using std::wstring_view;
 using std::wstringstream;
+
 constexpr auto _ = std::ignore;
 
 template <class T>
@@ -69,7 +72,7 @@ T Clamp(T value, T minval, T maxval) {
 template <class IntT, class T>
 IntT ClampToInt(T value) {
     value = Clamp(value, (T)std::numeric_limits<IntT>::min(), (T)std::numeric_limits<IntT>::max());
-    return (IntT)round(value);
+    return (IntT)nearbyint(value);
 }
 
 template <class T>
@@ -176,3 +179,17 @@ public:
         }
     }
 };
+
+template <class T, class R>
+T GetOutput(R(__stdcall *func)(T *)) {
+    T value = {};
+    func(&value);
+    return value;
+}
+
+template <class S, class T, class R>
+T GetOutput(R(__stdcall *func)(const S *, T *), S arg) {
+    T value = {};
+    func(&arg, &value);
+    return value;
+}

@@ -1,5 +1,5 @@
 #pragma once
-#include "Log.h"
+#include "LogUtils.h"
 #include <Windows.h>
 
 #ifdef _WIN64
@@ -51,8 +51,7 @@ public:
     Thunk *Alloc() {
         lock_guard<mutex> lock(mMutex);
         if (!mNext || mEnd - mNext < sizeof(Thunk)) {
-            SYSTEM_INFO info;
-            GetSystemInfo(&info);
+            SYSTEM_INFO info = GetOutput(GetSystemInfo);
             mNext = (byte *)_aligned_malloc(info.dwPageSize, info.dwPageSize);
             ASSERT(mNext, "Cannot allocate aligned");
             mEnd = mNext + info.dwPageSize;

@@ -1,6 +1,5 @@
 #pragma once
 #include "UtilsBase.h"
-#include <sstream>
 
 size_t StrGetSize(const char *str) { return strlen(str); }
 size_t StrGetSize(const wchar_t *str) { return wcslen(str); }
@@ -72,6 +71,11 @@ std::basic_string<TChar> StrFromValue(T value) {
 }
 
 template <class TChar>
+void StrToLowerCase(std::basic_string<TChar> &str) {
+    transform(str.begin(), str.end(), str.begin(), tolower);
+}
+
+template <class TChar>
 std::basic_string<TChar> StrLowerCase(const std::basic_string<TChar> &str) {
     std::basic_string<TChar> dest;
     dest.resize(str.size());
@@ -79,7 +83,17 @@ std::basic_string<TChar> StrLowerCase(const std::basic_string<TChar> &str) {
     return dest;
 }
 
-const wchar_t *_wcsistr(const wchar_t *str, const wchar_t *subStr) {
+bool streq(const char *str1, const char *str2) { return strcmp(str1, str2) == 0; }
+bool strieq(const char *str1, const char *str2) { return _stricmp(str1, str2) == 0; }
+bool strneq(const char *str1, const char *str2, size_t count) { return strncmp(str1, str2, count) == 0; }
+bool strnieq(const char *str1, const char *str2, size_t count) { return _strnicmp(str1, str2, count) == 0; }
+
+bool wcseq(const wchar_t *str1, const wchar_t *str2) { return wcscmp(str1, str2) == 0; }
+bool wcsieq(const wchar_t *str1, const wchar_t *str2) { return _wcsicmp(str1, str2) == 0; }
+bool wcsneq(const wchar_t *str1, const wchar_t *str2, size_t count) { return wcsncmp(str1, str2, count) == 0; }
+bool wcsnieq(const wchar_t *str1, const wchar_t *str2, size_t count) { return _wcsnicmp(str1, str2, count) == 0; }
+
+const wchar_t *wcsistr(const wchar_t *str, const wchar_t *subStr) {
     if (!*subStr) {
         return str;
     }

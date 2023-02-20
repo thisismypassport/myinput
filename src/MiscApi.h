@@ -85,6 +85,11 @@ void InjectIndirect(HANDLE process) {
 BOOL WINAPI CreateProcessInternalW_Hook(
     HANDLE token, LPCWSTR appName, LPWSTR cmdLine, LPSECURITY_ATTRIBUTES processSec, LPSECURITY_ATTRIBUTES threadSec,
     BOOL inherit, DWORD flags, LPVOID env, LPCWSTR curDir, LPSTARTUPINFOW startupInfo, LPPROCESS_INFORMATION procInfo, PHANDLE newToken) {
+    if (!G.InjectChildren) {
+        return CreateProcessInternalW_Real(token, appName, cmdLine, processSec, threadSec, inherit,
+                                           flags, env, curDir, startupInfo, procInfo, newToken);
+    }
+
     // DEBUG needed to avoid reinject, if registered
     DWORD actualFlags = flags | CREATE_SUSPENDED | DEBUG_PROCESS;
     if (!(flags & DEBUG_PROCESS)) {
@@ -126,58 +131,15 @@ BOOL WINAPI CreateProcessInternalW_Hook(
     return success;
 }
 
-void LoadExtraHook(const Path &hook) {
-    if (G.Debug) {
-        LOG << "Loading extra hook: " << hook << END;
-    }
-
-    if (!LoadLibraryExW_Real(hook, nullptr, 0)) {
-        LOG << "Failed loading extra hook: " << hook << " due to: " << GetLastError() << END;
-    }
-}
-
-HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-    HMODULE module = LoadLibraryExW_Real(lpLibFileName, hFile, dwFlags);
-
-    if (module) {
-        // trigger extra hooks
-        for (auto &delayed : G.ExtraDelayedHooks) {
-            if (!delayed.Loaded && lpLibFileName && _wcsistr(lpLibFileName, delayed.WaitDll)) {
-                Path baseName = PathGetBaseNameWithoutExt(lpLibFileName);
-                if (_wcsicmp(baseName, delayed.WaitDll) == 0) {
-                    for (auto &hook : delayed.Hooks) {
-                        LoadExtraHook(hook);
-                    }
-
-                    delayed.Loaded = true;
-                }
-            }
-        }
-    }
-
-    return module;
-}
-
 void HookMisc() {
-    if (!G.ExtraDelayedHooks.empty()) {
-        LoadLibraryExW_Real = (LoadLibraryExW_Type)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "LoadLibraryExW");
-        if (!LoadLibraryExW_Real) {
-            LoadLibraryExW_Real = LoadLibraryExW;
-        }
-
-        AddGlobalHook(&LoadLibraryExW_Real, LoadLibraryExW_Hook);
+    CreateProcessInternalW_Real = (CreateProcessInternalW_Type)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "CreateProcessInternalW");
+    if (!CreateProcessInternalW_Real) {
+        CreateProcessInternalW_Real = (CreateProcessInternalW_Type)GetProcAddress(GetModuleHandleA("kernel32.dll"), "CreateProcessInternalW");
     }
 
-    if (G.InjectChildren) {
-        CreateProcessInternalW_Real = (CreateProcessInternalW_Type)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "CreateProcessInternalW");
-        if (!CreateProcessInternalW_Real) {
-            CreateProcessInternalW_Real = (CreateProcessInternalW_Type)GetProcAddress(GetModuleHandleA("kernel32.dll"), "CreateProcessInternalW");
-        }
-
-        if (CreateProcessInternalW_Real) {
-            AddGlobalHook(&CreateProcessInternalW_Real, CreateProcessInternalW_Hook);
-        } else {
-            LOG << "Couldn't find CreateProcessInternalW - won't be injecting children" << END;
-        }
+    if (CreateProcessInternalW_Real) {
+        AddGlobalHook(&CreateProcessInternalW_Real, CreateProcessInternalW_Hook);
+    } else {
+        LOG << "Couldn't find CreateProcessInternalW - won't be injecting children" << END;
     }
 }

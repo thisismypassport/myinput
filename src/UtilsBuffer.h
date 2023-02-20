@@ -48,6 +48,19 @@ public:
 
 } GBufferLists;
 
+template <int Size>
+class BufferListOfSize {
+    WeakAtomic<BufferList *> mList = nullptr;
+
+public:
+    BufferList *Get() {
+        if (!mList) {
+            mList = GBufferLists.Get(Size);
+        }
+        return mList;
+    }
+};
+
 class Buffer {
     void *mPtr;
     size_t mSize;

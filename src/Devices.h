@@ -2,6 +2,20 @@
 #include "Device.h"
 #include "Header.h"
 
+static void ImplSetRumble(ImplUser *user, double lowFreq, double highFreq);
+
+struct NoDeviceIntf : public DeviceIntf {
+    int CopyInputTo(uint8_t *dest) override { return 0; }
+
+    NoDeviceIntf(int userIdx) {
+        SerialString = ManufacturerString = ProductString = L"";
+        VendorId = ProductId = VersionNum = 0;
+        IsHid = false;
+
+        Init(userIdx);
+    }
+};
+
 #pragma pack(push, 1)
 struct XHidReport {
     uint8_t ReportId;
@@ -19,7 +33,7 @@ struct XHidReport {
         RX = state.RA.X.Value16() + 0x8000;
         RY = 0x8000 - state.RA.Y.Value16();
         // this mess is needed for 'clever' xinput correlation code in sdl
-        Triggers = (int16_t)round((state.LT.Value - state.RT.Value) * 0x7fff) + 0x8000;
+        Triggers = (int16_t)nearbyint((state.LT.Value - state.RT.Value) * 0x7fff) + 0x8000;
 
         Btns = 0;
         Btns |= state.A.State ? 0x1 : 0;
@@ -72,7 +86,7 @@ struct XDeviceIntf : public DeviceIntf {
         VendorId = 0x45e;
         ProductId = 0x28e;
         VersionNum = 0x100;
-        IsXInput = true;
+        IsXUsb = true;
         Preparsed = &PreparsedData.Header;
         PreparsedSize = sizeof(XHidPreparsedData);
 
@@ -175,7 +189,7 @@ struct Ds4DeviceIntf : public DeviceIntf {
 
     bool ProcessOutput(const uint8_t *src, int size, int id) override {
         if (id == 5 && size >= 6) {
-            SetRumble((double)src[5] / 0xff, (double)src[4] / 0xff);
+            ImplSetRumble(&G.Users[UserIdx], (double)src[5] / 0xff, (double)src[4] / 0xff);
             return true;
         }
 

@@ -15,7 +15,8 @@
 #include <Dbt.h>
 #include <Xinput.h>
 
-#include "Keys.h" // for IsVkMouseButton
+#include "Keys.h"
+#include "MyInputHook.h"
 
 bool gPrintGamepad;
 bool gPrintKeyboard;
@@ -71,27 +72,23 @@ void AssertEquals(const char *name, void *value, void *expected, int size) {
 }
 
 template <class TFunc>
-void CreateThread(TFunc threadFunc) {
+DWORD CreateThread(TFunc threadFunc) {
+    DWORD threadId;
     CloseHandle(CreateThread(
         nullptr, 0, [](PVOID param) -> DWORD {
             (*((function<void()> *)param))();
             return 0;
         },
-        new function<void()>(threadFunc), 0, nullptr));
+        new function<void()>(threadFunc), 0, &threadId));
+    return threadId;
 }
 
 uint64_t GetPerfCounter() {
-    LARGE_INTEGER value = {};
-    QueryPerformanceCounter(&value);
-    return value.QuadPart;
+    return GetOutput(QueryPerformanceCounter).QuadPart;
 }
 
 double GetPerfDelay(uint64_t prev, uint64_t *nowPtr = nullptr) {
-    static uint64_t freq = ([]() {
-        LARGE_INTEGER value = {};
-        QueryPerformanceFrequency(&value);
-        return value.QuadPart;
-    })();
+    static uint64_t freq = GetOutput(QueryPerformanceFrequency).QuadPart;
 
     uint64_t now = GetPerfCounter();
     if (nowPtr) {
@@ -672,8 +669,7 @@ void TestRawInput(int numOurs, bool read, bool readBuffer, bool readPage, bool p
 }
 
 void TestSetupDi(int numOurs, bool readDevice, bool readDeviceImmediate) {
-    GUID hidGuid;
-    HidD_GetHidGuid(&hidGuid);
+    GUID hidGuid = GetOutput(HidD_GetHidGuid);
 
     for (int type = 0; type < 2; type++) {
         HDEVINFO devs = type == 0 ? SetupDiGetClassDevsA(&hidGuid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_INTERFACEDEVICE) : SetupDiGetClassDevsW(&hidGuid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_INTERFACEDEVICE);
@@ -836,11 +832,8 @@ void TestCfgMgrPrintProp(int depth, DEVPROPKEY *key, DEVPROPTYPE type, uint8_t *
     }
 }
 
-void TestCfgMgr(bool printDevices, DEVINST dev = 0) {
+void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes, size_t numClasses) {
     // (assuming no changes in device tree)
-
-    GUID hidGuid;
-    HidD_GetHidGuid(&hidGuid);
 
     if (!dev) {
         AssertEquals("cm.locate", CM_Locate_DevNodeA(&dev, NULL, 0), CR_SUCCESS);
@@ -879,171 +872,56 @@ void TestCfgMgr(bool printDevices, DEVINST dev = 0) {
             printf("%*s%s (%x,%x)\n", depth * 2, "", did, status, problem);
         }
 
-        ULONG ibuflen;
-        AssertEquals("cm.ilist.size", CM_Get_Device_Interface_List_SizeA(&ibuflen, &hidGuid, did, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_SUCCESS);
+        bool propsPrinted = false;
+        for (size_t ci = 0; ci < numClasses; ci++) {
+            ULONG ibuflen;
+            AssertEquals("cm.ilist.size", CM_Get_Device_Interface_List_SizeA(&ibuflen, &classes[ci], did, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_SUCCESS);
 
-        if (ibuflen > 1) // else, nothing
-        {
-            // (only do this for relevant devices)
+            // avoid print props for irrelevant devices except under printAll
+            if (!propsPrinted && (printAll || ibuflen > 1)) {
+                propsPrinted = true;
 
-            // instance notify
-            Path wdid = PathFromStr(did);
+                // instance notify
+                Path wdid = PathFromStr(did);
 
-            CM_NOTIFY_FILTER filter;
-            ZeroMemory(&filter, sizeof(filter));
-            filter.cbSize = sizeof(filter);
-            filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE;
-            wcscpy(filter.u.DeviceInstance.InstanceId, wdid);
-            HCMNOTIFICATION notify;
-            AssertEquals("cm.ntf.inst", CM_Register_Notification(&filter, (void *)0x124, DeviceChangeCMCb, &notify), CR_SUCCESS);
+                CM_NOTIFY_FILTER filter;
+                ZeroMemory(&filter, sizeof(filter));
+                filter.cbSize = sizeof(filter);
+                filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE;
+                wcscpy(filter.u.DeviceInstance.InstanceId, wdid);
+                HCMNOTIFICATION notify;
+                AssertEquals("cm.ntf.inst", CM_Register_Notification(&filter, (void *)0x124, DeviceChangeCMCb, &notify), CR_SUCCESS);
 
-            // device props
-            ULONG dpcount = 0;
-            AssertEquals("cm.prop.keys.size", CM_Get_DevNode_Property_Keys(dev, nullptr, &dpcount, 0), CR_BUFFER_SMALL);
-            if (dpcount) {
-                DEVPROPKEY *dpkeys = new DEVPROPKEY[dpcount];
-                ULONG dpbad = dpcount - 1;
-                AssertEquals("cm.prop.keys.bad", CM_Get_DevNode_Property_Keys(dev, dpkeys, &dpbad, 0), CR_BUFFER_SMALL);
-                AssertEquals("cm.prop.keys.bad.size", dpbad, dpcount);
-                ULONG dpgood = dpcount + 1;
-                AssertEquals("cm.prop.keys", CM_Get_DevNode_Property_Keys(dev, dpkeys, &dpgood, 0), CR_SUCCESS);
-                AssertEquals("cm.prop.keys.size", dpgood, dpcount);
-
-                DEVPROPKEY badkey = {1, 2, 3, 4};
-                DEVPROPTYPE type;
-                ULONG unused = 0;
-                AssertEquals("cm.prop.miss", CM_Get_DevNode_PropertyW(dev, &badkey, &type, nullptr, &unused, 0), CR_NO_SUCH_VALUE);
-
-                for (ULONG i = 0; i < dpcount; i++) {
-                    DEVPROPKEY *key = &dpkeys[i];
-                    ULONG dpsize = 0;
-                    AssertEquals("cm.prop.size", CM_Get_DevNode_PropertyW(dev, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
-
-                    uint8_t *dprop = new uint8_t[dpsize];
-                    dpbad = dpsize - 1;
-                    AssertEquals("cm.prop.bad", CM_Get_DevNode_PropertyW(dev, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
-                    AssertEquals("cm.prop.bad.size", dpbad, dpsize);
-                    AssertEquals("cm.prop", CM_Get_DevNode_PropertyW(dev, key, &type, dprop, &dpsize, 0), CR_SUCCESS);
-
-                    if (printDevices) {
-                        TestCfgMgrPrintProp(depth + 2, key, type, dprop, dpsize);
-                    }
-                    delete[] dprop;
-                }
-
-                delete[] dpkeys;
-            }
-
-            // registry props
-            for (int p = CM_DRP_MIN; p <= CM_DRP_MAX; p++) {
-                ULONG plen = 0;
-                int ret = CM_Get_DevNode_Registry_PropertyW(dev, p, nullptr, nullptr, &plen, 0);
-                if (ret == CR_NO_SUCH_VALUE || ret == CR_FAILURE) {
-                    continue;
-                }
-
-                AssertEquals("cm.rprop.size", ret, CR_BUFFER_SMALL);
-
-                uint8_t *prop = new uint8_t[plen];
-                ULONG pbad = plen - 1;
-                ULONG regType;
-                AssertEquals("cm.rprop.bad", CM_Get_DevNode_Registry_PropertyW(dev, p, &regType, prop, &pbad, 0), CR_BUFFER_SMALL);
-                AssertEquals("cm.rprop.bad.size", pbad, plen);
-                AssertEquals("cm.rprop", CM_Get_DevNode_Registry_PropertyW(dev, p, &regType, prop, &plen, 0), CR_SUCCESS);
-
-                if (printDevices) {
-                    DEVPROPTYPE realType = DEVPROP_TYPE_NULL;
-                    switch (regType) {
-                    case REG_SZ:
-                        realType = DEVPROP_TYPE_STRING;
-                        break;
-                    case REG_MULTI_SZ:
-                        realType = DEVPROP_TYPE_STRING_LIST;
-                        break;
-                    case REG_DWORD:
-                        realType = DEVPROP_TYPE_UINT32;
-                        break;
-                    case REG_QWORD:
-                        realType = DEVPROP_TYPE_UINT64;
-                        break;
-                    case REG_BINARY:
-                        realType = DEVPROP_TYPE_BINARY;
-                        break;
-                    }
-
-                    DEVPROPKEY pkey = {};
-                    FillMemory(&pkey.fmtid, sizeof(pkey.fmtid), 0xff);
-                    pkey.pid = p;
-                    TestCfgMgrPrintProp(depth + 2, &pkey, realType, prop, plen);
-                }
-                delete[] prop;
-            }
-
-            // interfaces
-            char *diids = new char[ibuflen];
-            AssertEquals("cm.ilist.bad", CM_Get_Device_Interface_ListA(&hidGuid, did, diids, ibuflen - 1, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_BUFFER_SMALL);
-            AssertEquals("cm.ilist", CM_Get_Device_Interface_ListA(&hidGuid, did, diids, ibuflen, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_SUCCESS);
-
-            char *diidp = diids;
-            while (*diidp) {
-                if (printDevices) {
-                    printf("%*s(i) %s\n", (depth + 1) * 2, "", diidp);
-                }
-
-                Path diidpw = PathFromStr(diidp);
-
-                // interface notify
-                HANDLE devh = CreateFileW(diidpw, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, 0, nullptr);
-                if (devh != INVALID_HANDLE_VALUE) {
-                    DEV_BROADCAST_HANDLE dbc;
-                    ZeroMemory(&dbc, sizeof(dbc));
-                    dbc.dbch_size = sizeof(dbc);
-                    dbc.dbch_devicetype = DBT_DEVTYP_HANDLE;
-                    dbc.dbch_handle = devh;
-                    AssertNotEquals("dev.ntf.hdl", (intptr_t)RegisterDeviceNotificationA(gNotifyWin, &dbc, 0), NULL);
-                }
-
-                devh = CreateFileW(diidpw, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, 0, nullptr);
-                if (devh != INVALID_HANDLE_VALUE) {
-                    CM_NOTIFY_FILTER filter;
-                    ZeroMemory(&filter, sizeof(filter));
-                    filter.cbSize = sizeof(filter);
-                    filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE;
-                    filter.u.DeviceHandle.hTarget = devh;
-                    HCMNOTIFICATION notify;
-                    AssertEquals("cm.ntf.hdl", CM_Register_Notification(&filter, (void *)devh, DeviceChangeCMCb, &notify), CR_SUCCESS);
-                }
-
-                // interface props
-                dpcount = 0;
-                AssertEquals("cm.iprop.keys.size", CM_Get_Device_Interface_Property_KeysW(diidpw, nullptr, &dpcount, 0), CR_BUFFER_SMALL);
+                // device props
+                ULONG dpcount = 0;
+                AssertEquals("cm.prop.keys.size", CM_Get_DevNode_Property_Keys(dev, nullptr, &dpcount, 0), CR_BUFFER_SMALL);
                 if (dpcount) {
                     DEVPROPKEY *dpkeys = new DEVPROPKEY[dpcount];
                     ULONG dpbad = dpcount - 1;
-                    AssertEquals("cm.iprop.keys.bad", CM_Get_Device_Interface_Property_KeysW(diidpw, dpkeys, &dpbad, 0), CR_BUFFER_SMALL);
-                    AssertEquals("cm.iprop.keys.bad.size", dpbad, dpcount);
+                    AssertEquals("cm.prop.keys.bad", CM_Get_DevNode_Property_Keys(dev, dpkeys, &dpbad, 0), CR_BUFFER_SMALL);
+                    AssertEquals("cm.prop.keys.bad.size", dpbad, dpcount);
                     ULONG dpgood = dpcount + 1;
-                    AssertEquals("cm.iprop.keys", CM_Get_Device_Interface_Property_KeysW(diidpw, dpkeys, &dpgood, 0), CR_SUCCESS);
-                    AssertEquals("cm.iprop.keys.size", dpgood, dpcount);
+                    AssertEquals("cm.prop.keys", CM_Get_DevNode_Property_Keys(dev, dpkeys, &dpgood, 0), CR_SUCCESS);
+                    AssertEquals("cm.prop.keys.size", dpgood, dpcount);
 
                     DEVPROPKEY badkey = {1, 2, 3, 4};
                     DEVPROPTYPE type;
                     ULONG unused = 0;
-                    AssertEquals("cm.iprop.miss", CM_Get_Device_Interface_PropertyW(diidpw, &badkey, &type, nullptr, &unused, 0), CR_NO_SUCH_VALUE);
+                    AssertEquals("cm.prop.miss", CM_Get_DevNode_PropertyW(dev, &badkey, &type, nullptr, &unused, 0), CR_NO_SUCH_VALUE);
 
                     for (ULONG i = 0; i < dpcount; i++) {
                         DEVPROPKEY *key = &dpkeys[i];
                         ULONG dpsize = 0;
-                        AssertEquals("cm.iprop.size", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
+                        AssertEquals("cm.prop.size", CM_Get_DevNode_PropertyW(dev, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
 
                         uint8_t *dprop = new uint8_t[dpsize];
                         dpbad = dpsize - 1;
-                        AssertEquals("cm.iprop.bad", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
-                        AssertEquals("cm.iprop.bad.size", dpbad, dpsize);
-                        AssertEquals("cm.iprop", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, dprop, &dpsize, 0), CR_SUCCESS);
+                        AssertEquals("cm.prop.bad", CM_Get_DevNode_PropertyW(dev, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
+                        AssertEquals("cm.prop.bad.size", dpbad, dpsize);
+                        AssertEquals("cm.prop", CM_Get_DevNode_PropertyW(dev, key, &type, dprop, &dpsize, 0), CR_SUCCESS);
 
                         if (printDevices) {
-                            TestCfgMgrPrintProp(depth + 3, key, type, dprop, dpsize);
+                            TestCfgMgrPrintProp(depth + 2, key, type, dprop, dpsize);
                         }
                         delete[] dprop;
                     }
@@ -1051,10 +929,134 @@ void TestCfgMgr(bool printDevices, DEVINST dev = 0) {
                     delete[] dpkeys;
                 }
 
-                diidp += strlen(diidp) + 1;
+                // registry props
+                for (int p = CM_DRP_MIN; p <= CM_DRP_MAX; p++) {
+                    ULONG plen = 0;
+                    int ret = CM_Get_DevNode_Registry_PropertyW(dev, p, nullptr, nullptr, &plen, 0);
+                    if (ret == CR_NO_SUCH_VALUE || ret == CR_FAILURE) {
+                        continue;
+                    }
+                    if (printAll && ret != CR_BUFFER_SMALL) { // ?
+                        continue;
+                    }
+
+                    AssertEquals("cm.rprop.size", ret, CR_BUFFER_SMALL);
+
+                    uint8_t *prop = new uint8_t[plen];
+                    ULONG pbad = plen - 1;
+                    ULONG regType;
+                    AssertEquals("cm.rprop.bad", CM_Get_DevNode_Registry_PropertyW(dev, p, &regType, prop, &pbad, 0), CR_BUFFER_SMALL);
+                    AssertEquals("cm.rprop.bad.size", pbad, plen);
+                    AssertEquals("cm.rprop", CM_Get_DevNode_Registry_PropertyW(dev, p, &regType, prop, &plen, 0), CR_SUCCESS);
+
+                    if (printDevices) {
+                        DEVPROPTYPE realType = DEVPROP_TYPE_NULL;
+                        switch (regType) {
+                        case REG_SZ:
+                            realType = DEVPROP_TYPE_STRING;
+                            break;
+                        case REG_MULTI_SZ:
+                            realType = DEVPROP_TYPE_STRING_LIST;
+                            break;
+                        case REG_DWORD:
+                            realType = DEVPROP_TYPE_UINT32;
+                            break;
+                        case REG_QWORD:
+                            realType = DEVPROP_TYPE_UINT64;
+                            break;
+                        case REG_BINARY:
+                            realType = DEVPROP_TYPE_BINARY;
+                            break;
+                        }
+
+                        DEVPROPKEY pkey = {};
+                        FillMemory(&pkey.fmtid, sizeof(pkey.fmtid), 0xff);
+                        pkey.pid = p;
+                        TestCfgMgrPrintProp(depth + 2, &pkey, realType, prop, plen);
+                    }
+                    delete[] prop;
+                }
             }
 
-            delete[] diids;
+            if (ibuflen > 1) {
+                // interfaces
+                char *diids = new char[ibuflen];
+                int iret = CM_Get_Device_Interface_ListA(&classes[ci], did, diids, ibuflen - 1, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+                AssertEquals("cm.ilist.bad", iret, CR_BUFFER_SMALL);
+                AssertEquals("cm.ilist", CM_Get_Device_Interface_ListA(&classes[ci], did, diids, ibuflen, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_SUCCESS);
+
+                char *diidp = diids;
+                while (*diidp) {
+                    if (printDevices) {
+                        printf("%*s(i) %s\n", (depth + 1) * 2, "", diidp);
+                    }
+
+                    Path diidpw = PathFromStr(diidp);
+
+                    // interface notify
+                    HANDLE devh = CreateFileW(diidpw, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, 0, nullptr);
+                    if (devh != INVALID_HANDLE_VALUE) {
+                        DEV_BROADCAST_HANDLE dbc;
+                        ZeroMemory(&dbc, sizeof(dbc));
+                        dbc.dbch_size = sizeof(dbc);
+                        dbc.dbch_devicetype = DBT_DEVTYP_HANDLE;
+                        dbc.dbch_handle = devh;
+                        AssertNotEquals("dev.ntf.hdl", (intptr_t)RegisterDeviceNotificationA(gNotifyWin, &dbc, 0), NULL);
+                    }
+
+                    devh = CreateFileW(diidpw, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, 0, nullptr);
+                    if (devh != INVALID_HANDLE_VALUE) {
+                        CM_NOTIFY_FILTER filter;
+                        ZeroMemory(&filter, sizeof(filter));
+                        filter.cbSize = sizeof(filter);
+                        filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE;
+                        filter.u.DeviceHandle.hTarget = devh;
+                        HCMNOTIFICATION notify;
+                        AssertEquals("cm.ntf.hdl", CM_Register_Notification(&filter, (void *)devh, DeviceChangeCMCb, &notify), CR_SUCCESS);
+                    }
+
+                    // interface props
+                    ULONG dpcount = 0;
+                    AssertEquals("cm.iprop.keys.size", CM_Get_Device_Interface_Property_KeysW(diidpw, nullptr, &dpcount, 0), CR_BUFFER_SMALL);
+                    if (dpcount) {
+                        DEVPROPKEY *dpkeys = new DEVPROPKEY[dpcount];
+                        ULONG dpbad = dpcount - 1;
+                        AssertEquals("cm.iprop.keys.bad", CM_Get_Device_Interface_Property_KeysW(diidpw, dpkeys, &dpbad, 0), CR_BUFFER_SMALL);
+                        AssertEquals("cm.iprop.keys.bad.size", dpbad, dpcount);
+                        ULONG dpgood = dpcount + 1;
+                        AssertEquals("cm.iprop.keys", CM_Get_Device_Interface_Property_KeysW(diidpw, dpkeys, &dpgood, 0), CR_SUCCESS);
+                        AssertEquals("cm.iprop.keys.size", dpgood, dpcount);
+
+                        DEVPROPKEY badkey = {1, 2, 3, 4};
+                        DEVPROPTYPE type;
+                        ULONG unused = 0;
+                        AssertEquals("cm.iprop.miss", CM_Get_Device_Interface_PropertyW(diidpw, &badkey, &type, nullptr, &unused, 0), CR_NO_SUCH_VALUE);
+
+                        for (ULONG i = 0; i < dpcount; i++) {
+                            DEVPROPKEY *key = &dpkeys[i];
+                            ULONG dpsize = 0;
+                            AssertEquals("cm.iprop.size", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
+
+                            uint8_t *dprop = new uint8_t[dpsize];
+                            dpbad = dpsize - 1;
+                            AssertEquals("cm.iprop.bad", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
+                            AssertEquals("cm.iprop.bad.size", dpbad, dpsize);
+                            AssertEquals("cm.iprop", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, dprop, &dpsize, 0), CR_SUCCESS);
+
+                            if (printDevices) {
+                                TestCfgMgrPrintProp(depth + 3, key, type, dprop, dpsize);
+                            }
+                            delete[] dprop;
+                        }
+
+                        delete[] dpkeys;
+                    }
+
+                    diidp += strlen(diidp) + 1;
+                }
+
+                delete[] diids;
+            }
         }
 
         delete[] did;
@@ -1063,11 +1065,35 @@ void TestCfgMgr(bool printDevices, DEVINST dev = 0) {
         CONFIGRET ret = CM_Get_Child(&child, dev, 0);
         AssertEquals("cm.child", ret, child ? CR_SUCCESS : CR_NO_SUCH_DEVNODE);
         if (child) {
-            TestCfgMgr(printDevices, child);
+            TestCfgMgrNode(printDevices, printAll, child, classes, numClasses);
         }
 
         ret = CM_Get_Sibling(&dev, dev, 0);
         AssertEquals("cm.sibling", ret, dev ? CR_SUCCESS : CR_NO_SUCH_DEVNODE);
+    }
+}
+
+void TestCfgMgr(bool printDevices, bool printAll) {
+    if (printAll) {
+        vector<GUID> classes;
+        ULONG idx = 0;
+        while (true) {
+            GUID newCls;
+            auto result = CM_Enumerate_Classes(idx, &newCls, CM_ENUMERATE_CLASSES_INTERFACE);
+            if (result == CR_NO_SUCH_VALUE) {
+                break;
+            }
+
+            if (result == CR_SUCCESS) {
+                classes.push_back(newCls);
+            }
+            idx++;
+        }
+
+        TestCfgMgrNode(printDevices, printAll, 0, classes.data(), classes.size());
+    } else {
+        GUID hidGuid = GetOutput(HidD_GetHidGuid);
+        TestCfgMgrNode(printDevices, printAll, 0, &hidGuid, 1);
     }
 }
 
@@ -1516,22 +1542,18 @@ LRESULT CALLBACK HighMouseHook(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 void RegisterHook(bool keyboard, bool mouse, int count, bool low, DWORD thread) {
-    for (int i = 0; i < count; i++) {
-        if (keyboard) {
-            HHOOK keyHook = SetWindowsHookExW(low ? WH_KEYBOARD_LL : WH_KEYBOARD, low ? LowKeyHook : HighKeyHook, thread ? nullptr : GetModuleHandle(nullptr), thread);
-            AssertNotEquals("hook.k", (intptr_t)keyHook, 0);
-        }
-
-        if (mouse) {
-            HHOOK mouseHook = SetWindowsHookExW(low ? WH_MOUSE_LL : WH_MOUSE, low ? LowMouseHook : HighMouseHook, thread ? nullptr : GetModuleHandle(nullptr), thread);
-            AssertNotEquals("hook.m", (intptr_t)mouseHook, 0);
-        }
-    }
-}
-
-void RegisterLowHook(bool keyboard, bool mouse, int count) {
     CreateThread([=]() {
-        RegisterHook(keyboard, mouse, count, true, 0);
+        for (int i = 0; i < count; i++) {
+            if (keyboard) {
+                HHOOK keyHook = SetWindowsHookExW(low ? WH_KEYBOARD_LL : WH_KEYBOARD, low ? LowKeyHook : HighKeyHook, thread ? nullptr : GetModuleHandle(nullptr), thread);
+                AssertNotEquals("hook.k", (intptr_t)keyHook, 0);
+            }
+
+            if (mouse) {
+                HHOOK mouseHook = SetWindowsHookExW(low ? WH_MOUSE_LL : WH_MOUSE, low ? LowMouseHook : HighMouseHook, thread ? nullptr : GetModuleHandle(nullptr), thread);
+                AssertNotEquals("hook.m", (intptr_t)mouseHook, 0);
+            }
+        }
 
         MSG msg;
         while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
@@ -1668,8 +1690,7 @@ void MeasureLatencyInMsg() {
 }
 
 bool GetCIM() {
-    INPUT_MESSAGE_SOURCE ims;
-    return GetCurrentInputMessageSource(&ims) && ims.originId == IMO_INJECTED;
+    return GetOutput(GetCurrentInputMessageSource).originId == IMO_INJECTED;
 }
 
 LRESULT CALLBACK TestWindowProc(HWND win, UINT msg, WPARAM w, LPARAM l) {
@@ -1688,63 +1709,115 @@ void TestStateMsg(int key, intT value, intT *oldValue, const char *source) {
     }
 }
 
-void ShowTestWindow(function<void()> innerCode) {
-    CreateThread([=]() {
-        short keys[0x100] = {};
-        short asynckeys[0x100] = {};
-        BYTE fullkeys[0x100] = {};
-        GetKeyboardState(fullkeys);
-        for (int i = 0; i < 0x100; i++) {
-            keys[i] = GetKeyState(i);
-            asynckeys[i] = GetAsyncKeyState(i);
-        }
-        POINT cursorPos;
-        GetCursorPos(&cursorPos);
+void ResistCursorHideInit(HWND window) {
+    for (int i = 0; i < 5; i++) {
+        ShowCursor(true);
+    }
 
-        int width = GetSystemMetrics(SM_CXSCREEN);
-        int height = GetSystemMetrics(SM_CYSCREEN);
-        int style = ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL | ES_AUTOHSCROLL | WS_OVERLAPPEDWINDOW;
+    /*
+    RECT rect = {};
+    GetWindowRect (window, &rect);
+    int w = rect.right - rect.left;
+    int h = rect.bottom - rect.top;
 
-        HWND window = CreateWindowW(L"EDIT", L"TEST", style, width - 500, height - 500, 250, 250, 0, NULL, NULL, NULL);
-        gTestWindow = window;
-        SetWindowTextW(window, L"");
+    HWND topwin = CreateWindowExW (WS_EX_TOPMOST, L"EDIT", L"", WS_BORDER, rect.left + w/2 - 50, rect.top + h/2 - 50, 100, 100, 0, NULL, NULL, NULL);
+    ShowWindow (topwin, SW_SHOWNOACTIVATE);
+    */
+}
 
-        gTestWindowProcBase = (WNDPROC)GetWindowLongPtrW(window, GWLP_WNDPROC);
-        SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)TestWindowProc);
-        SetTimer(window, 1, 100, nullptr);
-        ShowWindow(window, SW_SHOW);
+void ResistCursorHide(HWND window) {
+    int newValue = ShowCursor(true);
+    if (newValue > 1000) {
+        ShowCursor(false); // for sanity purposes (would other apps be so kind?)
+    }
+    AssertEquals("resist.sc", newValue > 0, true);
 
-        innerCode();
+    POINT cursorPos;
+    if (GetCursorPos(&cursorPos) &&
+        WindowFromPoint(cursorPos) == window) {
+        CURSORINFO ci;
+        ci.cbSize = sizeof(ci);
+        AssertEquals("resist.gci", GetCursorInfo(&ci), TRUE);
+        AssertEquals("resist.gci.f", ci.flags, CURSOR_SHOWING);
+    }
 
-        MSG msg;
-        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-            MeasureLatencyInMsg();
+    AssertEquals("resist.cc", ClipCursor(nullptr), TRUE);
+    RECT clip;
+    AssertEquals("resist.gcc", GetClipCursor(&clip), TRUE);
+    AssertEquals("resist.gcc.x", clip.left, GetSystemMetrics(SM_XVIRTUALSCREEN));
+    AssertEquals("resist.gcc.y", clip.top, GetSystemMetrics(SM_YVIRTUALSCREEN));
+    AssertEquals("resist.gcc.w", clip.right - clip.left, GetSystemMetrics(SM_CXVIRTUALSCREEN));
+    AssertEquals("resist.gcc.h", clip.bottom - clip.top, GetSystemMetrics(SM_CYVIRTUALSCREEN));
+}
 
-            POINT newPos;
-            AssertEquals("test.gcp", GetCursorPos(&newPos), TRUE);
-            if (newPos.x != cursorPos.x || newPos.y != cursorPos.y) {
-                if (gPrintMouseCursor) {
-                    printf("mouse cursor -> %d,%d : state\n", newPos.x, newPos.y);
+DWORD ShowTestWindow(int count, bool resistHideCursor) {
+    DWORD threadId = 0;
+    for (int i = 0; i < count; i++) {
+        threadId = CreateThread([=]() mutable {
+            short keys[0x100] = {};
+            short asynckeys[0x100] = {};
+            BYTE fullkeys[0x100] = {};
+            GetKeyboardState(fullkeys);
+            for (int i = 0; i < 0x100; i++) {
+                keys[i] = GetKeyState(i);
+                asynckeys[i] = GetAsyncKeyState(i);
+            }
+            POINT cursorPos = GetOutput(GetCursorPos);
+
+            int width = GetSystemMetrics(SM_CXSCREEN);
+            int height = GetSystemMetrics(SM_CYSCREEN);
+            int style = ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL | ES_AUTOHSCROLL | WS_OVERLAPPEDWINDOW;
+
+            HWND window = CreateWindowW(L"EDIT", L"TEST", style, width - 500, height - 500, 250, 250, 0, NULL, NULL, NULL);
+            gTestWindow = window;
+            SetWindowTextW(window, L"");
+
+            gTestWindowProcBase = (WNDPROC)GetWindowLongPtrW(window, GWLP_WNDPROC);
+            SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)TestWindowProc);
+            SetTimer(window, 1, 100, nullptr);
+            ShowWindow(window, SW_SHOW);
+
+            if (resistHideCursor) {
+                ResistCursorHideInit(window);
+            }
+
+            MSG msg;
+            while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+                if (i == 0) {
+                    MeasureLatencyInMsg();
                 }
-                cursorPos = newPos;
-            }
 
-            for (int i = 0; i < 0x100; i++) {
-                TestStateMsg(i, GetKeyState(i), &keys[i], "state");
-                TestStateMsg(i, GetAsyncKeyState(i), &asynckeys[i], "asyncstate");
-            }
+                if (resistHideCursor && msg.message == WM_MOUSEMOVE) {
+                    ResistCursorHide(msg.hwnd);
+                }
 
-            BYTE newkeys[0x100] = {};
-            AssertEquals("test.gks", GetKeyboardState(newkeys), TRUE);
-            for (int i = 0; i < 0x100; i++) {
-                TestStateMsg(i, newkeys[i], &fullkeys[i], "fullstate");
-            }
+                POINT newPos;
+                AssertEquals("test.gcp", GetCursorPos(&newPos), TRUE);
+                if (newPos.x != cursorPos.x || newPos.y != cursorPos.y) {
+                    if (gPrintMouseCursor) {
+                        printf("mouse cursor -> %d,%d : state\n", newPos.x, newPos.y);
+                    }
+                    cursorPos = newPos;
+                }
 
-            TestWindowMsg(msg.message, msg.wParam, msg.lParam, GetMessageTime(), GetCIM(), GetMessageExtraInfo(), "msgloop");
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    });
+                for (int i = 0; i < 0x100; i++) {
+                    TestStateMsg(i, GetKeyState(i), &keys[i], "state");
+                    TestStateMsg(i, GetAsyncKeyState(i), &asynckeys[i], "asyncstate");
+                }
+
+                BYTE newkeys[0x100] = {};
+                AssertEquals("test.gks", GetKeyboardState(newkeys), TRUE);
+                for (int i = 0; i < 0x100; i++) {
+                    TestStateMsg(i, newkeys[i], &fullkeys[i], "fullstate");
+                }
+
+                TestWindowMsg(msg.message, msg.wParam, msg.lParam, GetMessageTime(), GetCIM(), GetMessageExtraInfo(), "msgloop");
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        });
+    }
+    return threadId;
 }
 
 void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, bool hotkey, bool captureMouse) {
@@ -1954,8 +2027,7 @@ DWORD CALLBACK DeviceChangeCMCb(HCMNOTIFICATION notify, PVOID context, CM_NOTIFY
     case CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE: {
         AssertEquals("cm.ntf.intf.ctxt", (intptr_t)context, 0x123);
 
-        GUID hidGuid;
-        HidD_GetHidGuid(&hidGuid);
+        GUID hidGuid = GetOutput(HidD_GetHidGuid);
 
         AssertEquals("cm.ntf.intf.guid", IsEqualGUID(data->u.DeviceInterface.ClassGuid, hidGuid), TRUE);
 
@@ -2062,8 +2134,7 @@ LRESULT CALLBACK NotifyWindowProc(HWND win, UINT msg, WPARAM w, LPARAM l) {
 
             switch (header->dbch_devicetype) {
             case DBT_DEVTYP_DEVICEINTERFACE: {
-                GUID hidGuid;
-                HidD_GetHidGuid(&hidGuid);
+                GUID hidGuid = GetOutput(HidD_GetHidGuid);
 
                 auto devintf = (DEV_BROADCAST_DEVICEINTERFACE_W *)header;
                 AssertEquals("cm.ntf.intf.guid", IsEqualGUID(devintf->dbcc_classguid, hidGuid), TRUE);
@@ -2123,8 +2194,7 @@ void CreateNotifyWindow() {
         gNotifyWinA = windowA;
         SetEvent(event);
 
-        GUID hidGuid;
-        HidD_GetHidGuid(&hidGuid);
+        GUID hidGuid = GetOutput(HidD_GetHidGuid);
 
         DEV_BROADCAST_DEVICEINTERFACE_A dbc;
         ZeroMemory(&dbc, sizeof(dbc));
@@ -2219,7 +2289,9 @@ public:
 int main(int argc, char **argv) {
     Args args;
     BOOL_ARG(loadHook, "hook");
+    STR_ARG(hookConfig, "hook-config");
     BOOL_ARG(testWindow, "test-win");
+    INT_ARG(testWindowCount, "test-win-count", 1);
     BOOL_ARG(visualizeWindow, "vis-win");
 
     BOOL_ARG(readDevice, "read-dev");
@@ -2251,6 +2323,7 @@ int main(int argc, char **argv) {
     INT_ARG(registerHookCount, "reg-hook-count", 1);
     BOOL_ARG(registerHotkey, "reg-hotkey");
 
+    BOOL_ARG(resistHideCursor, "resist-hide-cursor");
     BOOL_ARG(sendInputs, "send-inputs");
     G_BOOL_ARG(gStressDevice, "stress-device");
     G_BOOL_ARG(gStressDeviceCommunicate, "stress-device-comm");
@@ -2263,6 +2336,7 @@ int main(int argc, char **argv) {
     G_BOOL_ARG(gPrintTime, "print-time");
     BOOL_ARG(printRawInputDevices, "print-raw-dev");
     BOOL_ARG(printCfgMgrDevices, "print-cfg-dev");
+    BOOL_ARG(printAllCfgMgrDevices, "print-cfg-dev-all");
     G_BOOL_ARG(gPrintDeviceChange, "print-dev-chg");
 
     BOOL_ARG(createProcess, "create-process");
@@ -2276,15 +2350,17 @@ int main(int argc, char **argv) {
     }
 
     if (loadHook && !isChild) {
+        if (!hookConfig.empty()) {
+            SetEnvironmentVariableW(L"MYINPUT_HOOK_CONFIG", PathFromStr(hookConfig.c_str()));
+        }
+
         LoadLibraryA("myinput_hook.dll");
     }
 
     int numOurs = 0;
     HMODULE hookLib = GetModuleHandleA("myinput_hook.dll");
     if (hookLib) {
-        typedef int (*MyInputHook_GetUserCountType)();
-        MyInputHook_GetUserCountType MyInputHook_GetUserCountFunc = (MyInputHook_GetUserCountType)GetProcAddress(hookLib, "MyInputHook_GetUserCount");
-        numOurs = MyInputHook_GetUserCountFunc();
+        numOurs = MyInputHook_GetUserCount();
     } else if (loadHook) {
         Alert(L"Hook not loaded in child!");
     }
@@ -2294,7 +2370,7 @@ int main(int argc, char **argv) {
     TestJoystick(readJoystick);
     TestRawInput(numOurs, readRaw, readRawBuffer, readRawFullPage, printRawInputDevices);
     TestSetupDi(numOurs, readDevice, readDeviceImmediate);
-    TestCfgMgr(printCfgMgrDevices);
+    TestCfgMgr(printCfgMgrDevices, printAllCfgMgrDevices);
     TestXInput(xinputVersion, readXInput, readXInputEx, readXInputStroke, rumbleXInput, visualizeWindow);
 
     if (registerRaw) {
@@ -2303,17 +2379,18 @@ int main(int argc, char **argv) {
     }
 
     if (registerLowHook) {
-        RegisterLowHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount);
+        RegisterHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, true, 0);
+    }
+    // if (registerGlobalHook) - nope...
+    //     RegisterHook (!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, 0);
+
+    DWORD testWindowThread = 0;
+    if (testWindow) {
+        testWindowThread = ShowTestWindow(testWindowCount, resistHideCursor);
     }
 
-    if (testWindow) {
-        ShowTestWindow([=]() {
-            if (registerLocalHook) {
-                RegisterHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, GetCurrentThreadId());
-            }
-            // if (registerGlobalHook) - nope...
-            //     RegisterHook (!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, 0);
-        });
+    if (registerLocalHook && testWindowThread) {
+        RegisterHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, testWindowThread);
     }
 
     if (registerHotkey) {

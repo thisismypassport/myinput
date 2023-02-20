@@ -38,36 +38,55 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     int numArgs;
     LPWSTR *args = CommandLineToArgvW(cmdLine, &numArgs);
 
-    LPWSTR userArg = nullptr;
-    if (!(numArgs > 1)) {
-        userArg = SelectFileForOpen(L"Executables\0*.EXE\0", L"Execute").Take();
+    bool registered = false, byPid = false, byHandle = false;
+    Path config, userCmdLine;
+    int argI = 0;
+    if (numArgs > 1) {
+        for (argI = 1; argI < numArgs; argI++) {
+            if (wcseq(args[argI], L"-r")) {
+                registered = true;
+            } else if (wcseq(args[argI], L"-p")) {
+                byPid = true;
+            } else if (wcseq(args[argI], L"-h")) {
+                byHandle = true;
+            } else if (wcseq(args[argI], L"-c") && argI + 1 < numArgs) {
+                config = args[++argI];
+            } else if (args[argI][0] != L'-') {
+                break; // followed by args
+            } else {
+                Alert(L"Unrecognized option: %ws", args[argI]);
+            }
+        }
+    } else {
+        Path userArg = SelectFileForOpen(L"Executables\0*.EXE\0", L"Execute");
         if (!userArg) {
             return 2;
         }
 
-        numArgs = 1;
-        args = &userArg;
-        cmdLine = userArg;
+        wstring ownArg0 = numArgs ? args[0] : L".";
+        userCmdLine = (ownArg0 + L" \"" + wstring(userArg) + L"\"").c_str();
+        cmdLine = userCmdLine;
+
+        args = CommandLineToArgvW(cmdLine, &numArgs);
+        argI = 1;
     }
 
-    Path ownDir = PathGetDirName(PathGetModulePath(nullptr));
+    if (config) {
+        SetEnvironmentVariableW(L"MYINPUT_HOOK_CONFIG", config);
+    }
 
-    bool registered = (numArgs > 2 && wcscmp(args[1], L"-r") == 0);
-    bool byPid = (numArgs > 2 && wcscmp(args[1], L"-p") == 0);
-    bool byHandle = (numArgs > 2 && wcscmp(args[1], L"-h") == 0);
-
-    STARTUPINFOW si;
-    GetStartupInfoW(&si);
+    STARTUPINFOW si = GetOutput(GetStartupInfoW);
 
     bool success = false;
     bool created = false;
+    bool redirected = false;
     PROCESS_INFORMATION pi;
     if (byPid || byHandle) {
         // (As of this writing, injecting into an already running process is NOT properly supported)
 
         uint64_t value;
-        if (!StrToValue(wstring(args[2]), &value)) {
-            Alert(L"Invalid number argument %ws.", args[2]);
+        if (!StrToValue(wstring(args[argI]), &value)) {
+            Alert(L"Invalid number argument %ws.", args[argI]);
             return -1;
         }
 
@@ -94,33 +113,49 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
         success = true;
     } else {
-        int firstArg = registered ? 2 : userArg ? 0
-                                                : 1;
-
-        wchar_t *processCmdLine = SkipCommandLineArgs(cmdLine, firstArg);
+        wchar_t *processCmdLine = SkipCommandLineArgs(cmdLine, argI);
 
         // debug flags prevent debugger (which might be us again!) from interfering
         if (CreateProcessW(nullptr, processCmdLine, nullptr, nullptr, registered,
                            CREATE_SUSPENDED | DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS,
-                           nullptr, registered ? Path() : PathGetDirName(args[firstArg]),
+                           nullptr, registered ? Path() : PathGetDirName(args[argI]),
                            &si, &pi)) {
             DebugActiveProcessStop(pi.dwProcessId); // was needed just at creation time
             created = true;
             success = true;
         } else if (GetLastError() == ERROR_NOT_SUPPORTED) {
             // attempt to debug wrong bitness exe in some cases
+        } else if (GetLastError() == ERROR_ELEVATION_REQUIRED) {
+            Path ownPath = PathGetModulePath(nullptr);
+
+            SHELLEXECUTEINFOW exec = {};
+            exec.cbSize = sizeof(exec);
+            exec.fMask = SEE_MASK_NOCLOSEPROCESS;
+            exec.lpVerb = L"runas";
+            exec.lpFile = ownPath;
+            exec.lpParameters = SkipCommandLineArgs(cmdLine, 1);
+            exec.nShow = SW_SHOWNORMAL;
+            if (ShellExecuteExW(&exec) && exec.hProcess) {
+                redirected = true;
+                pi.hProcess = exec.hProcess;
+            } else {
+                Alert(L"Failed elevating %ws", args[argI]);
+                return -1;
+            }
         } else {
-            Alert(L"Failed starting %ws. File not found?", args[firstArg]);
+            Alert(L"Failed starting %ws. File not found?", args[argI]);
             return -1;
         }
     }
 
-    bool redirected = false;
+    Path ownDir = PathGetDirName(PathGetModulePath(nullptr));
+
     BOOL meWow, themWow;
-    if (!success ||
-        !IsWow64Process(GetCurrentProcess(), &meWow) ||
-        !IsWow64Process(pi.hProcess, &themWow) ||
-        meWow != themWow) {
+    if (!redirected &&
+        (!success ||
+         !IsWow64Process(GetCurrentProcess(), &meWow) ||
+         !IsWow64Process(pi.hProcess, &themWow) ||
+         meWow != themWow)) {
         success = false;
 
         wstring dirName(PathGetBaseName(ownDir));

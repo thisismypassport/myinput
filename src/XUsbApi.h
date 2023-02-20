@@ -192,10 +192,11 @@ static BOOL XUsbDeviceIoControl(DeviceIntf *device, DWORD dwIoControlCode, LPVOI
 
     case IOCTL_XUSB_SET_GAMEPAD_STATE:
         return ProcessDeviceIoControlInput<XUsbVibration>(lpInBuffer, nInBufferSize, [device](XUsbVibration *ptr) {
+            auto user = &G.Users[device->UserIdx];
             switch (ptr->Cmd) {
             // case 1: led
             case 2:
-                SetRumble((double)ptr->LowMotor / 0xff, (double)ptr->HighMotor / 0xff);
+                ImplSetRumble(user, (double)ptr->LowMotor / 0xff, (double)ptr->HighMotor / 0xff);
                 break;
             }
             return TRUE;

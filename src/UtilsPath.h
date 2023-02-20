@@ -44,6 +44,7 @@ public:
     }
 
     const wchar_t *Get() const { return Buffer; }
+    wchar_t *Get() { return Buffer; }
 
     wchar_t *Take() {
         wchar_t *taken = Buffer;
@@ -76,6 +77,14 @@ Path PathGetFullPath(const wchar_t *path) {
 
     Path dest(size);
     GetFullPathNameW(path, size, dest, nullptr);
+    return dest;
+}
+
+Path PathGetEnvVar(const wchar_t *key) {
+    DWORD size = GetEnvironmentVariableW(key, nullptr, 0);
+
+    Path dest(size);
+    GetEnvironmentVariableW(key, dest, size);
     return dest;
 }
 

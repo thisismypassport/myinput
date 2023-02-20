@@ -1,5 +1,6 @@
 #pragma once
 #include "UtilsBase.h"
+#include <Windows.h>
 
 struct UserTimers {
     // (it's not safe to use 'this' as UINT_PTR, since timers may get called after EndTimer)
@@ -87,3 +88,45 @@ public:
         }
     }
 } GInfiniteThreadPool;
+
+class ReliablePostThreadMessage // regular PostThreadMessage doesn't work early in a thread's lifetime
+{
+    mutex Mutex;
+    vector<tuple<UINT, WPARAM, LPARAM>> InitialMessages;
+    WeakAtomic<bool> Initialized = false;
+
+public:
+    // thread must be constant for the lifetime of a ReliablePostThreadMessage
+    // and must match the id of the thread that calls Initialize
+    void Post(DWORD thread, int msg, WPARAM w, LPARAM l) {
+        if (!Initialized) {
+            lock_guard<mutex> lock(Mutex);
+            if (!Initialized) {
+                InitialMessages.push_back({msg, w, l});
+                return;
+            }
+        }
+
+        PostThreadMessageW(thread, msg, w, l);
+        // (note: may still fail at shutdown time)
+    }
+
+    void Initialize() {
+        lock_guard<mutex> lock(Mutex);
+
+        // initialize message queue - only then PostThreadMessage will work
+        MSG dummy;
+        PeekMessageW(&dummy, NULL, WM_USER, WM_USER, PM_NOREMOVE);
+
+        if (!InitialMessages.empty()) {
+            DWORD thread = GetCurrentThreadId();
+            for (auto [msg, w, l] : InitialMessages) {
+                PostThreadMessageW(thread, msg, w, l);
+            }
+
+            InitialMessages.clear();
+            InitialMessages.shrink_to_fit();
+        }
+        Initialized = true;
+    }
+};
