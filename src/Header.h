@@ -155,10 +155,13 @@ enum : ULONG {
 
 using AppCallback = void (*)(void *);
 void PostAppCallback(AppCallback cb, void *data);
+using VoidCallback = void (*)();
+void PostAppCallback(VoidCallback cb);
 
 HANDLE GetCustomDeviceHandle(int user);
 void UpdateAll();
 void UpdateHideCursor();
 bool ProcessRawKeyboardEvent(int msg, int key, int scan, int flags, ULONG extraInfo, bool injected);
-void ImplPreMappingsChanged();
+void ImplAbortMappings();
+void ImplToggleForeground(bool allowUpdateAll = true);
 void DebugRemoveLowHooks();

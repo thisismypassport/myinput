@@ -180,9 +180,8 @@ struct ImplInput {
     bool AsyncDown : 1 = false;
     bool AsyncToggle : 1 = false;
 
-    bool PressGenerated : 1 = false;
-    bool PressFresh : 1 = false;
-    bool PressFreshForCheck : 1 = false;
+    bool ObservedPress : 1 = false;
+    bool ObservedPressForCheck : 1 = false;
 
     void Reset() { Mappings = nullptr; }
 };
@@ -265,6 +264,7 @@ struct ImplG {
     int ActiveUser = 0;
     int DefaultActiveUser = 0;
     bool InForeground = false;
+    bool Paused = false;
 
     bool Trace = false;
     bool Debug = false;
@@ -283,6 +283,8 @@ struct ImplG {
     HWND DllWindow = nullptr;
 
     CallbackList<void(ImplUser *, bool)> GlobalCallbacks;
+
+    bool IsActive() { return InForeground || Always; }
 
     void Reset() {
         G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = false;

@@ -556,7 +556,7 @@ bool ConfigInit(Path &&path, Path &&name) {
 }
 
 void ConfigReload() {
-    ImplPreMappingsChanged();
+    ImplAbortMappings();
     ConfigSendGlobalEvents(false);
     ConfigReloadNoUpdate();
     ConfigSendGlobalEvents(true);

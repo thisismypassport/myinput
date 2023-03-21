@@ -153,11 +153,6 @@ static void ImplGenerateMouseEventCommon(int flag, DWORD time, int data = 0) {
 }
 
 static void ImplGenerateKey(int key, bool down, DWORD time) {
-    ImplInput *data = ImplGetInput(key, 0);
-    if (data) {
-        data->PressGenerated = down;
-    }
-
     switch (key) {
     case VK_LBUTTON:
         return ImplGenerateMouseEventCommon(down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP, time);

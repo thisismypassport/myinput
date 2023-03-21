@@ -7,7 +7,9 @@
 #include "ImplPad.h"
 #include "ImplKeyMouse.h"
 
-static bool ImplProcessMapping(ImplMapping *mapping, const InputValue &v, ChangedMask *changes, bool oldDown, bool reset = false);
+static bool ImplProcessMapping(ImplMapping *mapping, const InputValue &v, ChangedMask *changes, bool oldDown, bool reset);
+static void ImplToggleDisable();
+static void ImplToggleAlways();
 
 static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *changes) {
     int key = mapping.DestKey;
@@ -253,23 +255,19 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
         switch (key) {
         case MY_VK_RELOAD:
             if (!v.Down) {
-                PostAppCallback([](void *) { ConfigReload(); }, nullptr); // (may have ptrs up the stack)
+                PostAppCallback(ConfigReload); // (may have ptrs up the stack)
             }
             break;
 
         case MY_VK_TOGGLE_DISABLE:
             if (!v.Down) {
-                ImplPreMappingsChanged();
-                G.Disable = !G.Disable;
-                UpdateAll();
+                PostAppCallback(ImplToggleDisable);
             }
             break;
 
         case MY_VK_TOGGLE_ALWAYS:
             if (!v.Down) {
-                ImplPreMappingsChanged();
-                G.Always = !G.Always;
-                UpdateAll();
+                PostAppCallback(ImplToggleAlways);
             }
             break;
 
@@ -346,7 +344,7 @@ static void CALLBACK ImplReleaseTimerProc(HWND window, UINT msg, UINT_PTR id, DW
     if (mapping) {
         ChangedMask changes;
         InputValue value(false, mapping->Strength, time);
-        ImplProcessMapping(mapping, value, &changes, true);
+        ImplProcessMapping(mapping, value, &changes, true, false);
     }
 }
 
@@ -466,7 +464,9 @@ static bool ImplPreProcess(ImplMapping *mapping, InputValue &v, bool &oldDown, b
         bool toggle = v.Down && !oldDown;
         oldDown = mapping->ToggleValue;
 
-        if (toggle) {
+        if (reset) {
+            mapping->ToggleValue = false;
+        } else if (toggle) {
             mapping->ToggleValue = !mapping->ToggleValue;
         }
 
@@ -474,7 +474,7 @@ static bool ImplPreProcess(ImplMapping *mapping, InputValue &v, bool &oldDown, b
     }
 
     if ((mapping->SrcType.Repeatable && !mapping->DestType.Repeatable) || // e.g. keyboard -> mouse button
-        mapping->Toggle || mapping->Turbo) {
+        mapping->Toggle || mapping->Turbo || reset) {
         if (v.Down == oldDown) {
             return false;
         }
@@ -547,11 +547,15 @@ static void ImplProcessReset(ImplReset *reset, DWORD time, ChangedMask *changes)
     ImplMapping *mapping = reset->Mapping;
     if ((mapping->PassedCond || mapping->SrcType.Relative) && !ImplCheckCondsAnd(mapping->Conds)) {
         InputValue value(false, mapping->Strength, time);
-        ImplProcessMapping(mapping, value, changes, true, true);
+        ImplProcessMapping(mapping, value, changes, true, true); // passing oldDown=true here seems bad...
     }
 }
 
-static bool ImplProcessInput(ImplInput *input, const InputValue &v, ChangedMask *changes, bool relative = false) {
+static bool ImplProcessInput(ImplInput *input, const InputValue &v, ChangedMask *changes, bool relative = false, bool reset = false) {
+    if (G.Paused) {
+        return false;
+    }
+
     bool oldDown = input->AsyncDown;
     if (v.Down && !input->AsyncDown) {
         input->AsyncToggle = !input->AsyncToggle;
@@ -560,7 +564,7 @@ static bool ImplProcessInput(ImplInput *input, const InputValue &v, ChangedMask 
 
     bool processed = false;
     for (ImplMapping *mapping = input->Mappings; mapping; mapping = mapping->Next) {
-        if (ImplProcessMapping(mapping, v, changes, oldDown)) {
+        if (ImplProcessMapping(mapping, v, changes, oldDown, reset)) {
             processed = true;
         }
     }
@@ -573,9 +577,9 @@ static bool ImplProcessInput(ImplInput *input, const InputValue &v, ChangedMask 
 
     if (!relative) {
         if (v.Down) {
-            input->PressFresh = true;
-        } else if (!input->PressFresh) {
-            processed = false;
+            input->ObservedPress = true;
+        } else if (!input->ObservedPress) {
+            processed = false; // forward releases of presses started while inactive
         }
     }
 
@@ -648,10 +652,14 @@ static void ImplOnCustomKey(int index, const InputValue &value) {
 }
 
 static bool ImplCheckInput(ImplInput *input, bool down) {
+    if (G.Paused) {
+        return false;
+    }
+
     if (down) {
-        input->PressFreshForCheck = true;
-    } else if (!input->PressFreshForCheck) {
-        return false; // press came from an old mapping
+        input->ObservedPressForCheck = true;
+    } else if (!input->ObservedPressForCheck) {
+        return false; // forward releases of presses started while inactive
     }
 
     for (ImplMapping *mapping = input->Mappings; mapping; mapping = mapping->Next) {
@@ -696,18 +704,58 @@ static bool ImplCheckMouseWheel(bool horiz) {
     return processed;
 }
 
-static void ImplPreMappingsChanged() {
-    DWORD time = GetTickCount();
+static void ImplAbortMappings() {
+    InputValue value(false, 0.0, GetTickCount());
+    ChangedMask changes;
 
     for (int key = 0; key < ImplKeyboard::Count; key++) {
-        auto input = G.Keyboard.Keys[key];
+        auto &input = G.Keyboard.Keys[key];
+
+        ImplProcessInput(&input, value, &changes, false, true);
+    }
+
+    // this leaves AsyncState wrong, up to UpdateAll to fix it
+}
+
+static void ImplBeginObservePresses() {
+    for (int key = 0; key < ImplKeyboard::Count; key++) {
+        auto &input = G.Keyboard.Keys[key];
 
         // ensure future releases get forwarded no matter what
-        input.PressFresh = input.PressFreshForCheck = false;
-
-        // generate releases
-        if (input.PressGenerated) {
-            ImplGenerateKey(key, false, time);
-        }
+        input.ObservedPress = input.ObservedPressForCheck = false;
     }
+}
+
+static void ImplToggleDisable() {
+    ImplAbortMappings();
+    G.Disable = !G.Disable;
+    UpdateAll();
+}
+
+static void ImplUpdateActive(bool oldActive, bool allowUpdateAll = true) {
+    bool newActive = G.IsActive();
+
+    if (oldActive && !newActive) {
+        ImplAbortMappings();
+    } else if (newActive && !oldActive) {
+        ImplBeginObservePresses();
+    }
+
+    G.Paused = !newActive;
+
+    if (oldActive != newActive && allowUpdateAll) {
+        UpdateAll();
+    }
+}
+
+static void ImplToggleAlways() {
+    bool oldActive = G.IsActive();
+    G.Always = !G.Always;
+    ImplUpdateActive(oldActive);
+}
+
+static void ImplToggleForeground(bool allowUpdateAll) {
+    bool oldActive = G.IsActive();
+    G.InForeground = !G.InForeground;
+    ImplUpdateActive(oldActive, allowUpdateAll);
 }

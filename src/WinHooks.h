@@ -88,17 +88,9 @@ static LRESULT CALLBACK LowMouseHook(int nCode, WPARAM wParam, LPARAM lParam) {
 static void UpdateInForeground(bool allowUpdateAll = true) {
     bool inForeground = IsWindowInOurProcess(GetForegroundWindow());
     if (inForeground != G.InForeground) {
-        ImplPreMappingsChanged();
-        G.InForeground = inForeground;
+        ImplToggleForeground(allowUpdateAll);
         if (G.Debug) {
             LOG << "App " << (inForeground ? "entered" : "left") << " foreground" << END;
-        }
-
-        if (!G.Always && allowUpdateAll) {
-            UpdateAll();
-            if (G.InForeground) {
-                ImplUpdateAsyncState();
-            }
         }
     }
 }
@@ -110,11 +102,10 @@ static LRESULT CALLBACK ForegroundHook(int nCode, WPARAM wParam, LPARAM lParam) 
     if (nCode >= 0) {
         auto msg = (CWPSTRUCT *)lParam;
         if (msg->message == WM_NCACTIVATE) {
-            PostAppCallback([](void *) {
+            PostAppCallback([]() {
                 UpdateInForeground();
                 UpdateHideCursor();
-            },
-                            nullptr);
+            });
         }
     }
 
@@ -152,7 +143,7 @@ static void CALLBACK ObjectFocusHook(HWINEVENTHOOK hook, DWORD event, HWND windo
 static void WinHooksUpdateKeyboard(bool force = false) {
     DBG_ASSERT_DLL_THREAD();
 
-    bool keyboard = G.Keyboard.IsMapped && (G.InForeground || G.Always);
+    bool keyboard = G.Keyboard.IsMapped && G.IsActive();
     bool oldKeyboard = G.Keyboard.HLowHook != nullptr;
     if (keyboard != oldKeyboard || force) {
         if (oldKeyboard) {
@@ -170,7 +161,7 @@ static void WinHooksUpdateKeyboard(bool force = false) {
 static void WinHooksUpdateMouse(bool force = false) {
     DBG_ASSERT_DLL_THREAD();
 
-    bool mouse = G.Mouse.IsMapped && (G.InForeground || G.Always);
+    bool mouse = G.Mouse.IsMapped && G.IsActive();
     bool oldMouse = G.Mouse.HLowHook != nullptr;
     if (mouse != oldMouse || force) {
         if (oldMouse) {

@@ -18,12 +18,17 @@ void UpdateAll() {
     WinHooksUpdateMouse();
     RawInputUpdateMouse();
     UpdateHideCursor();
+    ImplUpdateAsyncState();
 }
 
 ReliablePostThreadMessage GDllThreadMsgQueue;
 
 void PostAppCallback(AppCallback cb, void *data) {
     GDllThreadMsgQueue.Post(G.DllThread, WM_APP, (WPARAM)data, (LPARAM)cb);
+}
+
+void PostAppCallback(VoidCallback cb) {
+    PostAppCallback([](void *data) { ((VoidCallback)data)(); }, cb);
 }
 
 static DWORD WINAPI DllThread(LPVOID param) {
@@ -39,7 +44,6 @@ static DWORD WINAPI DllThread(LPVOID param) {
     WinHooksInitOnThread();
     RawInputInitDllWindow();
     UpdateAll();
-    ImplUpdateAsyncState();
 
     GDllThreadMsgQueue.Initialize();
 

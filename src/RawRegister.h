@@ -362,7 +362,7 @@ public:
     RawInputRegKeyboard() : RawInputRegLegacy(KeyboardInputHandleHighStart, sizeof(RAWINPUTHEADER) + sizeof(RAWKEYBOARD)) {}
 
     void UpdateRealRegister(bool force) {
-        bool mapped = G.Keyboard.IsMapped && (G.InForeground || G.Always);
+        bool mapped = G.Keyboard.IsMapped && G.IsActive();
         RawInputRegLegacy::UpdateRealRegister(HID_USAGE_GENERIC_KEYBOARD, true, mapped, force);
         SetManualAsyncKeyState(mapped && NoLegacy);
     }
@@ -373,7 +373,7 @@ public:
     RawInputRegMouse() : RawInputRegLegacy(MouseInputHandleHighStart, sizeof(RAWINPUTHEADER) + sizeof(RAWMOUSE)) {}
 
     void UpdateRealRegister(bool force) {
-        bool mapped = G.Mouse.IsMapped && (G.InForeground || G.Always);
+        bool mapped = G.Mouse.IsMapped && G.IsActive();
         RawInputRegLegacy::UpdateRealRegister(HID_USAGE_GENERIC_MOUSE, false, mapped, force);
     }
 } GRawInputRegMouse;
