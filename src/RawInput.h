@@ -7,6 +7,10 @@
 
 bool gUniqLogRawInputFind;
 
+#ifndef _WIN64
+BOOL gWow64;
+#endif
+
 HANDLE GetCustomDeviceHandle(int user) {
     return MakeOurHandle(CustomDeviceHandleHighStart + user);
 }
@@ -178,6 +182,27 @@ UINT WINAPI GetRawInputData_Hook(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pDa
     return GetRawInputData_Real(hRawInput, uiCommand, pData, pCbSize, cbSizeHeader);
 }
 
+void FixupRawInputBufferData(UINT *pResult, PRAWINPUT pData, UINT *pSize, UINT remaining) {
+#ifndef _WIN64 // look at this mess windows made
+    if (gWow64) {
+        if (*pResult == INVALID_UINT_VALUE || !pData) {
+            *pSize += 0x8;
+        } else if (*pResult + 0x8 > remaining) {
+            *pSize = *pResult + 0x8;
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            *pResult = INVALID_UINT_VALUE;
+        } else {
+            byte *ptr = (byte *)pData;
+            MoveMemory(ptr + 0x18, ptr + 0x10, *pResult - 0x10);
+            *(UINT *)(ptr + 0x10) = *(UINT *)(ptr + 0xc);
+            *(UINT *)(ptr + 0x14) = *(UINT *)(ptr + 0xc) = 0;
+            *pResult += 0x8;
+            pData->header.dwSize += 0x8;
+        }
+    }
+#endif
+}
+
 UINT WINAPI GetRawInputBuffer_Hook(PRAWINPUT pData, PUINT pCbSize, UINT cbSizeHeader) {
     // can't rely on GetRawInputBuffer_Real - must simulate it
     if (cbSizeHeader == sizeof(RAWINPUTHEADER) && pCbSize) {
@@ -194,6 +219,7 @@ UINT WINAPI GetRawInputBuffer_Hook(PRAWINPUT pData, PUINT pCbSize, UINT cbSizeHe
                msg.message == WM_INPUT) {
             UINT size = remaining;
             UINT result = GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, pData, &size, cbSizeHeader);
+            FixupRawInputBufferData(&result, pData, &size, remaining);
             if (result != INVALID_UINT_VALUE) {
                 if (!pData) {
                     *pCbSize = size;
@@ -392,6 +418,10 @@ UINT WINAPI GetRegisteredRawInputDevices_Hook(PRAWINPUTDEVICE pRawInputDevices, 
 }
 
 void HookRawInput() {
+#ifndef _WIN64
+    IsWow64Process(GetCurrentProcess(), &gWow64);
+#endif
+
     AddGlobalHook(&GetRawInputDeviceList_Real, GetRawInputDeviceList_Hook);
     AddGlobalHook(&GetRawInputDeviceInfoA_Real, GetRawInputDeviceInfoA_Hook);
     AddGlobalHook(&GetRawInputDeviceInfoW_Real, GetRawInputDeviceInfoW_Hook);
