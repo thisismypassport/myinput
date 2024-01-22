@@ -1,65 +1,31 @@
 #pragma once
 #include "Hook.h"
 #include "State.h"
+#include "Inject.h"
 
 typedef BOOL(WINAPI *CreateProcessInternalW_Type)(
     HANDLE, LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES,
     BOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION, PHANDLE);
 
-typedef HMODULE(WINAPI *LoadLibraryExW_Type)(LPCWSTR, HANDLE, DWORD);
-
 CreateProcessInternalW_Type CreateProcessInternalW_Real;
-LoadLibraryExW_Type LoadLibraryExW_Real;
 
 bool InjectDirect(HANDLE process) {
-    void *loadLibAddr = GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
-
     Path dllPath = PathGetModulePath(G.HInstance);
-    size_t dllPathSize = (wcslen(dllPath) + 1) * sizeof(wchar_t);
-
-    LPVOID dllAddr = VirtualAllocEx(process, NULL, dllPathSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (dllAddr == NULL) {
-        LOG << "Couldn't allocate memory in process: " << GetLastError() << END;
-        return false;
-    }
-
-    auto dllAddrDtor = Destructor([process, dllAddr]() {
-        VirtualFreeEx(process, dllAddr, 0, MEM_RELEASE);
-    });
-
-    if (!WriteProcessMemory(process, dllAddr, dllPath, dllPathSize, NULL)) {
-        LOG << "Couldn't write memory to process: " << GetLastError() << END;
-        return false;
-    }
-
-    HANDLE hRemote = CreateRemoteThread(process, NULL, 0, (LPTHREAD_START_ROUTINE)loadLibAddr, dllAddr, NULL, NULL);
-    if (hRemote == NULL) {
-        LOG << "Couldn't inject thread in process: " << GetLastError() << END;
-        return false;
-    }
-
-    WaitForSingleObject(hRemote, INFINITE);
-    CloseHandle(hRemote);
-    return true;
+    return DoInject(process, dllPath);
 }
 
 void InjectIndirect(HANDLE process) {
     Path ownDir = PathGetDirName(PathGetModulePath(G.HInstance));
 
     wstring dirName(PathGetBaseName(ownDir));
-    bool replaced = false;
-    if (StrContains(dirName, L"Win32")) {
-        replaced = StrReplaceFirst(dirName, L"Win32", L"x64");
-    } else if (StrContains(dirName, L"x64")) {
-        replaced = StrReplaceFirst(dirName, L"x64", L"Win32");
-    }
+    bool replaced = ReplaceWithOtherBitness(&dirName);
 
     HANDLE inhHandle;
     if (!replaced) {
-        LOG << "Cannot inject into new process - can't find myinput_inject of other bitness" << END;
+        LOG_ERR << "Cannot inject into new process - can't find myinput_inject of other bitness" << END;
     } else if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &inhHandle,
                                 0, TRUE, DUPLICATE_SAME_ACCESS)) {
-        LOG << "Can't duplicate process handle " << GetLastError() << END;
+        LOG_ERR << "Can't duplicate process handle " << GetLastError() << END;
     } else {
         Path otherExePath = PathCombine(PathCombine(PathGetDirName(ownDir), dirName.c_str()), L"myinput_inject.exe");
         Path cmdArgs = (L"myinput_inject.exe -h " + StrFromValue<wchar_t>((ULONG_PTR)inhHandle)).c_str();
@@ -71,7 +37,7 @@ void InjectIndirect(HANDLE process) {
         PROCESS_INFORMATION injPi;
         if (!CreateProcessInternalW_Real(nullptr, otherExePath, cmdArgs, nullptr, nullptr, TRUE,
                                          0, nullptr, nullptr, &injSi, &injPi, nullptr)) {
-            LOG << "Can't create inject process " << GetLastError() << END;
+            LOG_ERR << "Can't create inject process " << GetLastError() << END;
         } else {
             WaitForSingleObject(injPi.hThread, INFINITE);
             CloseHandle(injPi.hThread);
@@ -90,6 +56,9 @@ BOOL WINAPI CreateProcessInternalW_Hook(
                                            flags, env, curDir, startupInfo, procInfo, newToken);
     }
 
+    bool inject = true;
+repeat:
+
     // DEBUG needed to avoid reinject, if registered
     DWORD actualFlags = flags | CREATE_SUSPENDED | DEBUG_PROCESS;
     if (!(flags & DEBUG_PROCESS)) {
@@ -100,11 +69,15 @@ BOOL WINAPI CreateProcessInternalW_Hook(
                                                actualFlags, env, curDir, startupInfo, procInfo, newToken);
 
     if (!success && !(flags & DEBUG_PROCESS) && GetLastError() == ERROR_NOT_SUPPORTED) {
-        // can't debug differently-WOW processes in some cases
+        // can't debug differently-WOW processes in some cases (any workarounds?)
 
         actualFlags &= ~(DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS);
         success = CreateProcessInternalW_Real(token, appName, cmdLine, processSec, threadSec, inherit,
                                               actualFlags, env, curDir, startupInfo, procInfo, newToken);
+
+        if (success) {
+            LOG << "Couldn't launch following process with debug flag, it may not work if it was registered..." << END;
+        }
     }
 
     if (success) {
@@ -112,15 +85,28 @@ BOOL WINAPI CreateProcessInternalW_Hook(
             DebugActiveProcessStop(procInfo->dwProcessId);
         }
 
-        BOOL meWow, themWow;
-        if (IsWow64Process(GetCurrentProcess(), &meWow) &&
-            IsWow64Process(procInfo->hProcess, &themWow) &&
-            meWow == themWow) {
-            LOG << "Injecting into new process of same bitness " << (cmdLine ? cmdLine : appName) << END;
-            InjectDirect(procInfo->hProcess);
-        } else {
-            LOG << "Injecting into new process of different bitness " << (cmdLine ? cmdLine : appName) << END;
-            InjectIndirect(procInfo->hProcess);
+        if (inject) {
+            BOOL meWow, themWow;
+            if (IsWow64Process(GetCurrentProcess(), &meWow) &&
+                IsWow64Process(procInfo->hProcess, &themWow) &&
+                meWow == themWow) {
+                LOG << "Injecting into new process of same bitness " << (cmdLine ? cmdLine : appName) << END;
+                InjectDirect(procInfo->hProcess);
+            } else {
+                LOG << "Injecting into new process of different bitness " << (cmdLine ? cmdLine : appName) << END;
+                InjectIndirect(procInfo->hProcess);
+            }
+        }
+
+        if (WaitForSingleObject(procInfo->hProcess, 0) != WAIT_TIMEOUT) // process died? (e.g. due to process restrictions)
+        {
+            LOG << "Injection crashed process " << (cmdLine ? cmdLine : appName) << " (retrying without it)" << END;
+            CloseHandle(procInfo->hProcess);
+            CloseHandle(procInfo->hThread);
+
+            // (note - we still want to do the DEBUG_PROCESS thing to avoid injection due to registration)
+            inject = false;
+            goto repeat;
         }
 
         if (!(flags & CREATE_SUSPENDED)) {
@@ -138,7 +124,7 @@ void HookMisc() {
     }
 
     if (CreateProcessInternalW_Real) {
-        AddGlobalHook(&CreateProcessInternalW_Real, CreateProcessInternalW_Hook);
+        ADD_GLOBAL_HOOK(CreateProcessInternalW);
     } else {
         LOG << "Couldn't find CreateProcessInternalW - won't be injecting children" << END;
     }

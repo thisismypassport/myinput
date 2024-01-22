@@ -1,6 +1,9 @@
 #pragma once
 #include "UtilsBase.h"
+#include "UtilsStr.h"
+#include "UtilsPath.h"
 #include <Windows.h>
+#include <cstdarg>
 
 struct UserTimers {
     // (it's not safe to use 'this' as UINT_PTR, since timers may get called after EndTimer)
@@ -43,6 +46,52 @@ public:
 
     ~UserTimer() {
         End();
+    }
+};
+
+class ReusableThread {
+    struct Action {
+        LPTHREAD_START_ROUTINE Routine;
+        void *Param;
+    };
+
+    mutex Mutex;
+    HANDLE Event = nullptr;
+    deque<Action> Actions;
+
+    static DWORD WINAPI ProcessThread(LPVOID param) {
+        ReusableThread *self = (ReusableThread *)param;
+
+        while (true) {
+            WaitForSingleObject(self->Event, INFINITE);
+
+            Action action;
+            {
+                lock_guard<mutex> lock(self->Mutex);
+                if (self->Actions.empty()) {
+                    continue;
+                }
+
+                action = self->Actions.front();
+                self->Actions.pop_front();
+            }
+
+            action.Routine(action.Param);
+        }
+    }
+
+public:
+    void CreateThread(LPTHREAD_START_ROUTINE routine, void *param) {
+        lock_guard<mutex> lock(Mutex);
+        if (!Event) {
+            Event = CreateEventW(nullptr, false, false, nullptr);
+            CloseHandle(::CreateThread(nullptr, 0, ProcessThread, this, 0, nullptr));
+        }
+
+        if (Actions.empty()) {
+            SetEvent(Event);
+        }
+        Actions.push_back({routine, param});
     }
 };
 
@@ -93,21 +142,19 @@ class ReliablePostThreadMessage // regular PostThreadMessage doesn't work early 
 {
     mutex Mutex;
     vector<tuple<UINT, WPARAM, LPARAM>> InitialMessages;
-    WeakAtomic<bool> Initialized = false;
+    WeakAtomic<DWORD> Thread = 0;
 
 public:
-    // thread must be constant for the lifetime of a ReliablePostThreadMessage
-    // and must match the id of the thread that calls Initialize
-    void Post(DWORD thread, int msg, WPARAM w, LPARAM l) {
-        if (!Initialized) {
+    void Post(int msg, WPARAM w, LPARAM l) {
+        if (!Thread) {
             lock_guard<mutex> lock(Mutex);
-            if (!Initialized) {
+            if (!Thread) {
                 InitialMessages.push_back({msg, w, l});
                 return;
             }
         }
 
-        PostThreadMessageW(thread, msg, w, l);
+        PostThreadMessageW(Thread, msg, w, l);
         // (note: may still fail at shutdown time)
     }
 
@@ -118,8 +165,8 @@ public:
         MSG dummy;
         PeekMessageW(&dummy, NULL, WM_USER, WM_USER, PM_NOREMOVE);
 
+        DWORD thread = GetCurrentThreadId();
         if (!InitialMessages.empty()) {
-            DWORD thread = GetCurrentThreadId();
             for (auto [msg, w, l] : InitialMessages) {
                 PostThreadMessageW(thread, msg, w, l);
             }
@@ -127,6 +174,36 @@ public:
             InitialMessages.clear();
             InitialMessages.shrink_to_fit();
         }
-        Initialized = true;
+        Thread = thread;
     }
 };
+
+int wsprintfT(char *dest, const char *src, ...) {
+    va_list va;
+    va_start(va, src);
+    int ret = wvsprintfA(dest, src, va);
+    va_end(va);
+    return ret;
+}
+int wsprintfT(wchar_t *dest, const wchar_t *src, ...) {
+    va_list va;
+    va_start(va, src);
+    int ret = wvsprintfW(dest, src, va);
+    va_end(va);
+    return ret;
+}
+
+#define FORMAT_GUID_BUFSIZE 39
+
+template <class tchar>
+void FormatGuid(tchar dest[FORMAT_GUID_BUFSIZE], GUID guid) {
+    wsprintfT(dest, TSTR("{%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}"),
+              (int)guid.Data1, (int)guid.Data2, (int)guid.Data3, (int)guid.Data4[0], (int)guid.Data4[1],
+              (int)guid.Data4[2], (int)guid.Data4[3], (int)guid.Data4[4], (int)guid.Data4[5], (int)guid.Data4[6], (int)guid.Data4[7]);
+}
+
+ostream &operator<<(ostream &o, const GUID &guid) {
+    wchar_t buffer[FORMAT_GUID_BUFSIZE];
+    FormatGuid(buffer, guid);
+    return o << buffer;
+}

@@ -6,7 +6,7 @@
 #include "UtilsBuffer.h"
 #include "WinUtils.h"
 
-bool gUniqLogDeviceOpen;
+UniqueLog gUniqLogDeviceOpen;
 
 class ImplProcessPipeThread {
     DeviceIntf *Device;
@@ -193,7 +193,7 @@ public:
     }
 
     bool Matches(const wchar_t *path) {
-        return wcseq(path, FinalName);
+        return tstreq(path, FinalName);
     }
 
     ULONG GetPollFreq() { return PollFreq; }
@@ -244,6 +244,7 @@ public:
             } else {
                 SendReport(local_lock, CreateReport());
             }
+            return true;
         });
         GInfiniteThreadPool.CreateThread(ImplProcessPipeThread::ProcessThread, this);
     }
@@ -273,10 +274,9 @@ public:
                                          FILE_ATTRIBUTE_NORMAL | (flags & FILE_FLAG_OVERLAPPED), nullptr);
 
         if (pipe == INVALID_HANDLE_VALUE || client == INVALID_HANDLE_VALUE) {
-            LOG << "failed creating pipe" << END;
+            LOG_ERR << "failed creating pipe" << END;
         } else {
-            if (!gUniqLogDeviceOpen) {
-                gUniqLogDeviceOpen = true;
+            if (gUniqLogDeviceOpen) {
                 LOG << "Opening device via file API" << END;
             }
             if (G.ApiDebug) {
@@ -312,7 +312,7 @@ public:
             }
         }
 
-        LOG << "Couldn't find pipe thread?" << END;
+        LOG_ERR << "Couldn't find pipe thread?" << END;
         SetLastError(ERROR_GEN_FAILURE);
         return FALSE;
     }
@@ -323,17 +323,21 @@ void ImplProcessPipeThread::OnEnded() {
     GPipeThreads.OnPipeThreadEnded(this, Device->UserIdx);
 }
 
-DeviceIntf *GetDeviceByHandle(HANDLE handle, Path *outPath = nullptr) {
+DeviceNode *GetDeviceNodeByHandle(wchar_t finalPathBuf[MAX_PATH], HANDLE handle, DeviceIntf **outDevice = nullptr) {
     if (GetFileType(handle) == FILE_TYPE_PIPE) {
-        Path finalPath = PathGetFinalPath(handle, FILE_NAME_OPENED | VOLUME_NAME_NT);
-        if (finalPath) {
+        int finalPathSize = GetFinalPathNameByHandleW(handle, finalPathBuf, MAX_PATH, FILE_NAME_OPENED | VOLUME_NAME_NT);
+        if (finalPathSize >= 0 && finalPathSize < MAX_PATH) {
             for (int i = 0; i < IMPL_MAX_USERS; i++) {
                 DeviceIntf *device = ImplGetDevice(i);
-                if (device && wcsneq(finalPath, device->FinalPipePrefix, device->FinalPipePrefixLen)) {
-                    if (outPath) {
-                        *outPath = move(finalPath);
+                if (device && tstrneq(finalPathBuf, device->FinalPipePrefix, device->FinalPipePrefixLen)) {
+                    const wchar_t *nodePrefix = finalPathBuf + device->FinalPipePrefixLen;
+                    DeviceNode *node =
+                        tstrneq(nodePrefix, L"xusb.", 5) ? &device->XUsbNode : device;
+
+                    if (outDevice) {
+                        *outDevice = device;
                     }
-                    return device;
+                    return node;
                 }
             }
         }
@@ -342,48 +346,42 @@ DeviceIntf *GetDeviceByHandle(HANDLE handle, Path *outPath = nullptr) {
     return nullptr;
 }
 
-HANDLE WINAPI CreateFileA_Hook(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
-                               DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
-    if (lpFileName && strnieq(lpFileName, DEVICE_NAME_PREFIX, DEVICE_NAME_PREFIX_LEN)) {
-        for (int i = 0; i < IMPL_MAX_USERS; i++) {
-            DeviceIntf *device = ImplGetDevice(i);
-            if (device && device->IsHid && strieq(lpFileName, device->DevicePathA)) {
-                if (G.ApiDebug) {
-                    LOG << "CreateFileA (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
-                }
-                return GPipeThreads.CreatePipeHandle(device, dwFlagsAndAttributes);
-            } else if (device && device->IsXUsb && strieq(lpFileName, device->XDevicePathA)) {
-                if (G.ApiDebug) {
-                    LOG << "CreateFileA (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
-                }
-                return XUsbCreateFile(device, dwFlagsAndAttributes);
-            }
-        }
-    }
-
-    return CreateFileA_Real(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+DeviceNode *GetDeviceNodeByHandle(HANDLE handle, DeviceIntf **outDevice = nullptr) {
+    wchar_t finalPathBuf[MAX_PATH];
+    return GetDeviceNodeByHandle(finalPathBuf, handle, outDevice);
 }
 
-HANDLE WINAPI CreateFileW_Hook(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
-                               DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
-    if (lpFileName && wcsnieq(lpFileName, DEVICE_NAME_PREFIX_W, DEVICE_NAME_PREFIX_LEN)) {
+template <class tchar, class TOrigCall>
+HANDLE WINAPI CreateFile_GenHook(const tchar *lpFileName, DWORD dwDesiredAccess, DWORD dwFlagsAndAttributes, TOrigCall origCall) {
+    if (lpFileName && tstrnieq(lpFileName, TSTR(R"(\\?\HID#)"), 8)) {
         for (int i = 0; i < IMPL_MAX_USERS; i++) {
             DeviceIntf *device = ImplGetDevice(i);
-            if (device && device->IsHid && wcsieq(lpFileName, device->DevicePathW)) {
+            if (device && device->HasHid() && tstrieq(lpFileName, device->DevicePath<tchar>())) {
                 if (G.ApiDebug) {
-                    LOG << "CreateFileW (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
+                    LOG << "CreateFile (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
                 }
                 return GPipeThreads.CreatePipeHandle(device, dwFlagsAndAttributes);
-            } else if (device && device->IsXUsb && wcsieq(lpFileName, device->XDevicePathW)) {
+            } else if (device && device->HasXUsb() && tstrieq(lpFileName, device->XUsbNode.DevicePath<tchar>())) {
                 if (G.ApiDebug) {
-                    LOG << "CreateFileW (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
+                    LOG << "CreateFile (" << lpFileName << "," << dwDesiredAccess << "," << dwFlagsAndAttributes << ")" << END;
                 }
                 return XUsbCreateFile(device, dwFlagsAndAttributes);
             }
         }
     }
 
-    return CreateFileW_Real(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+    return origCall();
+}
+
+HANDLE WINAPI CreateFileA_Hook(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+                               DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
+    return CreateFile_GenHook(lpFileName, dwDesiredAccess, dwFlagsAndAttributes,
+                              [&] { return CreateFileA_Real(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile); });
+}
+HANDLE WINAPI CreateFileW_Hook(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+                               DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
+    return CreateFile_GenHook(lpFileName, dwDesiredAccess, dwFlagsAndAttributes,
+                              [&] { return CreateFileW_Real(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile); });
 }
 
 static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, DWORD dwIoControlCode, LPVOID lpInBuffer, DWORD nInBufferSize,
@@ -392,10 +390,10 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
     switch (dwIoControlCode) {
     case IOCTL_HID_GET_COLLECTION_INFORMATION:
         return ProcessDeviceIoControlOutput<HID_COLLECTION_INFORMATION>(
-            lpOutBuffer, nOutBufferSize, lpBytesReturned, [device](HID_COLLECTION_INFORMATION *info) {
+            lpOutBuffer, nOutBufferSize, lpBytesReturned, [&](HID_COLLECTION_INFORMATION *info) {
                 ZeroMemory(info, sizeof(HID_COLLECTION_INFORMATION));
                 info->DescriptorSize = device->PreparsedSize;
-                info->Polled = TRUE;
+                info->Polled = FALSE; // WGI wants this to be FALSE
                 info->VendorID = device->VendorId;
                 info->ProductID = device->ProductId;
                 info->VersionNumber = device->VersionNum;
@@ -404,7 +402,7 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
 
     case IOCTL_HID_GET_COLLECTION_DESCRIPTOR:
         return ProcessDeviceIoControlOutput<uint8_t>(
-            lpOutBuffer, nOutBufferSize, lpBytesReturned, [device](uint8_t *dest) {
+            lpOutBuffer, nOutBufferSize, lpBytesReturned, [&](uint8_t *dest) {
                 CopyMemory(dest, device->Preparsed, device->PreparsedSize);
                 return TRUE;
             },
@@ -421,7 +419,7 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
 
     case IOCTL_HID_GET_INDEXED_STRING:
         return ProcessDeviceIoControlInput<ULONG>(
-            lpInBuffer, nInBufferSize, [device, lpOutBuffer, nOutBufferSize, lpBytesReturned](ULONG *ptr) {
+            lpInBuffer, nInBufferSize, [&](ULONG *ptr) {
                 auto str = device->GetIndexedString(*ptr);
                 if (str) {
                     return ProcessDeviceIoControlOutputString(str, lpOutBuffer, nOutBufferSize, lpBytesReturned);
@@ -432,28 +430,28 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
             });
 
     case IOCTL_HID_SET_POLL_FREQUENCY_MSEC:
-        return ProcessDeviceIoControlInput<ULONG>(lpInBuffer, nInBufferSize, [device, finalPath](ULONG *ptr) {
+        return ProcessDeviceIoControlInput<ULONG>(lpInBuffer, nInBufferSize, [&](ULONG *ptr) {
             return GPipeThreads.WithPipeThread(device, finalPath, [ptr](ImplProcessPipeThread *thread) {
                 thread->SetPollFreq(*ptr);
             });
         });
 
     case IOCTL_HID_GET_POLL_FREQUENCY_MSEC:
-        return ProcessDeviceIoControlOutput<ULONG>(lpOutBuffer, nOutBufferSize, lpBytesReturned, [device, finalPath](ULONG *ptr) {
+        return ProcessDeviceIoControlOutput<ULONG>(lpOutBuffer, nOutBufferSize, lpBytesReturned, [&](ULONG *ptr) {
             return GPipeThreads.WithPipeThread(device, finalPath, [ptr](ImplProcessPipeThread *thread) {
                 *ptr = thread->GetPollFreq();
             });
         });
 
     case IOCTL_SET_NUM_DEVICE_INPUT_BUFFERS:
-        return ProcessDeviceIoControlInput<ULONG>(lpInBuffer, nInBufferSize, [device, finalPath](ULONG *ptr) {
+        return ProcessDeviceIoControlInput<ULONG>(lpInBuffer, nInBufferSize, [&](ULONG *ptr) {
             return GPipeThreads.WithPipeThread(device, finalPath, [ptr](ImplProcessPipeThread *thread) {
                 thread->SetMaxBuffers(*ptr);
             });
         });
 
     case IOCTL_GET_NUM_DEVICE_INPUT_BUFFERS:
-        return ProcessDeviceIoControlOutput<ULONG>(lpOutBuffer, nOutBufferSize, lpBytesReturned, [device, finalPath](ULONG *ptr) {
+        return ProcessDeviceIoControlOutput<ULONG>(lpOutBuffer, nOutBufferSize, lpBytesReturned, [&](ULONG *ptr) {
             return GPipeThreads.WithPipeThread(device, finalPath, [ptr](ImplProcessPipeThread *thread) {
                 *ptr = thread->GetMaxBuffers();
             });
@@ -503,7 +501,7 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
         return FALSE;
 
     default:
-        LOG << "Unknown device io control: " << dwIoControlCode << END;
+        LOG_ERR << "Unknown device io control: " << dwIoControlCode << END;
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
@@ -515,19 +513,20 @@ BOOL WINAPI DeviceIoControl_Hook(HANDLE hDevice, DWORD dwIoControlCode, LPVOID l
 
     if ((deviceType == FILE_DEVICE_KEYBOARD || deviceType == IOCTL_XUSB_DEVICE_TYPE) &&
         GetFileType(hDevice) == FILE_TYPE_PIPE) {
-        Path finalPath;
-        DeviceIntf *device = GetDeviceByHandle(hDevice, &finalPath);
-
-        if (device) {
+        wchar_t finalPathBuf[MAX_PATH];
+        DeviceIntf *device = nullptr;
+        DeviceNode *node = GetDeviceNodeByHandle(finalPathBuf, hDevice, &device);
+        if (node) {
             if (G.ApiDebug) {
                 LOG << "DeviceIoControl (" << dwIoControlCode << ", " << (lpOverlapped ? "overlapped" : "normal") << ")" << END;
             }
 
             DWORD bytesReturnedBuf = 0;
             lpBytesReturned = lpBytesReturned ? lpBytesReturned : &bytesReturnedBuf;
-            BOOL result = deviceType == FILE_DEVICE_KEYBOARD ? ImplDoDeviceIoControl(finalPath, device, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned) : XUsbDeviceIoControl(device, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned);
+            bool isAsync = false;
+            BOOL result = deviceType == FILE_DEVICE_KEYBOARD ? ImplDoDeviceIoControl(finalPathBuf, device, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned) : XUsbDeviceIoControl(finalPathBuf, device, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned, hDevice, lpOverlapped, &isAsync);
 
-            if (lpOverlapped) {
+            if (lpOverlapped && !isAsync) {
                 lpOverlapped->Internal = result ? 0 : GetLastError();
                 lpOverlapped->InternalHigh = *lpBytesReturned;
 
@@ -544,7 +543,7 @@ BOOL WINAPI DeviceIoControl_Hook(HANDLE hDevice, DWORD dwIoControlCode, LPVOID l
 }
 
 void HookDeviceApi() {
-    AddGlobalHook(&CreateFileA_Real, CreateFileA_Hook);
-    AddGlobalHook(&CreateFileW_Real, CreateFileW_Hook);
-    AddGlobalHook(&DeviceIoControl_Real, DeviceIoControl_Hook);
+    ADD_GLOBAL_HOOK(CreateFileA);
+    ADD_GLOBAL_HOOK(CreateFileW);
+    ADD_GLOBAL_HOOK(DeviceIoControl);
 }

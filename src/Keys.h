@@ -2,7 +2,7 @@
 #include "UtilsBase.h"
 #include <Windows.h>
 
-// (Special custom vk definitions)
+// (Special custom vk definitions. should avoid rearranging)
 enum {
     MY_VK_NUMPAD_RETURN = VK_CANCEL, // something unused, but within public range
     MY_VK_LAST_REAL = 0x100,
@@ -94,11 +94,13 @@ enum {
     MY_VK_TOGGLE_HIDE_CURSOR,
     MY_VK_TOGGLE_ALWAYS,
     MY_VK_CUSTOM,
+    MY_VK_TOGGLE_SPARE_FOR_DEBUG,
     MY_VK_LAST_CMD,
 
     MY_VK_FIRST_USER_CMD = 0xc500,
     MY_VK_SET_ACTIVE_USER,
     MY_VK_HOLD_ACTIVE_USER,
+    MY_VK_TOGGLE_CONNECTED,
     MY_VK_LAST_USER_CMD,
 
     MY_VK_FIRST_PAD_OUTPUT = 0xd500, // currently not covered by MyVkType/etc
@@ -338,14 +340,16 @@ enum {
     e(MY_VK_PAD_RTHUMB_LEFT_ROTATOR, "%rotrleft");    \
     //
 
-#define ENUMERATE_CMD_VKS(e)                         \
-    e(MY_VK_NONE, "none");                           \
-    e(MY_VK_RELOAD, "reload");                       \
-    e(MY_VK_TOGGLE_DISABLE, "toggledisable");        \
-    e(MY_VK_TOGGLE_HIDE_CURSOR, "togglehidecursor"); \
-    e(MY_VK_TOGGLE_ALWAYS, "togglealways");          \
-    e(MY_VK_SET_ACTIVE_USER, "setactive");           \
-    e(MY_VK_HOLD_ACTIVE_USER, "holdactive");         \
+#define ENUMERATE_CMD_VKS(e)                                \
+    e(MY_VK_NONE, "none");                                  \
+    e(MY_VK_RELOAD, "reload");                              \
+    e(MY_VK_TOGGLE_DISABLE, "toggledisable");               \
+    e(MY_VK_TOGGLE_HIDE_CURSOR, "togglehidecursor");        \
+    e(MY_VK_TOGGLE_ALWAYS, "togglealways");                 \
+    e(MY_VK_TOGGLE_SPARE_FOR_DEBUG, "togglesparefordebug"); \
+    e(MY_VK_SET_ACTIVE_USER, "setactive");                  \
+    e(MY_VK_HOLD_ACTIVE_USER, "holdactive");                \
+    e(MY_VK_TOGGLE_CONNECTED, "toggleconnected");           \
     //
 
 enum class MyVkSource : byte {

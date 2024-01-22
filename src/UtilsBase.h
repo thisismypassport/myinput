@@ -20,19 +20,25 @@
 #define QWORD unsigned __int64 // fix windows.h messup (for NEXTRAWINPUTBLOCK)
 #define NOMINMAX               // for later including of windows.h
 
+#define CONCAT(x, y) x##y
+
 using std::mutex;
 using recmutex = std::recursive_mutex;
 using std::atomic;
 using std::deque;
 using std::forward;
 using std::function;
+using std::initializer_list;
 using std::istream;
 using std::list;
 using std::lock_guard;
+using std::make_signed_t;
 using std::make_tuple;
+using std::make_unsigned_t;
 using std::max;
 using std::min;
 using std::move;
+using std::numeric_limits;
 using std::ostream;
 using std::size;
 using std::string;
@@ -50,13 +56,15 @@ using std::wstringstream;
 
 constexpr auto _ = std::ignore;
 
-template <class T>
-T DivRoundUp(T value, T by) {
+template <class T1, class T2>
+auto DivRoundUp(T1 value, T2 by) // assumes non-negative
+{
     return (value + (by - 1)) / by;
 }
 
-template <class T>
-T RoundUp(T value, T by) {
+template <class T1, class T2>
+auto RoundUp(T1 value, T2 by) // assumes non-negative
+{
     int rem = value % by;
     if (rem) {
         value += by - rem;
@@ -64,15 +72,28 @@ T RoundUp(T value, T by) {
     return value;
 }
 
-template <class T>
-T Clamp(T value, T minval, T maxval) {
-    return min(max(value, minval), maxval);
+template <class T1, class T2, class T3>
+auto Clamp(T1 value, T2 minval, T3 maxval) -> std::common_type_t<T2, T3> {
+    if (value < (T1)minval) {
+        return minval;
+    } else if (value > (T1)maxval) {
+        return maxval;
+    } else {
+        return (std::common_type_t<T2, T3>)value;
+    }
 }
 
 template <class IntT, class T>
 IntT ClampToInt(T value) {
-    value = Clamp(value, (T)std::numeric_limits<IntT>::min(), (T)std::numeric_limits<IntT>::max());
-    return (IntT)nearbyint(value);
+    if (value < (T)std::numeric_limits<IntT>::min()) {
+        return std::numeric_limits<IntT>::min();
+    } else if (value > (T)std::numeric_limits<IntT>::max()) {
+        return std::numeric_limits<IntT>::max();
+    } else if constexpr (std::is_floating_point_v<T>) {
+        return (IntT)nearbyint(value);
+    } else {
+        return (IntT)value;
+    }
 }
 
 template <class T>
@@ -143,6 +164,7 @@ public:
     T get() const { return atomic.load(std::memory_order_acquire); }
     void set(T value) { atomic.store(value, std::memory_order_release); }
     T exchange(T value) { return atomic.exchange(value, std::memory_order_acq_rel); }
+    bool compare_exchange(T &expected, T value) { return atomic.compare_exchange_strong(expected, value, std::memory_order_acq_rel); }
 
     operator T() const { return get(); }
     T operator=(T value) {
@@ -150,6 +172,8 @@ public:
         return value;
     }
     void operator=(const WeakAtomic<T> &other) { set(other.get()); }
+
+    T operator->() { return get(); }
 };
 
 template <class F>
@@ -174,8 +198,13 @@ public:
     template <class... TArgs>
     void Call(TArgs... args) {
         lock_guard<mutex> lock(Mutex);
-        for (auto &cb : List) {
-            cb(forward<TArgs>(args)...);
+        auto iter = List.begin();
+        while (iter != List.end()) {
+            if ((*iter)(forward<TArgs>(args)...)) {
+                ++iter;
+            } else {
+                iter = List.erase(iter);
+            }
         }
     }
 };

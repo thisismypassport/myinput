@@ -75,7 +75,7 @@
     <IntDir>Build\$(Configuration)-$(Platform)-test\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <OutDir>$(SolutionDir)Run\$(Configuration)-$(Platform)\</OutDir>
+    <OutDir>$(SolutionDir)Run\$(Platform)\</OutDir>
     <IntDir>Build\$(Configuration)-$(Platform)-test\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -83,7 +83,7 @@
     <IntDir>Build\$(Configuration)-$(Platform)-test\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)Run\$(Configuration)-$(Platform)\</OutDir>
+    <OutDir>$(SolutionDir)Run\$(Platform)\</OutDir>
     <IntDir>Build\$(Configuration)-$(Platform)-test\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -102,7 +102,7 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>myinput_hook.dll</DelayLoadDLLs>
       <AdditionalLibraryDirectories>$(OutDir)</AdditionalLibraryDirectories>
     </Link>
@@ -119,7 +119,7 @@
       <OmitFramePointers>false</OmitFramePointers>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>myinput_hook.dll</DelayLoadDLLs>
       <AdditionalLibraryDirectories>$(OutDir)</AdditionalLibraryDirectories>
     </Link>
@@ -135,7 +135,7 @@
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>myinput_hook.dll</DelayLoadDLLs>
       <AdditionalLibraryDirectories>$(OutDir)</AdditionalLibraryDirectories>
     </Link>
@@ -157,7 +157,7 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>myinput_hook.dll</DelayLoadDLLs>
       <AdditionalLibraryDirectories>$(OutDir)</AdditionalLibraryDirectories>
     </Link>
@@ -178,13 +178,7 @@
     <Text Include="notes.txt" />
   </ItemGroup>
   <ItemGroup>
-    <CopyFileToFolders Include="myinput_test_subconf.ini">
-      <FileType>Document</FileType>
-      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(OutDir)\..\Configs</DestinationFolders>
-      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)\..\Configs</DestinationFolders>
-      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(OutDir)\..\Configs</DestinationFolders>
-      <DestinationFolders Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)\..\Configs</DestinationFolders>
-    </CopyFileToFolders>
+    <ClInclude Include="TestUtils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

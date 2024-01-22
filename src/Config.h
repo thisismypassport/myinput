@@ -1,23 +1,27 @@
 #pragma once
-#include "State.h"
+#include "StateUtils.h"
 #include "Devices.h"
 #include <fstream>
+
+struct ConfigCustomMap {
+    unordered_map<string, int> Keys;
+    unordered_map<string, int> Vars;
+};
 
 struct ConfigState {
     list<Path> LoadedFiles;
     unordered_set<wstring_view> LoadedFilesSet;
     Path MainFile;
     Path Directory;
-
-    unordered_map<string, int> CustomKeys;
-    unordered_map<string, function<void(const string &)>> CustomVars;
+    ConfigCustomMap CustomMap;
+    vector<function<void(const string &)>> CustomVarCbs;
 } GConfig;
 
 bool ConfigLoadFrom(const wchar_t *filename);
 
-string ConfigReadToken(const string &str, intptr_t *startPtr) {
+string ConfigReadToken(const string &str, intptr_t *startPtr, bool welded = false) {
     intptr_t start = *startPtr;
-    while ((size_t)start < str.size() && isspace(str[start])) {
+    while ((size_t)start < str.size() && isspace(str[start]) && !welded) {
         start++;
     }
 
@@ -37,7 +41,7 @@ string ConfigReadToken(const string &str, intptr_t *startPtr) {
     return str.substr(start, end - start);
 }
 
-int ConfigReadKey(const string &str, int *outUser, bool output = false) {
+int ConfigReadKey(const ConfigCustomMap &custom, const string &str, int *outUser, bool output = false) {
 #define CONFIG_ON_KEY(vk, name, ...) \
     if (strLow == name)              \
         return vk;                   \
@@ -60,14 +64,16 @@ int ConfigReadKey(const string &str, int *outUser, bool output = false) {
         ENUMERATE_CMD_VKS(CONFIG_ON_KEY);
     }
 
-    auto customKeyIter = GConfig.CustomKeys.find(strLow);
-    if (customKeyIter != GConfig.CustomKeys.end()) {
+    auto customKeyIter = custom.Keys.find(strLow);
+    if (customKeyIter != custom.Keys.end()) {
         *outUser = customKeyIter->second;
         return MY_VK_CUSTOM;
     }
 
     LOG << "ERROR: Invalid key: " << str << END;
     return 0;
+
+#undef CONFIG_ON_KEY
 }
 
 int ConfigReadUser(const string &str) {
@@ -110,7 +116,7 @@ double ConfigReadRate(const string &str) {
     return 0.02;
 }
 
-SharedPtr<ImplCond> ConfigReadCond(const string &line, intptr_t *idxPtr) {
+SharedPtr<ImplCond> ConfigReadCond(const ConfigCustomMap &custom, const string &line, intptr_t *idxPtr) {
     string condStr = ConfigReadToken(line, idxPtr);
     auto cond = SharedPtr<ImplCond>::New();
     cond->State = true;
@@ -130,7 +136,7 @@ SharedPtr<ImplCond> ConfigReadCond(const string &line, intptr_t *idxPtr) {
     if (condStr == "(") {
         int condType = 0;
         while (true) {
-            auto subcond = ConfigReadCond(line, idxPtr);
+            auto subcond = ConfigReadCond(custom, line, idxPtr);
             subcond->Next = cond->Child;
             cond->Child = subcond;
 
@@ -160,7 +166,7 @@ SharedPtr<ImplCond> ConfigReadCond(const string &line, intptr_t *idxPtr) {
 
         cond->Key = condType ? condType : MY_VK_META_COND_AND;
     } else {
-        cond->Key = ConfigReadKey(condStr, &cond->User);
+        cond->Key = ConfigReadKey(custom, condStr, &cond->User);
 
         if (GetKeyType(cond->Key).Pair) {
             auto cond1 = SharedPtr<ImplCond>::New(*cond);
@@ -177,20 +183,31 @@ SharedPtr<ImplCond> ConfigReadCond(const string &line, intptr_t *idxPtr) {
     return cond;
 }
 
-SharedPtr<ImplMapping> ConfigReadInputLine(const string &line) {
+SharedPtr<ImplMapping> ConfigReadInputLine(const ConfigCustomMap &custom, const string &line, intptr_t idx = 0) {
     auto cfg = SharedPtr<ImplMapping>::New();
 
-    intptr_t idx = 0;
     string inputStr = ConfigReadToken(line, &idx);
-    string colon = ConfigReadToken(line, &idx);
-    string outputStr = ConfigReadToken(line, &idx);
 
-    if (colon != ":") {
-        LOG << "ERROR: ':' expected after key name in: " << line << END;
-        return nullptr;
+    string inUserStr;
+    while (true) {
+        string token = ConfigReadToken(line, &idx);
+        if (token.empty()) {
+            LOG << "ERROR: ':' expected after key name in: " << line << END;
+            return nullptr;
+        }
+
+        if (token == "@") {
+            inUserStr = ConfigReadToken(line, &idx);
+        } else if (token == ":") {
+            break;
+        } else {
+            LOG << "ERROR: Ignoring unknown token before ':' in mapping line: " << token << END;
+        }
     }
 
-    string userStr, strengthStr, rateStr;
+    string outputStr = ConfigReadToken(line, &idx);
+
+    string outUserStr, strengthStr, rateStr;
     while (true) {
         string token = ConfigReadToken(line, &idx);
         if (token.empty()) {
@@ -215,12 +232,12 @@ SharedPtr<ImplMapping> ConfigReadInputLine(const string &line) {
                 LOG << "ERROR: Invalid option: " << optStr << END;
             }
         } else if (token == "?") {
-            auto cond = ConfigReadCond(line, &idx);
+            auto cond = ConfigReadCond(custom, line, &idx);
 
             cond->Next = cfg->Conds;
             cfg->Conds = cond;
         } else if (token == "@") {
-            userStr = ConfigReadToken(line, &idx);
+            outUserStr = ConfigReadToken(line, &idx);
         } else if (token == "^") {
             rateStr = ConfigReadToken(line, &idx);
         } else if (token == "~") {
@@ -230,15 +247,18 @@ SharedPtr<ImplMapping> ConfigReadInputLine(const string &line) {
         }
     }
 
-    cfg->SrcKey = ConfigReadKey(inputStr, &cfg->SrcUser);
-    cfg->DestKey = ConfigReadKey(outputStr, &cfg->DestUser, true);
+    cfg->SrcKey = ConfigReadKey(custom, inputStr, &cfg->SrcUser);
+    cfg->DestKey = ConfigReadKey(custom, outputStr, &cfg->DestUser, true);
     cfg->Strength = ConfigReadStrength(strengthStr);
     cfg->Rate = ConfigReadRate(rateStr);
+    if (cfg->SrcKey != MY_VK_CUSTOM) {
+        cfg->SrcUser = ConfigReadUser(inUserStr);
+    }
     if (cfg->DestKey != MY_VK_CUSTOM) {
-        cfg->DestUser = ConfigReadUser(userStr);
+        cfg->DestUser = ConfigReadUser(outUserStr);
     }
 
-    LOG << "Mapping " << inputStr << " to " << outputStr << " of player " << (cfg->DestUser + 1) << " (strength " << cfg->Strength << ")" << END;
+    LOG << "Mapping " << inputStr << " to " << outputStr << END;
 
     return cfg;
 }
@@ -262,7 +282,7 @@ void ConfigCreateResets(const SharedPtr<ImplMapping> &mapping, ImplCond *cond) {
 }
 
 bool ConfigLoadInputLine(const string &line) {
-    auto cfg = ConfigReadInputLine(line);
+    auto cfg = ConfigReadInputLine(GConfig.CustomMap, line);
     if (!cfg) {
         return false;
     }
@@ -323,9 +343,12 @@ bool ConfigLoadInputLine(const string &line) {
     return true;
 }
 
+int ConfigReadDeviceIdx(const string &key) {
+    return ConfigReadUser(key.substr(6));
+}
+
 void ConfigLoadDevice(const string &key, const string &type) {
-    string userStr = key.substr(6);
-    int userIdx = ConfigReadUser(userStr);
+    int userIdx = ConfigReadDeviceIdx(key);
 
     ImplUser *user = ImplGetUser(userIdx, true);
     if (user) {
@@ -347,62 +370,53 @@ void ConfigLoadDevice(const string &key, const string &type) {
         }
         user->Connected = true;
     } else {
-        LOG << "ERROR: Invalid user number following Device: " << userStr << END;
+        LOG << "ERROR: Invalid user number following Device: " << userIdx << END;
+    }
+}
+
+Path ConfigReadInclude(const string &val) {
+    if (val.ends_with(".ini")) {
+        return PathFromStr(val.c_str());
+    } else {
+        return PathCombineExt(PathFromStr(val.c_str()), L"ini");
     }
 }
 
 void ConfigLoadInclude(const string &val) {
-    Path filename;
-    if (val.ends_with(".ini")) {
-        filename = PathFromStr(val.c_str());
-    } else {
-        filename = PathCombineExt(PathFromStr(val.c_str()), L"ini");
-    }
-
-    ConfigLoadFrom(filename);
+    ConfigLoadFrom(ConfigReadInclude(val));
 }
 
-void ConfigLoadExtraHook(const string &val) {
-    int numArgs = 0;
-    LPWSTR *args = CommandLineToArgvW(PathFromStr(val.c_str()), &numArgs);
+string ConfigReadPlugin(const string &val, const Path &pathUnderRoot, Path *outPath) {
+    intptr_t idx = 0;
+    string name = ConfigReadToken(val, &idx);
+    string rest = StrTrimmed(val.substr(idx));
 
-    Path dllPath;
-    bool is32 = false, is64 = false;
-    for (int argI = 0; argI < numArgs; argI++) {
-        if (wcseq(args[argI], L"-32")) {
-            is32 = true;
-        } else if (wcseq(args[argI], L"-64")) {
-            is64 = true;
-        } else if (!dllPath && args[argI][0] != L'-') {
-            dllPath = args[argI];
-        } else {
-            LOG << "ERROR: Invalid argument to !ExtraHook: " << args[argI] << END;
-        }
-    }
+    *outPath = rest.empty() ? PathCombine(PathCombine(PathGetDirName(pathUnderRoot), L"plugins"), PathFromStr(name.c_str())) : PathFromStr(rest.c_str());
 
-    if (!dllPath) {
-        LOG << "ERROR: dll path not supplied to !ExtraHook" << END;
-        return;
-    }
+    return name;
+}
+
+void ConfigLoadPlugin(const string &val) {
+    Path path;
+    string name = ConfigReadPlugin(val, GConfig.Directory, &path);
 
 #ifdef _WIN64
-    if (is32) {
-        return;
-    }
+    path = PathCombine(path, L"x64");
 #else
-    if (is64) {
-        return;
-    }
+    path = PathCombine(path, L"Win32");
 #endif
 
+    path = PathCombine(path, PathFromStr((name + "_hook.dll").c_str()));
+
     if (G.Debug) {
-        LOG << "Loading extra hook: " << dllPath << END;
+        LOG << "Loading extra hook: " << path << END;
     }
 
     // Load it immediately, to allow registering config extensions
     // (note: this means calling dll load from dllmain, which is not legal but seems-ok)
-    if (!LoadLibraryExW(dllPath, nullptr, 0)) {
-        LOG << "Failed loading extra hook: " << dllPath << " due to: " << GetLastError() << END;
+    // (only alternative I see is a complicated second injection, to avoid config loading from dllmain)
+    if (!LoadLibraryExW(path, nullptr, 0)) {
+        LOG << "Failed loading extra hook: " << path << " due to: " << GetLastError() << END;
     }
 }
 
@@ -419,8 +433,47 @@ bool ConfigReadBoolVar(const string &val) {
     return false;
 }
 
-bool ConfigLoadVarLine(const string &line) {
-    intptr_t idx = 1; // skipping initial '!'
+enum class ConfigVar {
+    Unknown,
+    Trace,
+    Debug,
+    ApiTrace,
+    ApiDebug,
+    WaitDebugger,
+    SpareForDebug,
+    Forward,
+    Always,
+    Disable,
+    HideCursor,
+    InjectChildren,
+    RumbleWindow,
+    Device,
+    Include,
+    Plugin,
+    Custom,
+};
+
+#define ENUMERATE_CONFIG_BOOL_VARS(e)                                  \
+    e(ConfigVar::Trace, "trace", &G.Trace);                            \
+    e(ConfigVar::Debug, "debug", &G.Debug);                            \
+    e(ConfigVar::ApiTrace, "apitrace", &G.ApiTrace);                   \
+    e(ConfigVar::ApiDebug, "apidebug", &G.ApiDebug);                   \
+    e(ConfigVar::WaitDebugger, "waitdebugger", &G.WaitDebugger);       \
+    e(ConfigVar::SpareForDebug, "sparefordebug", &G.SpareForDebug);    \
+    e(ConfigVar::Forward, "forward", &G.Forward);                      \
+    e(ConfigVar::Always, "always", &G.Always);                         \
+    e(ConfigVar::Disable, "disable", &G.Disable);                      \
+    e(ConfigVar::HideCursor, "hidecursor", &G.HideCursor);             \
+    e(ConfigVar::InjectChildren, "injectchildren", &G.InjectChildren); \
+    e(ConfigVar::RumbleWindow, "rumblewindow", &G.RumbleWindow);       \
+    //
+
+template <class TBoolHandler, class TCustomHandler>
+void ConfigReadVarLine(const ConfigCustomMap &custom, const string &line, intptr_t idx, TBoolHandler &&boolHandler, TCustomHandler &&customHandler) {
+#define CONFIG_ON_BOOL_VAR(cv, name, ptr) \
+    if (keyLow == name)                   \
+        return boolHandler(cv, ConfigReadBoolVar(val), ptr);
+
     string key = ConfigReadToken(line, &idx);
     string keyLow = StrLowerCase(key);
 
@@ -432,44 +485,47 @@ bool ConfigLoadVarLine(const string &line) {
         val = ConfigReadToken(line, &idx);
     }
 
-    if (keyLow == "trace") {
-        G.Trace = ConfigReadBoolVar(val);
-    } else if (keyLow == "debug") {
-        G.Debug = ConfigReadBoolVar(val);
-    } else if (keyLow == "apitrace") {
-        G.ApiTrace = ConfigReadBoolVar(val);
-    } else if (keyLow == "apidebug") {
-        G.ApiDebug = ConfigReadBoolVar(val);
-    } else if (keyLow == "waitdebugger") {
-        G.WaitDebugger = ConfigReadBoolVar(val);
-    } else if (keyLow == "forward") {
-        G.Forward = ConfigReadBoolVar(val);
-    } else if (keyLow == "always") {
-        G.Always = ConfigReadBoolVar(val);
-    } else if (keyLow == "disable") {
-        G.Disable = ConfigReadBoolVar(val);
-    } else if (keyLow == "hidecursor") {
-        G.HideCursor = ConfigReadBoolVar(val);
-    } else if (keyLow == "injectchildren") {
-        G.InjectChildren = ConfigReadBoolVar(val);
-    } else if (keyLow == "rumblewindow") {
-        G.RumbleWindow = ConfigReadBoolVar(val);
+    ENUMERATE_CONFIG_BOOL_VARS(CONFIG_ON_BOOL_VAR);
+
+    string rest = StrTrimmed(line.substr(validx));
+
+    if (keyLow == "include") {
+        return customHandler(ConfigVar::Include, keyLow, rest);
+    } else if (keyLow == "plugin") {
+        return customHandler(ConfigVar::Plugin, keyLow, rest);
     } else if (keyLow.starts_with("device")) {
-        ConfigLoadDevice(keyLow, val);
-    } else if (keyLow == "include") {
-        ConfigLoadInclude(val);
-    } else if (keyLow == "extrahook") {
-        ConfigLoadExtraHook(StrTrimmed(line.substr(validx)));
-    } else {
-        auto customIter = GConfig.CustomVars.find(keyLow);
-        if (customIter != GConfig.CustomVars.end()) {
-            customIter->second(StrTrimmed(line.substr(validx)));
-        } else {
-            LOG << "ERROR: Invalid variable: " << key << END;
-        }
+        return customHandler(ConfigVar::Device, keyLow, rest);
+    } else if (custom.Vars.contains(keyLow)) {
+        return customHandler(ConfigVar::Custom, keyLow, rest);
     }
 
-    return true;
+    LOG << "ERROR: Invalid variable: " << keyLow << END;
+    return customHandler(ConfigVar::Unknown, keyLow, rest);
+
+#undef CONFIG_ON_BOOL_VAR
+}
+
+void ConfigLoadVarLine(const string &line, intptr_t idx) {
+    ConfigReadVarLine(
+        GConfig.CustomMap, line, idx, [](auto, bool value, bool *ptr) { *ptr = value; }, [&line](ConfigVar var, const string &keyLow, const string &rest) {
+        switch (var)
+        {
+        case ConfigVar::Include:
+            ConfigLoadInclude (rest);
+            break;
+
+        case ConfigVar::Plugin:
+            ConfigLoadPlugin (rest);
+            break;
+
+        case ConfigVar::Device:
+            ConfigLoadDevice (keyLow, rest);
+            break;
+
+        case ConfigVar::Custom:
+            GConfig.CustomVarCbs[GConfig.CustomMap.Vars[keyLow]] (rest);
+            break;
+        } });
 }
 
 bool ConfigLoadFrom(const wchar_t *filename) {
@@ -490,26 +546,34 @@ bool ConfigLoadFrom(const wchar_t *filename) {
     }
 
     string line;
-    bool active = true;
+    int inactiveDepth = 0;
     while (getline(file, line)) {
-        line = StrTrimmed(line);
+        intptr_t idx = 0;
+        string token = ConfigReadToken(line, &idx);
 
-        if (line.empty()) {
+        if (token.empty()) {
             continue;
-        }
-
-        if (line.starts_with('#')) {
-            if (line.starts_with("#[")) {
-                active = false;
-            } else if (line.starts_with("#]")) {
-                active = true;
+        } else if (token == "#") {
+            string subtoken = ConfigReadToken(line, &idx, true);
+            if (subtoken == "[") {
+                inactiveDepth++;
+            } else if (subtoken == "]" && inactiveDepth > 0) {
+                inactiveDepth--;
             }
             continue;
-        }
-
-        if (active) {
-            if (line.starts_with('!')) {
-                ConfigLoadVarLine(line);
+        } else if (token == "[") {
+            if (inactiveDepth > 0) {
+                inactiveDepth++;
+            }
+            continue;
+        } else if (token == "]") {
+            if (inactiveDepth > 0) {
+                inactiveDepth--;
+            }
+            continue;
+        } else if (inactiveDepth == 0) {
+            if (token == "!") {
+                ConfigLoadVarLine(line, idx);
             } else {
                 ConfigLoadInputLine(line);
             }
@@ -563,6 +627,13 @@ void ConfigReload() {
     UpdateAll();
 }
 
+void ConfigRegisterCustomKey(ConfigCustomMap &custom, const string &name, int index) {
+    string nameLow = name;
+    StrToLowerCase(nameLow);
+    StrReplaceAll(nameLow, ".", "");
+    custom.Keys[nameLow] = index;
+}
+
 int ConfigRegisterCustomKey(const char *name, function<void(const InputValue &)> &&cb) {
     int index = (int)G.CustomKeys.size();
 
@@ -570,16 +641,19 @@ int ConfigRegisterCustomKey(const char *name, function<void(const InputValue &)>
     custKey->Callback = move(cb);
     G.CustomKeys.push_back(move(custKey));
 
-    string nameLow = name;
-    StrToLowerCase(nameLow);
-    StrReplaceAll(nameLow, ".", "");
-    GConfig.CustomKeys[nameLow] = index;
-
+    ConfigRegisterCustomKey(GConfig.CustomMap, name, index);
     return index;
 }
 
-void ConfigRegisterCustomVar(const char *name, function<void(const string &)> &&cb) {
+void ConfigRegisterCustomVar(ConfigCustomMap &custom, const char *name, int index) {
     string nameLow = name;
     StrToLowerCase(nameLow);
-    GConfig.CustomVars[nameLow] = move(cb);
+    custom.Vars[nameLow] = index;
+}
+
+void ConfigRegisterCustomVar(const char *name, function<void(const string &)> &&cb) {
+    int index = (int)GConfig.CustomVarCbs.size();
+    GConfig.CustomVarCbs.push_back(move(cb));
+
+    ConfigRegisterCustomVar(GConfig.CustomMap, name, index);
 }

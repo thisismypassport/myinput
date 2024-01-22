@@ -3,4 +3,8 @@
   <ItemGroup>
     <ClCompile Include="MyInputInject.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Inject.h" />
+    <ClInclude Include="Link.h" />
+  </ItemGroup>
 </Project>

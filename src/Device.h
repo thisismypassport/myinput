@@ -7,10 +7,6 @@
 #include "State.h"
 #include "LogUtils.h"
 
-#define DEVICE_NAME_PREFIX R"(\\?\HID#)"
-#define DEVICE_NAME_PREFIX_W LR"(\\?\HID#)"
-#define DEVICE_NAME_PREFIX_LEN 8
-
 struct PreparsedCap {
     USHORT Page = HID_USAGE_PAGE_GENERIC;
     UCHAR Report = 0, StartBit = 0;
@@ -116,17 +112,79 @@ struct PreparsedHeader {
 
 #define HID_USAGE_GENERIC_PAIR(x) HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_##x
 
-struct DeviceIntf {
-    bool IsHid = true;
-    bool IsXUsb = false;
+#define AW_SELECTOR(name)                        \
+    template <class tchar>                       \
+    const tchar *name();                         \
+    template <>                                  \
+    const char *name<char>() { return name##A; } \
+    template <>                                  \
+    const wchar_t *name<wchar_t>() { return name##W; }
+
+#define DEVICE_NODE_TYPE_HID (1 << 0)
+#define DEVICE_NODE_TYPE_XUSB (1 << 1)
+#define DEVICE_NODE_TYPE_COUNT 2
+
+const GUID GUID_DEVCLASS_XUSB = {0xd61ca365, 0x5af4, 0x4486, {0x99, 0x8b, 0x9d, 0xb4, 0x73, 0x4c, 0x6c, 0xa3}};
+const GUID GUID_DEVINTERFACE_XUSB = {0xEC87F1E3L, 0xC13B, 0x4100, {0xB5, 0xF7, 0x8B, 0x84, 0xD5, 0x42, 0x60, 0xCB}};
+
+struct DeviceNode {
     int UserIdx = 0;
+    int NodeType = 0;
+    PathA DevicePathA = nullptr;
+    Path DevicePathW;
+    PathA DeviceInstNameA = nullptr;
+    Path DeviceInstNameW;
+    PathA DeviceBaseNameA = nullptr;
+    Path DeviceBaseNameW;
+
+    AW_SELECTOR(DevicePath);
+    AW_SELECTOR(DeviceInstName);
+    AW_SELECTOR(DeviceBaseName);
+
+    bool IsXUsb() { return NodeType == DEVICE_NODE_TYPE_XUSB; }
+
+    GUID DeviceClassGuid() { return IsXUsb() ? GUID_DEVCLASS_XUSB : GUID_DEVCLASS_HIDCLASS; }
+    GUID DeviceIntfGuid() { return IsXUsb() ? GUID_DEVINTERFACE_XUSB : GUID_DEVINTERFACE_HID; }
+
+    template <class tchar>
+    const tchar *DeviceDescription() {
+        return IsXUsb() ? TSTR("Xbox 360 Controller for Windows") : TSTR("HID-compliant game controller");
+    }
+    template <class tchar>
+    const tchar *DeviceManufacturer() {
+        return IsXUsb() ? TSTR("Microsoft") : TSTR("(Standard system devices)");
+    }
+    template <class tchar>
+    const tchar *DeviceClass() {
+        return IsXUsb() ? TSTR("XnaComposite") : TSTR("HIDClass");
+    }
+    template <class tchar>
+    const tchar *DeviceClassGuidStr() {
+        return IsXUsb() ? TSTR("{d61ca365-5af4-4486-998b-9db4734c6ca3}") : TSTR("{745a17a0-74d3-11d0-b6fe-00a0c90f57da}");
+    }
+    template <class tchar>
+    const tchar *DeviceClassDriver() {
+        return IsXUsb() ? TSTR("{d61ca365-5af4-4486-998b-9db4734c6ca3}\\0001") : TSTR("{745a17a0-74d3-11d0-b6fe-00a0c90f57da}\\0006"); // ?
+    }
+    template <class tchar>
+    vector<const tchar *> DeviceHardwareIDs() {
+        return IsXUsb() ? vector<const tchar *>{DeviceBaseName<tchar>()} : // TODO: one more, with &REV_ at the beginning...
+                   vector<const tchar *>{DeviceBaseName<tchar>(), TSTR("HID_DEVICE_SYSTEM_GAME"), TSTR("HID_DEVICE_UP:0001_U:0005"), TSTR("HID_DEVICE")};
+    }
+};
+
+ostream &operator<<(ostream &o, DeviceNode *node) {
+    return o << node->UserIdx << ":" << node->NodeType;
+}
+
+struct DeviceIntf : public DeviceNode {
+    int Types = DEVICE_NODE_TYPE_HID;
 
     Path FinalPipePrefix;
     int FinalPipePrefixLen;
-    const char *DevicePathA = nullptr;
-    Path DevicePathW;
-    Path DeviceInstName;
-    Path DeviceBaseName;
+
+    DeviceNode XUsbNode;
+
     const wchar_t *ProductString = nullptr;
     const wchar_t *ManufacturerString = nullptr;
     const wchar_t *SerialString = nullptr;
@@ -135,8 +193,9 @@ struct DeviceIntf {
     int VersionNum = 0;
     const PreparsedHeader *Preparsed = nullptr;
     unsigned PreparsedSize = 0;
-    const char *XDevicePathA = nullptr;
-    Path XDevicePathW;
+
+    bool HasHid() { return Types & DEVICE_NODE_TYPE_HID; }
+    bool HasXUsb() { return Types & DEVICE_NODE_TYPE_XUSB; }
 
     virtual int CopyInputTo(uint8_t *dest) = 0;
     int CopyInputTo(uint8_t *dest, int size) {
@@ -193,27 +252,45 @@ struct DeviceIntf {
         FinalPipePrefix = Path(MAX_PATH);
         FinalPipePrefixLen = wsprintfW(FinalPipePrefix, LR"(\Device\NamedPipe\MyInputHook_%d.%d.)", GetCurrentProcessId(), userIdx);
 
-        const wchar_t *igSuffix = IsXUsb ? L"&IG_00" : L"";
-        const wchar_t *uidSuffix = L"6&20f390fc&0&00";
+        if (HasHid()) {
+            const wchar_t *igSuffix = HasXUsb() ? L"&IG_00" : L"";
+            const wchar_t *uidSuffix = L"6&20f390fc&0&00";
 
-        DeviceBaseName = Path(MAX_PATH);
-        wsprintfW(DeviceBaseName, LR"(HID\VID_%04X&PID_%04X%s)", VendorId, ProductId, igSuffix);
+            NodeType = DEVICE_NODE_TYPE_HID;
 
-        DeviceInstName = Path(MAX_PATH);
-        wsprintfW(DeviceInstName, LR"(%s\%s%02x)", DeviceBaseName.Get(), uidSuffix, userIdx);
+            DeviceBaseNameW = Path(MAX_PATH);
+            wsprintfW(DeviceBaseNameW, LR"(HID\VID_%04X&PID_%04X%s)", VendorId, ProductId, igSuffix);
+            DeviceBaseNameA = PathToStr(DeviceBaseNameW);
 
-        if (IsHid) {
+            DeviceInstNameW = Path(MAX_PATH);
+            wsprintfW(DeviceInstNameW, LR"(%s\%s%02x)", DeviceBaseNameW.Get(), uidSuffix, userIdx);
+            DeviceInstNameA = PathToStr(DeviceInstNameW);
+
             DevicePathW = Path(MAX_PATH);
             wsprintfW(DevicePathW, LR"(\\?\HID#VID_%04X&PID_%04X%s#%s%02x#{4d1e55b2-f16f-11cf-88cb-001111000030})",
                       VendorId, ProductId, igSuffix, uidSuffix, userIdx);
-            DevicePathA = PathToStrTake(DevicePathW);
+            DevicePathA = PathToStr(DevicePathW);
         }
 
-        if (IsXUsb) {
-            XDevicePathW = Path(MAX_PATH);
-            wsprintfW(XDevicePathW, LR"(\\?\HID#VID_%04X&PID_%04X%s#%s%02x#{ec87f1e3-c13b-4100-b5f7-8b84d54260cb})",
-                      VendorId, ProductId, igSuffix, uidSuffix, userIdx);
-            XDevicePathA = PathToStrTake(XDevicePathW);
+        if (HasXUsb()) {
+            const wchar_t *uidSuffix = L"C3C831";
+
+            auto &xusb = XUsbNode;
+            xusb.NodeType = DEVICE_NODE_TYPE_XUSB;
+            xusb.UserIdx = UserIdx;
+
+            xusb.DeviceBaseNameW = Path(MAX_PATH);
+            wsprintfW(xusb.DeviceBaseNameW, LR"(HID\VID_%04X&PID_%04X)", VendorId, ProductId);
+            xusb.DeviceBaseNameA = PathToStr(xusb.DeviceBaseNameW);
+
+            xusb.DeviceInstNameW = Path(MAX_PATH);
+            wsprintfW(xusb.DeviceInstNameW, LR"(%s\%s%02x)", xusb.DeviceBaseNameW.Get(), uidSuffix, userIdx);
+            xusb.DeviceInstNameA = PathToStr(xusb.DeviceInstNameW);
+
+            xusb.DevicePathW = Path(MAX_PATH);
+            wsprintfW(xusb.DevicePathW, LR"(\\?\HID#VID_%04X&PID_%04X#%s%02x#{ec87f1e3-c13b-4100-b5f7-8b84d54260cb})",
+                      VendorId, ProductId, uidSuffix, userIdx);
+            xusb.DevicePathA = PathToStr(xusb.DevicePathW);
         }
     }
 };

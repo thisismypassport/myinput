@@ -10,6 +10,7 @@
 #include "CfgMgr.h"
 #include "NotifyApi.h"
 #include "Log.h"
+#include "WbemApi.h"
 #include <Windows.h>
 
 void UpdateAll() {
@@ -24,7 +25,7 @@ void UpdateAll() {
 ReliablePostThreadMessage GDllThreadMsgQueue;
 
 void PostAppCallback(AppCallback cb, void *data) {
-    GDllThreadMsgQueue.Post(G.DllThread, WM_APP, (WPARAM)data, (LPARAM)cb);
+    GDllThreadMsgQueue.Post(WM_APP, (WPARAM)data, (LPARAM)cb);
 }
 
 void PostAppCallback(VoidCallback cb) {
@@ -47,6 +48,8 @@ static DWORD WINAPI DllThread(LPVOID param) {
 
     GDllThreadMsgQueue.Initialize();
 
+    SetEvent(G.InitEvent);
+
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
         if (msg.message == WM_APP) {
@@ -60,14 +63,13 @@ static DWORD WINAPI DllThread(LPVOID param) {
 }
 
 extern "C" {
-DLLEXPORT void MyInputHook_Log(const char *data, size_t size) {
-    Log(data, size >= 0 ? size : strlen(data));
+DLLEXPORT void MyInputHook_Log(const char *data, intptr_t size) {
+    Log(LogLevel::Default, data, size >= 0 ? size : strlen(data));
 }
 
-DLLEXPORT int MyInputHook_GetUserCount() // questionable use
-{
+DLLEXPORT int MyInputHook_InternalForTest() {
     UINT mask;
-    return ImplGetUsers(&mask);
+    return ImplGetUsers(&mask, DEVICE_NODE_TYPE_HID);
 }
 
 DLLEXPORT void MyInputHook_PostInDllThread(AppCallback cb, void *data) {
@@ -90,7 +92,14 @@ DLLEXPORT void MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const 
 DLLEXPORT void *MyInputHook_RegisterCallback(int userIdx, void (*cb)(int, void *), void *data) {
     DBG_ASSERT_DLL_THREAD();
     auto user = ImplGetUser(userIdx);
-    return user ? new ImplUserCb(user->Callbacks.Add([=](ImplUser *) { cb(userIdx, data); })) : nullptr;
+    if (!user) {
+        return nullptr;
+    }
+
+    return new ImplUserCb(user->Callbacks.Add([=](ImplUser *) {
+        cb(userIdx, data);
+        return true;
+    }));
 }
 
 DLLEXPORT void MyInputHook_UnregisterCallback(int userIdx, void *cbObj) {
@@ -120,6 +129,10 @@ DLLEXPORT void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double
     int index = (int)(uintptr_t)customKeyObj - 1;
     ImplOnCustomKey(index, InputValue{down, strength, time});
 }
+
+DLLEXPORT void MyInputHookInternal_WaitInit() {
+    WaitForSingleObject(G.InitEvent, INFINITE);
+}
 }
 
 BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -128,6 +141,9 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD ul_reason_for_call, LPVOID lpRe
         HMODULE dummy;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, (LPCWSTR)hInstance, &dummy);
         G.HInstance = hInstance;
+
+        G.DllThread = GetCurrentThreadId(); // temporary for asserts, until dll thread spins up
+        G.InitEvent = CreateEventW(nullptr, true, false, nullptr);
 
         Path rootDir = PathGetDirName(PathGetDirName(PathGetModulePath(G.HInstance)));
         Path baseName = PathGetBaseNameWithoutExt(PathGetModulePath(nullptr));
@@ -141,6 +157,7 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD ul_reason_for_call, LPVOID lpRe
         HookDeviceApi();
         HookNotifyApi();
         HookCfgMgr();
+        HookCom();
         HookWinHooks();
         HookWinInput();
         HookWinCursor();
@@ -150,6 +167,7 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD ul_reason_for_call, LPVOID lpRe
         Path config = PathGetEnvVar(L"MYINPUT_HOOK_CONFIG");
         ConfigInit(PathCombine(rootDir, L"Configs"), PathCombineExt(config ? config : baseName, L"ini"));
 
+        G.DllThread = 0;
         CloseHandle(CreateThread(nullptr, 0, DllThread, NULL, 0, &G.DllThread)); // do the rest on the thread, as it's not dllmain-safe
         LOG << "Initialized!" << END;
     } else if (ul_reason_for_call == DLL_THREAD_DETACH) {

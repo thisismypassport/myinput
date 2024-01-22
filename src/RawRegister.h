@@ -2,7 +2,7 @@
 #include "Impl.h"
 #include "Header.h"
 
-bool gUniqLogRawInputRegister;
+UniqueLog gUniqLogRawInputRegister;
 
 class RawInputRegBase {
 protected:
@@ -77,7 +77,7 @@ protected:
             break;
 
         default:
-            LOG << "Invalid uiCommand: " << uiCommand << END;
+            LOG_ERR << "Invalid uiCommand: " << uiCommand << END;
             break;
         }
 
@@ -116,11 +116,11 @@ public:
 class RawInputRegFullPage : public RawInputRegBase {
 public:
     void Register(HWND window, UINT flags) {
-        RawInputRegBase::Register(window, flags, [this]() {});
+        RawInputRegBase::Register(window, flags, [this] {});
     }
 
     void Unregister(UINT flags) {
-        RawInputRegBase::Unregister(flags, [this]() {});
+        RawInputRegBase::Unregister(flags, [this] {});
     }
 
     void UpdateRealRegister(bool force) {}
@@ -273,18 +273,18 @@ protected:
 
         if (PrevMapped != (int)mapped || force) {
             UINT exmode = RIDEV_EXMODE(Flags);
-            UINT redirectFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY |
-                                 (exmode == RIDEV_NOLEGACY ? exmode : 0) |
-                                 (Flags & (RIDEV_CAPTUREMOUSE | RIDEV_NOHOTKEYS | RIDEV_APPKEYS));
+            UINT mappedFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY |
+                               (exmode == RIDEV_NOLEGACY ? exmode : 0) |
+                               (Flags & (RIDEV_CAPTUREMOUSE | RIDEV_NOHOTKEYS | RIDEV_APPKEYS));
 
             RAWINPUTDEVICE device;
             device.hwndTarget = mapped ? (devDisallowed ? 0 : G.DllWindow) : Window;
             device.usUsagePage = HID_USAGE_PAGE_GENERIC;
             device.usUsage = devUsage;
-            device.dwFlags = mapped ? (devDisallowed ? RIDEV_EXCLUDE : redirectFlags) : (Registered ? Flags : RIDEV_EXCLUDE);
+            device.dwFlags = mapped ? (devDisallowed ? RIDEV_EXCLUDE : mappedFlags) : (Registered ? Flags : RIDEV_EXCLUDE);
 
             if (!RegisterRawInputDevices_Real(&device, 1, sizeof(RAWINPUTDEVICE))) {
-                LOG << "Error registering real raw input device" << END;
+                LOG_ERR << "Error registering real raw input device" << END;
             }
 
             PrevMapped = mapped;
@@ -295,7 +295,7 @@ protected:
 
 public:
     void Register(HWND window, UINT flags) {
-        RawInputRegBase::Register(window, flags, [this]() {
+        RawInputRegBase::Register(window, flags, [this] {
             BufList = GBufferLists.Get(BufSize);
 
             if (Flags & RIDEV_DEVNOTIFY) {
@@ -307,7 +307,7 @@ public:
     }
 
     void Unregister(UINT flags) {
-        RawInputRegBase::Unregister(flags, [this]() {});
+        RawInputRegBase::Unregister(flags, [this] {});
     }
 
     bool InNoLegacyMode() { return NoLegacy; }
@@ -429,15 +429,14 @@ public:
     RawInputRegGamepad() : RawInputReg(GamepadInputHandleHighStart) {}
 
     void Register(HWND window, UINT flags) {
-        if (!gUniqLogRawInputRegister) {
-            gUniqLogRawInputRegister = true;
+        if (gUniqLogRawInputRegister) {
             LOG << "Listening to device events via RawInput API" << END;
         }
         if (G.ApiDebug) {
             LOG << "RegisterRawInputGamepad - registering for " << window << END;
         }
 
-        RawInputRegBase::Register(window, flags, [this]() {
+        RawInputRegBase::Register(window, flags, [this] {
             for (int i = 0; i < IMPL_MAX_USERS; i++) {
                 DeviceIntf *device = ImplGetDevice(i);
                 if (device) {
@@ -447,6 +446,7 @@ public:
 
                     reg.CbIter = G.Users[i].Callbacks.Add([this](ImplUser *user) {
                         OnMessage(user);
+                        return true;
                     });
 
                     if (Flags & RIDEV_DEVNOTIFY) {
@@ -458,6 +458,7 @@ public:
             if (Flags & RIDEV_DEVNOTIFY) {
                 NotifyCbIter = G.GlobalCallbacks.Add([this](ImplUser *user, bool added) {
                     OnNotifyMessage(user, added);
+                    return true;
                 });
             }
         });
@@ -468,7 +469,7 @@ public:
             LOG << "RegisterRawInputGamepad - unregistering" << END;
         }
 
-        RawInputRegBase::Unregister(flags, [this]() {
+        RawInputRegBase::Unregister(flags, [this] {
             for (int i = 0; i < IMPL_MAX_USERS; i++) {
                 if (Regs[i].Active) {
                     G.Users[i].Callbacks.Remove(Regs[i].CbIter);

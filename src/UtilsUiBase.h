@@ -48,3 +48,15 @@ Path SelectFileForOpen(const wchar_t *filters = nullptr, const wchar_t *title = 
 Path SelectFileForSave(const wchar_t *filters = nullptr, const wchar_t *title = nullptr, bool overwritePrompt = true) {
     return SelectFile(false, filters, title, overwritePrompt);
 }
+
+#define DEFINE_ALERT_ON_LOG(min_level)                       \
+    void Log(LogLevel level, const char *str, size_t size) { \
+        if (level >= min_level)                              \
+            Alert(L"%hs", str);                              \
+    }
+
+void TurnOffFeedbackCursor() {
+    MSG msg;
+    PostMessageW(NULL, WM_NULL, 0, 0);
+    GetMessageW(&msg, NULL, 0, 0);
+}

@@ -52,6 +52,12 @@
     </ClInclude>
     <ClInclude Include="Log.h" />
     <ClInclude Include="WinCursor.h" />
+    <ClInclude Include="WbemApi.h" />
+    <ClInclude Include="ComApi.h" />
+    <ClInclude Include="StateUtils.h" />
+    <ClInclude Include="ComUtils.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Utils">

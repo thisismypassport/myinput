@@ -1,60 +1,67 @@
 #pragma once
 #include "UtilsBase.h"
+#include "UtilsStr.h"
 #include <Windows.h>
 
-class Path {
-    wchar_t *Buffer;
+template <class tchar>
+class BasicPath {
+    tchar *Buffer;
 
 public:
-    Path() : Buffer(nullptr) {}
+    BasicPath() : Buffer(nullptr) {}
 
-    Path(size_t size) {
+    BasicPath(size_t size) {
         if (size) {
-            Buffer = new wchar_t[size];
+            Buffer = new tchar[size];
             Buffer[0] = L'\0';
         } else {
             Buffer = nullptr;
         }
     }
 
-    Path(const wchar_t *source, size_t count) : Path(count + 1) {
-        wcsncpy(Buffer, source, count);
-        Buffer[count] = L'\0';
+    BasicPath(const tchar *source, size_t count) : BasicPath(source ? count + 1 : 0) {
+        if (source) {
+            tstrncpy(Buffer, source, count);
+            Buffer[count] = L'\0';
+        }
     }
 
-    Path(const wchar_t *source, const wchar_t *end) : Path(source, end - source) {}
-    Path(const wchar_t *source) : Path(source, wcslen(source)) {}
+    BasicPath(const tchar *source, const tchar *end) : BasicPath(source, end - source) {}
+    BasicPath(const tchar *source) : BasicPath(source, source ? tstrlen(source) : 0) {}
 
-    Path(const Path &other) = delete;
+    BasicPath(const BasicPath<tchar> &other) = delete;
 
-    Path(Path &&other) : Buffer(other.Buffer) {
+    BasicPath(BasicPath<tchar> &&other) : Buffer(other.Buffer) {
         other.Buffer = nullptr;
     }
 
-    ~Path() {
+    ~BasicPath() {
         delete[] Buffer;
     }
 
-    void operator=(const Path &other) = delete;
+    void operator=(const BasicPath<tchar> &other) = delete;
 
-    void operator=(Path &&other) {
+    void operator=(BasicPath<tchar> &&other) {
         delete[] Buffer;
         Buffer = other.Buffer;
         other.Buffer = nullptr;
     }
 
-    const wchar_t *Get() const { return Buffer; }
-    wchar_t *Get() { return Buffer; }
+    const tchar *Get() const { return Buffer; }
+    tchar *Get() { return Buffer; }
 
-    wchar_t *Take() {
-        wchar_t *taken = Buffer;
+    tchar *Take() {
+        tchar *taken = Buffer;
         Buffer = nullptr;
         return taken;
     }
 
-    operator const wchar_t *() const { return Buffer; }
-    operator wchar_t *() { return Buffer; }
+    operator const tchar *() const { return Buffer; }
+    operator tchar *() { return Buffer; }
 };
+
+using PathA = BasicPath<char>;
+using Path = BasicPath<wchar_t>;
 
 Path PathFromStr(const char *str) {
     int size = MultiByteToWideChar(CP_UTF8, 0, str, -1, nullptr, 0);
@@ -64,10 +71,10 @@ Path PathFromStr(const char *str) {
     return dest;
 }
 
-char *PathToStrTake(const wchar_t *path) {
+PathA PathToStr(const wchar_t *path) {
     int size = WideCharToMultiByte(CP_UTF8, 0, path, -1, nullptr, 0, nullptr, nullptr);
 
-    char *dest = new char[size];
+    PathA dest(size);
     WideCharToMultiByte(CP_UTF8, 0, path, -1, dest, size, nullptr, nullptr);
     return dest;
 }
@@ -77,6 +84,14 @@ Path PathGetFullPath(const wchar_t *path) {
 
     Path dest(size);
     GetFullPathNameW(path, size, dest, nullptr);
+    return dest;
+}
+
+Path PathGetCurrentDirectory() {
+    DWORD size = GetCurrentDirectoryW(0, nullptr);
+
+    Path dest(size);
+    GetCurrentDirectoryW(size, dest);
     return dest;
 }
 
@@ -100,21 +115,15 @@ Path PathGetModulePath(HMODULE module) {
     }
 }
 
-Path PathGetFinalPath(HANDLE handle, DWORD flags) {
-    DWORD size = GetFinalPathNameByHandleW(handle, nullptr, 0, flags);
-
-    Path dest(size);
-    GetFinalPathNameByHandleW(handle, dest, size, flags);
-    return dest;
+const wchar_t *PathGetBaseNamePtr(const wchar_t *path) {
+    const wchar_t *path_sep = wcsrchr(path, L'\\');
+    const wchar_t *path_sep2 = wcsrchr(path_sep ? path_sep : path, L'/');
+    return path_sep2 ? path_sep2 + 1 : path_sep ? path_sep + 1
+                                                : path;
 }
 
 Path PathGetBaseName(const wchar_t *path) {
-    const wchar_t *path_sep = wcsrchr(path, L'\\');
-    const wchar_t *path_sep2 = wcsrchr(path_sep ? path_sep : path, L'/');
-    const wchar_t *start = path_sep2 ? path_sep2 + 1 : path_sep ? path_sep + 1
-                                                                : path;
-
-    return Path(start);
+    return Path(PathGetBaseNamePtr(path));
 }
 
 Path PathGetDirName(const wchar_t *path) {
@@ -126,18 +135,18 @@ Path PathGetDirName(const wchar_t *path) {
     return Path(path, end);
 }
 
-Path PathGetExt(const wchar_t *path) {
+const wchar_t *PathGetExtPtr(const wchar_t *path) {
     const wchar_t *path_sep = wcsrchr(path, L'\\');
     const wchar_t *path_sep2 = wcsrchr(path_sep ? path_sep : path, L'/');
     const wchar_t *start = path_sep2 ? path_sep2 + 1 : path_sep ? path_sep + 1
                                                                 : path;
 
     const wchar_t *ext = wcsrchr(start, L'.');
-    if (ext) {
-        return Path(ext + 1);
-    } else {
-        return Path();
-    }
+    return ext ? ext + 1 : L"";
+}
+
+Path PathGetExt(const wchar_t *path) {
+    return Path(PathGetExtPtr(path));
 }
 
 Path PathGetBaseNameWithoutExt(const wchar_t *path) {
@@ -187,9 +196,20 @@ Path PathCombineExt(const wchar_t *base, const wchar_t *ext) {
     return path;
 }
 
+Path PathConcatRaw(const wchar_t *path1, const wchar_t *path2) {
+    size_t len1 = wcslen(path1);
+    size_t len2 = wcslen(path2);
+
+    Path path(len1 + len2 + 1);
+    wcscpy(path, path1);
+    wcscpy(path + len1, path2);
+    path[len1 + len2] = L'\0';
+
+    return path;
+}
+
 ostream &operator<<(ostream &o, const wchar_t *wstr) {
-    char *str = PathToStrTake(wstr);
+    PathA str = PathToStr(wstr);
     o << str;
-    delete[] str;
     return o;
 }

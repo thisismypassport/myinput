@@ -20,10 +20,10 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
-    <ProjectGuid>{62123A4D-259B-4CBC-A5CD-643E20FE7A71}</ProjectGuid>
-    <RootNamespace>register</RootNamespace>
+    <ProjectGuid>{62123A4D-259B-4CBC-A5DD-643E20FE7A71}</ProjectGuid>
+    <RootNamespace>ui</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
-    <ProjectName>myinput_register</ProjectName>
+    <ProjectName>myinput_ui</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -72,19 +72,19 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <OutDir>$(SolutionDir)Run\$(Configuration)-$(Platform)\</OutDir>
-    <IntDir>Build\$(Configuration)-$(Platform)-register\</IntDir>
+    <IntDir>Build\$(Configuration)-$(Platform)-ui\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(SolutionDir)Run\$(Platform)\</OutDir>
-    <IntDir>Build\$(Configuration)-$(Platform)-register\</IntDir>
+    <IntDir>Build\$(Configuration)-$(Platform)-ui\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)Run\$(Configuration)-$(Platform)\</OutDir>
-    <IntDir>Build\$(Configuration)-$(Platform)-register\</IntDir>
+    <IntDir>Build\$(Configuration)-$(Platform)-ui\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)Run\$(Platform)\</OutDir>
-    <IntDir>Build\$(Configuration)-$(Platform)-register\</IntDir>
+    <IntDir>Build\$(Configuration)-$(Platform)-ui\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -104,7 +104,6 @@
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>kernel32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -120,7 +119,6 @@
     <Link>
       <AdditionalDependencies>kernel32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -136,7 +134,6 @@
     <Link>
       <AdditionalDependencies>kernel32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -157,14 +154,17 @@
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>kernel32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="MyInputRegister.cpp" />
+    <ClCompile Include="MyInputUi.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Registry.h" />
+    <ClInclude Include="ConfigEdit.h" />
+    <ClInclude Include="ConfigUi.h" />
+    <ClInclude Include="ExeUi.h" />
+    <ClInclude Include="ExeConfig.h" />
+    <ClInclude Include="LogUi.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

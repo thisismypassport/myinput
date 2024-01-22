@@ -1,5 +1,5 @@
 #pragma once
-#include "State.h"
+#include "StateUtils.h"
 #include "Config.h"
 #include "LogUtils.h"
 #include "Header.h"
@@ -10,6 +10,7 @@
 static bool ImplProcessMapping(ImplMapping *mapping, const InputValue &v, ChangedMask *changes, bool oldDown, bool reset);
 static void ImplToggleDisable();
 static void ImplToggleAlways();
+static void ImplToggleConnected(void *userId);
 
 static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *changes) {
     int key = mapping.DestKey;
@@ -19,7 +20,8 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
             userIndex = G.ActiveUser;
         }
 
-        ImplUser *user = ImplGetUser(userIndex);
+        bool isCmdKey = key >= MY_VK_FIRST_USER_CMD && key < MY_VK_LAST_USER_CMD;
+        ImplUser *user = ImplGetUser(userIndex, isCmdKey);
         if (!user) {
             return;
         }
@@ -244,6 +246,12 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
             }
             break;
 
+        case MY_VK_TOGGLE_CONNECTED:
+            if (!v.Down) {
+                PostAppCallback(ImplToggleConnected, (void *)(uintptr_t)userIndex);
+            }
+            break;
+
         default:
             Fatal("Invalid pad input action?!");
         }
@@ -275,6 +283,12 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
             if (!v.Down) {
                 G.HideCursor = !G.HideCursor;
                 UpdateHideCursor();
+            }
+            break;
+
+        case MY_VK_TOGGLE_SPARE_FOR_DEBUG:
+            if (!v.Down) {
+                G.SpareForDebug = !G.SpareForDebug;
             }
             break;
 
@@ -758,4 +772,11 @@ static void ImplToggleForeground(bool allowUpdateAll) {
     bool oldActive = G.IsActive();
     G.InForeground = !G.InForeground;
     ImplUpdateActive(oldActive, allowUpdateAll);
+}
+
+static void ImplToggleConnected(void *userIndex) {
+    auto user = &G.Users[(int)(uintptr_t)userIndex];
+
+    user->Connected = !user->Connected;
+    G.GlobalCallbacks.Call(user, user->Connected);
 }

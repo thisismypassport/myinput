@@ -102,7 +102,7 @@ static LRESULT CALLBACK ForegroundHook(int nCode, WPARAM wParam, LPARAM lParam) 
     if (nCode >= 0) {
         auto msg = (CWPSTRUCT *)lParam;
         if (msg->message == WM_NCACTIVATE) {
-            PostAppCallback([]() {
+            PostAppCallback([] {
                 UpdateInForeground();
                 UpdateHideCursor();
             });
@@ -386,9 +386,9 @@ void WinHooksDetachThread(DWORD threadId) {
 }
 
 void HookWinHooks() {
-    AddGlobalHook(&SetWindowsHookExA_Real, SetWindowsHookExA_Hook);
-    AddGlobalHook(&SetWindowsHookExW_Real, SetWindowsHookExW_Hook);
-    AddGlobalHook(&UnhookWindowsHookEx_Real, UnhookWindowsHookEx_Hook);
+    ADD_GLOBAL_HOOK(SetWindowsHookExA);
+    ADD_GLOBAL_HOOK(SetWindowsHookExW);
+    ADD_GLOBAL_HOOK(UnhookWindowsHookEx);
 }
 
 void DebugRemoveLowHooks() // for debugging purposes

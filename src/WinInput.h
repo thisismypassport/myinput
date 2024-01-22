@@ -161,11 +161,11 @@ BOOL WINAPI GetCIMSSM_Hook(INPUT_MESSAGE_SOURCE *msg) {
 }
 
 void HookWinInput() {
-    AddGlobalHook(&GetAsyncKeyState_Real, GetAsyncKeyState_Hook);
-    AddGlobalHook(&KeybdEvent_Real, KeybdEvent_Hook);
-    AddGlobalHook(&MouseEvent_Real, MouseEvent_Hook);
-    AddGlobalHook(&SendInput_Real, SendInput_Hook);
-    AddGlobalHook(&GetMessageExtraInfo_Real, GetMessageExtraInfo_Hook);
-    AddGlobalHook(&GetCurrentInputMessageSource_Real, GetCurrentInputMessageSource_Hook);
-    AddGlobalHook(&GetCIMSSM_Real, GetCIMSSM_Hook);
+    ADD_GLOBAL_HOOK(GetAsyncKeyState);
+    ADD_GLOBAL_HOOK(KeybdEvent);
+    ADD_GLOBAL_HOOK(MouseEvent);
+    ADD_GLOBAL_HOOK(SendInput);
+    ADD_GLOBAL_HOOK(GetMessageExtraInfo);
+    ADD_GLOBAL_HOOK(GetCurrentInputMessageSource);
+    ADD_GLOBAL_HOOK(GetCIMSSM);
 }

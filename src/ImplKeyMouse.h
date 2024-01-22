@@ -1,5 +1,5 @@
 #pragma once
-#include "State.h"
+#include "StateUtils.h"
 
 static int ImplUnextend(int virtKeyCode, bool extended) {
     switch (virtKeyCode) {
@@ -132,12 +132,12 @@ static int ImplKeyboardRepeatTime() {
 }
 
 static BufferListOfSize<sizeof(INPUT)> GImplInputBuffers;
+static ReusableThread GImplInputThread; // separate from dll thread to avoid recursive hook calls
 
-static void ImplSendInputDelayed(void *param) {
-    // We delay SendInput calls to avoid recursive/early hook calls
-
+static DWORD WINAPI ImplSendInputDelayed(void *param) {
     SendInput_Real(1, (INPUT *)param, sizeof(INPUT));
     GImplInputBuffers.Get()->PutBack(param);
+    return 0;
 }
 
 static void ImplGenerateMouseEventCommon(int flag, DWORD time, int data = 0) {
@@ -149,7 +149,7 @@ static void ImplGenerateMouseEventCommon(int flag, DWORD time, int data = 0) {
     input->mi.time = time;
     input->mi.dwExtraInfo = ExtraInfoOurInject;
 
-    PostAppCallback(ImplSendInputDelayed, input);
+    GImplInputThread.CreateThread(ImplSendInputDelayed, input);
 }
 
 static void ImplGenerateKey(int key, bool down, DWORD time) {
@@ -184,7 +184,7 @@ static void ImplGenerateKey(int key, bool down, DWORD time) {
     input->ki.time = time;
     input->ki.dwExtraInfo = ExtraInfoOurInject;
 
-    PostAppCallback(ImplSendInputDelayed, input);
+    GImplInputThread.CreateThread(ImplSendInputDelayed, input);
 }
 
 static void ImplGenerateMouseWheel(int flag, double strength, DWORD time) {
@@ -209,7 +209,7 @@ static void ImplGenerateMouseMotionFinish() {
     input->mi.time = G.Mouse.MotionChange.time;
     input->mi.dwExtraInfo = ExtraInfoOurInject;
 
-    PostAppCallback(ImplSendInputDelayed, input);
+    GImplInputThread.CreateThread(ImplSendInputDelayed, input);
 
     G.Mouse.MotionChange = {};
 }

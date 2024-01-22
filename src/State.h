@@ -123,7 +123,7 @@ struct ImplUser {
     bool Connected = false;
     bool DeviceSpecified = false;
     DeviceIntf *Device = nullptr;
-    CallbackList<void(ImplUser *)> Callbacks;
+    CallbackList<bool(ImplUser *)> Callbacks;
 };
 
 using ImplUserCb = decltype(ImplUser::Callbacks)::CbIter;
@@ -266,30 +266,22 @@ struct ImplG {
     bool InForeground = false;
     bool Paused = false;
 
-    bool Trace = false;
-    bool Debug = false;
-    bool ApiTrace = false;
-    bool ApiDebug = false;
-    bool WaitDebugger = false;
-    bool Forward = false;
-    bool Always = false;
-    bool Disable = false;
-    bool HideCursor = false;
-    bool InjectChildren = false;
-    bool RumbleWindow = false;
+    // reset by ResetVars
+    bool Trace, Debug, ApiTrace, ApiDebug, WaitDebugger, SpareForDebug;
+    bool Forward, Always, Disable, HideCursor, RumbleWindow;
+    bool InjectChildren;
 
     HINSTANCE HInstance = nullptr;
+    HANDLE InitEvent = nullptr;
     DWORD DllThread = 0;
     HWND DllWindow = nullptr;
 
-    CallbackList<void(ImplUser *, bool)> GlobalCallbacks;
+    CallbackList<bool(ImplUser *, bool)> GlobalCallbacks;
 
     bool IsActive() { return InForeground || Always; }
 
     void Reset() {
-        G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = false;
-        G.Forward = G.Always = G.Disable = G.HideCursor = false;
-        G.InjectChildren = G.RumbleWindow = false;
+        ResetVars();
         G.Keyboard.IsMapped = G.Mouse.IsMapped = false;
 
         for (int i = 0; i < IMPL_MAX_USERS; i++) {
@@ -304,89 +296,18 @@ struct ImplG {
             custom->Key.Reset();
         }
     }
+
+    ImplG() { ResetVars(); }
+
+private:
+    void ResetVars() {
+        G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = G.SpareForDebug = false;
+        G.Forward = G.Always = G.Disable = G.HideCursor = G.RumbleWindow = false;
+        G.InjectChildren = true;
+    }
 } G;
 
 using ImplGlobalCb = decltype(ImplG::GlobalCallbacks)::CbIter;
-
-static ImplUser *ImplGetUser(DWORD user, bool force = false) {
-    if (user < IMPL_MAX_USERS && (force || G.Users[user].Connected)) {
-        return &G.Users[user];
-    } else {
-        return nullptr;
-    }
-}
-
-static DeviceIntf *ImplGetDevice(DWORD user) {
-    ImplUser *data = ImplGetUser(user);
-    return data ? data->Device : nullptr;
-}
-
-template <class TCond>
-static int ImplGetUsers(UINT *outMask, TCond &&cond, int minUser = 0) {
-    UINT mask = 0;
-    int count = 0;
-    for (int i = minUser; i < IMPL_MAX_USERS; i++) {
-        if (G.Users[i].Connected && cond(G.Users[i].Device)) {
-            mask |= (1 << i);
-            count++;
-        }
-    }
-
-    *outMask = mask;
-    return count;
-}
-
-static int ImplGetUsers(UINT *outMask, int minUser = 0) {
-    return ImplGetUsers(
-        outMask, [](DeviceIntf *device) { return true; }, minUser);
-}
-
-static int ImplNextUser(UINT *refMask) {
-    DWORD userIdx = 0;
-    BitScanForward(&userIdx, *refMask);
-    *refMask &= ~(1 << userIdx);
-    return userIdx;
-}
-
-ImplInput *ImplGetInput(int key, int userIndex) {
-    ImplInput *input = G.Keyboard.Get(key);
-    if (input) {
-        return input;
-    }
-
-    switch (key) {
-    case MY_VK_WHEEL_UP:
-        return &G.Mouse.Wheel.Forward;
-    case MY_VK_WHEEL_DOWN:
-        return &G.Mouse.Wheel.Backward;
-    case MY_VK_WHEEL_RIGHT:
-        return &G.Mouse.HWheel.Forward;
-    case MY_VK_WHEEL_LEFT:
-        return &G.Mouse.HWheel.Backward;
-    case MY_VK_MOUSE_UP:
-        return &G.Mouse.Motion.Vert.Forward;
-    case MY_VK_MOUSE_DOWN:
-        return &G.Mouse.Motion.Vert.Backward;
-    case MY_VK_MOUSE_RIGHT:
-        return &G.Mouse.Motion.Horz.Forward;
-    case MY_VK_MOUSE_LEFT:
-        return &G.Mouse.Motion.Horz.Backward;
-
-    case MY_VK_CUSTOM:
-        if ((size_t)userIndex < G.CustomKeys.size()) {
-            return &G.CustomKeys[userIndex]->Key;
-        }
-        break;
-    }
-    return nullptr;
-}
-
-int ImplChooseBestKeyInPair(int key) {
-    auto [key1, key2] = GetKeyPair(key);
-    int scan1 = MapVirtualKeyW(key1, MAPVK_VK_TO_VSC);
-    int scan2 = MapVirtualKeyW(key2, MAPVK_VK_TO_VSC);
-    return (!scan1 && scan2) ? key2 : key1;
-}
 
 #define CUSTOM_ASSERT_DLL_THREAD(assert) \
     assert(GetCurrentThreadId() == G.DllThread, "wrong thread in call")

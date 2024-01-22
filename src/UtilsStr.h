@@ -1,8 +1,18 @@
 #pragma once
 #include "UtilsBase.h"
 
-size_t StrGetSize(const char *str) { return strlen(str); }
-size_t StrGetSize(const wchar_t *str) { return wcslen(str); }
+// (assumes tchar is a template param)
+#define TSTR(lit) (sizeof(tchar) == sizeof(char) ? (const tchar *)lit : (const tchar *)CONCAT(L, lit))
+#define TCHAR(lit) (sizeof(tchar) == sizeof(char) ? (tchar)lit : (tchar)CONCAT(L, lit))
+
+#define WSTR(lit) CONCAT(L, lit)
+
+size_t tstrlen(const char *str) { return strlen(str); }
+size_t tstrlen(const wchar_t *str) { return wcslen(str); }
+char *tstrcpy(char *dest, const char *src) { return strcpy(dest, src); }
+wchar_t *tstrcpy(wchar_t *dest, const wchar_t *src) { return wcscpy(dest, src); }
+char *tstrncpy(char *dest, const char *src, size_t len) { return strncpy(dest, src, len); }
+wchar_t *tstrncpy(wchar_t *dest, const wchar_t *src, size_t len) { return wcsncpy(dest, src, len); }
 
 template <class TChar>
 bool StrContains(const std::basic_string<TChar> &str, TChar ch) // removeme once C++23 hits
@@ -23,7 +33,7 @@ bool StrReplaceFirst(std::basic_string<TChar> &str, const TChar *other, const TC
         return false;
     }
 
-    str.replace(pos, StrGetSize(other), replacement);
+    str.replace(pos, tstrlen(other), replacement);
     return true;
 }
 
@@ -36,7 +46,7 @@ int StrReplaceAll(std::basic_string<TChar> &str, const TChar *other, const TChar
             return count;
         }
 
-        str.replace(pos, StrGetSize(other), replacement);
+        str.replace(pos, tstrlen(other), replacement);
         count++;
     }
 }
@@ -83,38 +93,12 @@ std::basic_string<TChar> StrLowerCase(const std::basic_string<TChar> &str) {
     return dest;
 }
 
-bool streq(const char *str1, const char *str2) { return strcmp(str1, str2) == 0; }
-bool strieq(const char *str1, const char *str2) { return _stricmp(str1, str2) == 0; }
-bool strneq(const char *str1, const char *str2, size_t count) { return strncmp(str1, str2, count) == 0; }
-bool strnieq(const char *str1, const char *str2, size_t count) { return _strnicmp(str1, str2, count) == 0; }
+bool tstreq(const char *str1, const char *str2) { return strcmp(str1, str2) == 0; }
+bool tstrieq(const char *str1, const char *str2) { return _stricmp(str1, str2) == 0; }
+bool tstrneq(const char *str1, const char *str2, size_t count) { return strncmp(str1, str2, count) == 0; }
+bool tstrnieq(const char *str1, const char *str2, size_t count) { return _strnicmp(str1, str2, count) == 0; }
 
-bool wcseq(const wchar_t *str1, const wchar_t *str2) { return wcscmp(str1, str2) == 0; }
-bool wcsieq(const wchar_t *str1, const wchar_t *str2) { return _wcsicmp(str1, str2) == 0; }
-bool wcsneq(const wchar_t *str1, const wchar_t *str2, size_t count) { return wcsncmp(str1, str2, count) == 0; }
-bool wcsnieq(const wchar_t *str1, const wchar_t *str2, size_t count) { return _wcsnicmp(str1, str2, count) == 0; }
-
-const wchar_t *wcsistr(const wchar_t *str, const wchar_t *subStr) {
-    if (!*subStr) {
-        return str;
-    }
-
-    wchar_t l = towlower(*subStr);
-    wchar_t u = towupper(*subStr);
-
-    for (; *str; ++str) {
-        if (*str == l || *str == u) {
-            const wchar_t *s1 = str + 1;
-            const wchar_t *s2 = subStr + 1;
-
-            while (*s1 && *s2 && towlower(*s1) == towlower(*s2)) {
-                ++s1, ++s2;
-            }
-
-            if (!*s2) {
-                return str;
-            }
-        }
-    }
-
-    return nullptr;
-}
+bool tstreq(const wchar_t *str1, const wchar_t *str2) { return wcscmp(str1, str2) == 0; }
+bool tstrieq(const wchar_t *str1, const wchar_t *str2) { return _wcsicmp(str1, str2) == 0; }
+bool tstrneq(const wchar_t *str1, const wchar_t *str2, size_t count) { return wcsncmp(str1, str2, count) == 0; }
+bool tstrnieq(const wchar_t *str1, const wchar_t *str2, size_t count) { return _wcsnicmp(str1, str2, count) == 0; }

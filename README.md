@@ -11,33 +11,60 @@ If you find this useful, and have any requests or suggestions, let me know via o
 
 # Usage
 
+You can run myinput.exe to open a window, from which you can:
+
 ## One-time Run
 
-You can always drag an executable to Release-x64\myinput_inject.exe to run it with myinput just this time.
+To run an executable under myinput just once, click on "Launch New (One-Time)" on the bottom right of the myinput window.
+
+Alternatively, in Windows Explorer, just drag the executable you want to run to x64\myinput_inject.exe
 
 ## Register to Always Run
 
-You can drag an executable to Release-x64\myinput_register.exe to register it so that myinput will always run with it.
+To register an executable so that - whenever you launch it - it is launched through my input, click on "Register New" (near the bottom right of the myinput window).
 
-You can drag it again to unregister it.
+Alternatively, in Windows Explorer, just drag the executable you want to register to x64\myinput_register.exe (you can drag it again to unregister it)
 
-You can also run Release-x64\myinput_register.exe directly to see what is registered and unregister it (also contains a few more shortcut buttons to edit configs, etc.)
-
-Using myinput_register.exe requires admin permissions (as it uses Image File Execution Options to change how the executable runs).
+Note: Registering an executable requires admin permissions (as it uses Image File Execution Options to change how the executable runs).
 
 ## Mapping Configuration
 
-Edit Configs/_default.ini to change the default key mapping.
+The configuration file specify which keys map to which keys/buttons.
 
-By default, the file maps keyboard keys to a XBox360 controller.
+You can open the global configuration file by clicking "Edit Global Config" (or opening Configs\_default.ini directly).
 
-You can see various mapping examples in Config/myinput_test.ini and Config/myinput_test_subconf.ini (do not copy the \#\[ and \#\] lines)
+### Default Configuration File
 
-You can see a reference of the configuration file format in Config/_default.ini
+By default, it maps keyboard keys to a XBox360 controller.
 
-## Per-Executable Mapping
+The lines at the top of the file (that start with a '#') are comments that describe the configuration format, whereas the lines below map keys to various buttons.
 
-If you have an executable named Hello.exe, you can create a Configs/Hello.ini file with the configuration for that executable. (Used instead of the default config).
+For example: (these are all parts of the default configuration)
+* It maps the "C" key to the "A" button (written as "%A").
+* It maps the "Up" key to the left analog stick up direction (written as "%L.Up")
+* It maps the left shift ("LShift") to modify the range of the left analog stick movement ("%Mod.L") by a half ("~ 0.5")
+* It maps the "Pause" key to disable all other key mappings until pressed again.
+* It maps the "F12" key to reload key mappings from the config file.
+
+Note that lines that start with "#" are ignored.
+
+### Advanced Configuration Examples
+
+You can see more advanced examples in Config\myinput_test.ini
+
+(Do not copy the \#\[ and \#\] line - they cause the whole block to be ignored)
+
+For example: (these are NOT parts of the default configuration, just examples of what you can do)
+* It maps the "Numpad1" key to rotate the left analog stick up ("%Rot.L.Up")
+* It contains lines mapping keys & mouse buttons to other keys & mouse buttons, such as mapping "MButton" (middle mouse button) to "XButton1" (first extra mouse button)
+* It contains lines (below "MISC KEY FEATURES") that maps "Q" to turbo-press "Z", maps "A" to toggle "Z", and maps "1" to toggle turbo of "Z". (and below, you can see toggle & turbo also works on controller buttons)
+* At the bottom, it defines 2 controllers ("!Device1 = X360" and "!Device2 = PS4"). Much above, it maps "F2" to "SetActive @2" which switches all mappings to use the 2nd controller.
+
+### Per-Executable Configuration
+
+You can specify a configuration for each executable, by either:
+* Clicking "Edit Config" and answering "Yes" to create a configuration for that executable.
+* Toggling "Use Config", writing the name of the config in the edit box, and clicking "Apply". (This allows you to have multiple executables using the same custom config file)
 
 # Building from Source
 
@@ -50,7 +77,8 @@ Then just build with MSVC 2022 or above.
 It hooks:
 - The RawInput API
 - The CfgMgr API
-- The hid device IOCTLs (used by DirectInput)
-- The xusb device IOCTLs (used by XInput)
+- The hid device IOCTLs (used by DirectInput & etc.)
+- The xusb device IOCTLs (used by XInput & WGI)
 - low-level keyboard & mouse events
+- The wbem interface (currently partial, to match existing common uses)
 - Misc. APIs to improve compatibility.

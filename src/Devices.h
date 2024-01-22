@@ -10,7 +10,7 @@ struct NoDeviceIntf : public DeviceIntf {
     NoDeviceIntf(int userIdx) {
         SerialString = ManufacturerString = ProductString = L"";
         VendorId = ProductId = VersionNum = 0;
-        IsHid = false;
+        Types &= ~DEVICE_NODE_TYPE_HID;
 
         Init(userIdx);
     }
@@ -86,7 +86,7 @@ struct XDeviceIntf : public DeviceIntf {
         VendorId = 0x45e;
         ProductId = 0x28e;
         VersionNum = 0x100;
-        IsXUsb = true;
+        Types |= DEVICE_NODE_TYPE_XUSB;
         Preparsed = &PreparsedData.Header;
         PreparsedSize = sizeof(XHidPreparsedData);
 

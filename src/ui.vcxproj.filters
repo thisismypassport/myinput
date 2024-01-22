@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="MyInputUi.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Ui">
+      <UniqueIdentifier>{d7e2a559-bee7-4355-84cc-4d5f78bc2f87}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ExeUi.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ConfigUi.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="LogUi.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

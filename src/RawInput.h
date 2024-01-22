@@ -5,7 +5,7 @@
 #include "UtilsBuffer.h"
 #include "RawRegister.h"
 
-bool gUniqLogRawInputFind;
+UniqueLog gUniqLogRawInputFind;
 
 #ifndef _WIN64
 BOOL gWow64;
@@ -31,14 +31,14 @@ UINT WINAPI GetRawInputDeviceList_Hook(PRAWINPUTDEVICELIST pRawInputDeviceList, 
     }
 
     UINT usersMask;
-    int usersCount = ImplGetUsers(&usersMask, [](DeviceIntf *dev) { return dev->IsHid; });
+    int usersCount = ImplGetUsers(&usersMask, DEVICE_NODE_TYPE_HID);
 
     UINT result = GetRawInputDeviceList_Real(pRawInputDeviceList, puiNumDevices, cbSize);
     bool ok = result != INVALID_UINT_VALUE;
 
     if (ok && pRawInputDeviceList && puiNumDevices) {
         if (cbSize != sizeof(RAWINPUTDEVICELIST)) {
-            LOG << "Unknown input device list size: " << cbSize << END;
+            LOG_ERR << "Unknown input device list size: " << cbSize << END;
         } else if (result + usersCount > *puiNumDevices) {
             *puiNumDevices = result + usersCount;
             result = INVALID_UINT_VALUE;
@@ -82,25 +82,18 @@ static UINT ProcessRawInputDeviceInfo(UINT expectedSize, LPVOID pData, PUINT pcb
     }
 }
 
-static UINT GetRawCustomDeviceInfo(UINT uiCommand, LPVOID pData, PUINT pcbSize, DeviceIntf *device, bool wide) {
+template <class tchar>
+static UINT GetRawCustomDeviceInfo(UINT uiCommand, LPVOID pData, PUINT pcbSize, DeviceIntf *device) {
+    UINT strSize;
     switch (uiCommand) {
     case RIDI_DEVICENAME:
-        if (!gUniqLogRawInputFind) {
-            gUniqLogRawInputFind = true;
+        if (gUniqLogRawInputFind) {
             LOG << "Found device via RawInput API" << END;
         }
-        if (wide) {
-            UINT strSize = (UINT)wcslen(device->DevicePathW) + 1; // yes, not multiplied by sizeof(wchar_t)
-            return ProcessRawInputDeviceInfo<wchar_t>(strSize, pData, pcbSize, [device](wchar_t *ptr) {
-                wcscpy(ptr, device->DevicePathW);
-            });
-        } else {
-            UINT strSize = (UINT)strlen(device->DevicePathA) + 1;
-            return ProcessRawInputDeviceInfo<char>(strSize, pData, pcbSize, [device](char *ptr) {
-                strcpy(ptr, device->DevicePathA);
-            });
-        }
-        break;
+        strSize = (UINT)tstrlen(device->DevicePathW) + 1; // yes, not multiplied by sizeof(tchar)
+        return ProcessRawInputDeviceInfo<tchar>(strSize, pData, pcbSize, [device](tchar *ptr) {
+            tstrcpy(ptr, device->DevicePath<tchar>());
+        });
 
     case RIDI_DEVICEINFO:
         return ProcessRawInputDeviceInfo<RID_DEVICE_INFO>(
@@ -121,7 +114,7 @@ static UINT GetRawCustomDeviceInfo(UINT uiCommand, LPVOID pData, PUINT pcbSize, 
         });
 
     default:
-        LOG << "Unknown raw device command: " << uiCommand << END;
+        LOG_ERR << "Unknown raw device command: " << uiCommand << END;
         SetLastError(ERROR_INVALID_PARAMETER);
         return -1;
     }
@@ -133,8 +126,8 @@ UINT WINAPI GetRawInputDeviceInfoA_Hook(HANDLE hDevice, UINT uiCommand, LPVOID p
     }
 
     DeviceIntf *device = GetCustomHandleDevice(hDevice);
-    if (device && device->IsHid) {
-        return GetRawCustomDeviceInfo(uiCommand, pData, pcbSize, device, false);
+    if (device && device->HasHid()) {
+        return GetRawCustomDeviceInfo<char>(uiCommand, pData, pcbSize, device);
     } else {
         return GetRawInputDeviceInfoA_Real(hDevice, uiCommand, pData, pcbSize);
     }
@@ -146,8 +139,8 @@ UINT WINAPI GetRawInputDeviceInfoW_Hook(HANDLE hDevice, UINT uiCommand, LPVOID p
     }
 
     DeviceIntf *device = GetCustomHandleDevice(hDevice);
-    if (device && device->IsHid) {
-        return GetRawCustomDeviceInfo(uiCommand, pData, pcbSize, device, true);
+    if (device && device->HasHid()) {
+        return GetRawCustomDeviceInfo<wchar_t>(uiCommand, pData, pcbSize, device);
     } else {
         return GetRawInputDeviceInfoW_Real(hDevice, uiCommand, pData, pcbSize);
     }
@@ -422,11 +415,11 @@ void HookRawInput() {
     IsWow64Process(GetCurrentProcess(), &gWow64);
 #endif
 
-    AddGlobalHook(&GetRawInputDeviceList_Real, GetRawInputDeviceList_Hook);
-    AddGlobalHook(&GetRawInputDeviceInfoA_Real, GetRawInputDeviceInfoA_Hook);
-    AddGlobalHook(&GetRawInputDeviceInfoW_Real, GetRawInputDeviceInfoW_Hook);
-    AddGlobalHook(&GetRawInputData_Real, GetRawInputData_Hook);
-    AddGlobalHook(&GetRawInputBuffer_Real, GetRawInputBuffer_Hook);
-    AddGlobalHook(&RegisterRawInputDevices_Real, RegisterRawInputDevices_Hook);
-    AddGlobalHook(&GetRegisteredRawInputDevices_Real, GetRegisteredRawInputDevices_Hook);
+    ADD_GLOBAL_HOOK(GetRawInputDeviceList);
+    ADD_GLOBAL_HOOK(GetRawInputDeviceInfoA);
+    ADD_GLOBAL_HOOK(GetRawInputDeviceInfoW);
+    ADD_GLOBAL_HOOK(GetRawInputData);
+    ADD_GLOBAL_HOOK(GetRawInputBuffer);
+    ADD_GLOBAL_HOOK(RegisterRawInputDevices);
+    ADD_GLOBAL_HOOK(GetRegisteredRawInputDevices);
 }

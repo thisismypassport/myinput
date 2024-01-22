@@ -1,13 +1,14 @@
 #pragma once
 #include "Hook.h"
 #include "Device.h"
+#include "CfgMgr.h"
 #include "Header.h"
 #include "XUsbApi.h"
 #include <Dbt.h>
 
 struct ImplThreadPoolNotification {
     ImplGlobalCb CbIter;
-    function<void(ImplUser *user, bool added)> Cb;
+    ImplThreadPoolNotificationCb Cb;
     bool Allocated = false;
 };
 
@@ -29,7 +30,7 @@ public:
         return handle;
     }
 
-    void Register(void *handle, function<void(ImplUser *user, bool added)> &&cb) {
+    void Register(void *handle, ImplThreadPoolNotificationCb &&cb) {
         lock_guard<mutex> lock(mMutex);
 
         auto &notify = mNotifications[handle];
@@ -43,10 +44,19 @@ public:
                 (*((function<void()> *)param))();
                 return 0;
             },
-                              new function<void()>([notify, user, added]() {
-                                  notify->Cb(user, added);
+                              new function<void()>([notify, user, added] {
+                                  DeviceIntf *device = user->Device;
+                                  if (device) {
+                                      if (device->HasHid()) {
+                                          notify->Cb(device, added);
+                                      }
+                                      if (device->HasXUsb()) {
+                                          notify->Cb(&device->XUsbNode, added);
+                                      }
+                                  }
                               }),
                               0);
+            return true;
         });
     }
 
@@ -71,6 +81,10 @@ public:
 
 } GThreadPoolNotifications;
 
+void *ThreadPoolNotificationAllocate() { return GThreadPoolNotifications.Allocate(); }
+void ThreadPoolNotificationRegister(void *handle, ImplThreadPoolNotificationCb &&cb) { return GThreadPoolNotifications.Register(handle, move(cb)); }
+bool ThreadPoolNotificationUnregister(void *handle, bool wait) { return GThreadPoolNotifications.Unregister(handle, wait); }
+
 // A and W share same exact implementation, though just to be safe - I've kept each calling the right real function
 HDEVNOTIFY WINAPI RegisterDeviceNotification_Hook(HANDLE hRecepient, LPVOID NotificationFilter, DWORD Flags,
                                                   decltype(RegisterDeviceNotificationA) RegisterDeviceNotification_Real) {
@@ -79,37 +93,39 @@ HDEVNOTIFY WINAPI RegisterDeviceNotification_Hook(HANDLE hRecepient, LPVOID Noti
     }
 
     if (Flags & DEVICE_NOTIFY_SERVICE_HANDLE) {
-        LOG << "Unsupported service device notification" << END;
+        LOG_ERR << "Unsupported service device notification" << END;
     } else if (NotificationFilter) {
         HWND window = (HWND)hRecepient;
         DEV_BROADCAST_HDR *header = (DEV_BROADCAST_HDR *)NotificationFilter;
 
         switch (header->dbch_devicetype) {
-        case DBT_DEVTYP_DEVICEINTERFACE:
+        case DBT_DEVTYP_DEVICEINTERFACE: {
+            GUID *guid = &((DEV_BROADCAST_DEVICEINTERFACE_W *)header)->dbcc_classguid; // _W is same as _A for input
+
+            FilterResult filter;
             if ((Flags & DEVICE_NOTIFY_ALL_INTERFACE_CLASSES) ||
-                ((DEV_BROADCAST_DEVICEINTERFACE_W *)header)->dbcc_classguid == GUID_DEVINTERFACE_HID) // _W is same as _A for input
-            {
+                DeviceInterfaceListFilterMatches<wchar_t>(guid, nullptr, &filter)) {
                 HDEVNOTIFY notify = RegisterDeviceNotification_Real(hRecepient, NotificationFilter, Flags);
                 if (notify) {
-                    GThreadPoolNotifications.Register(notify, [window](ImplUser *user, bool added) {
-                        if (user->Device->IsHid) {
+                    ThreadPoolNotificationRegister(notify, [window, filter](DeviceNode *node, bool added) {
+                        if (filter.Matches(node)) {
                             bool unicode = IsWindowUnicode(window);
                             size_t size = unicode ? // the DEV_BROADCAST_DEVICEINTERFACE_* sizeof includes the null char
-                                              sizeof(DEV_BROADCAST_DEVICEINTERFACE_W) + sizeof(wchar_t) * wcslen(user->Device->DevicePathW)
-                                                  : sizeof(DEV_BROADCAST_DEVICEINTERFACE_A) + strlen(user->Device->DevicePathA);
+                                              sizeof(DEV_BROADCAST_DEVICEINTERFACE_W) + sizeof(wchar_t) * wcslen(node->DevicePathW)
+                                                  : sizeof(DEV_BROADCAST_DEVICEINTERFACE_A) + strlen(node->DevicePathA);
 
                             DEV_BROADCAST_DEVICEINTERFACE_W *broadcast = (DEV_BROADCAST_DEVICEINTERFACE_W *)new byte[size];
                             ZeroMemory(broadcast, sizeof(*broadcast));
                             broadcast->dbcc_size = (int)size;
                             broadcast->dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
-                            broadcast->dbcc_classguid = GUID_DEVINTERFACE_HID;
+                            broadcast->dbcc_classguid = node->DeviceIntfGuid();
 
                             WPARAM event = added ? DBT_DEVICEARRIVAL : DBT_DEVICEREMOVECOMPLETE;
                             if (unicode) {
-                                wcscpy(broadcast->dbcc_name, user->Device->DevicePathW);
+                                wcscpy(broadcast->dbcc_name, node->DevicePathW);
                                 SendMessageW(window, WM_DEVICECHANGE, event, (LPARAM)broadcast);
                             } else {
-                                strcpy(((DEV_BROADCAST_DEVICEINTERFACE_A *)broadcast)->dbcc_name, user->Device->DevicePathA);
+                                strcpy(((DEV_BROADCAST_DEVICEINTERFACE_A *)broadcast)->dbcc_name, node->DevicePathA);
                                 SendMessageA(window, WM_DEVICECHANGE, event, (LPARAM)broadcast);
                             }
 
@@ -119,15 +135,17 @@ HDEVNOTIFY WINAPI RegisterDeviceNotification_Hook(HANDLE hRecepient, LPVOID Noti
                 }
                 return notify;
             }
+            break;
+        }
 
         case DBT_DEVTYP_HANDLE: {
             HANDLE handle = ((DEV_BROADCAST_HANDLE *)header)->dbch_handle;
-            DeviceIntf *device = GetDeviceByHandle(handle);
+            DeviceNode *handleNode = GetDeviceNodeByHandle(handle);
 
-            if (device) {
-                HDEVNOTIFY notify = GThreadPoolNotifications.Allocate();
-                GThreadPoolNotifications.Register(notify, [device, handle, notify, window](ImplUser *user, bool added) {
-                    if (user->Device == device && !added) {
+            if (handleNode) {
+                HDEVNOTIFY notify = ThreadPoolNotificationAllocate();
+                ThreadPoolNotificationRegister(notify, [handleNode, handle, notify, window](DeviceNode *node, bool added) {
+                    if (node == handleNode && !added) {
                         DEV_BROADCAST_HANDLE broadcast;
                         ZeroMemory(&broadcast, sizeof(broadcast));
                         broadcast.dbch_size = sizeof(broadcast);
@@ -148,7 +166,7 @@ HDEVNOTIFY WINAPI RegisterDeviceNotification_Hook(HANDLE hRecepient, LPVOID Noti
         }
 
         default:
-            LOG << "Unknown device notification type: " << header->dbch_devicetype << END;
+            LOG_ERR << "Unknown device notification type: " << header->dbch_devicetype << END;
             break;
         }
     }
@@ -169,7 +187,7 @@ BOOL WINAPI UnregisterDeviceNotification_Hook(HDEVNOTIFY Handle) {
         LOG << "UnregisterDeviceNotification" << END;
     }
 
-    if (GThreadPoolNotifications.Unregister(Handle, false)) {
+    if (ThreadPoolNotificationUnregister(Handle, false)) {
         return TRUE;
     } else {
         return UnregisterDeviceNotification_Real(Handle);
@@ -177,8 +195,8 @@ BOOL WINAPI UnregisterDeviceNotification_Hook(HDEVNOTIFY Handle) {
 }
 
 void RegisterGlobalNotify() {
-    HDEVNOTIFY notify = GThreadPoolNotifications.Allocate();
-    GThreadPoolNotifications.Register(notify, [](ImplUser *user, bool added) {
+    HDEVNOTIFY notify = ThreadPoolNotificationAllocate();
+    ThreadPoolNotificationRegister(notify, [](DeviceNode *node, bool added) {
         EnumWindows([](HWND window, LPARAM param) -> BOOL {
             if (IsWindowInOurProcess(window)) {
                 if (IsWindowUnicode(window)) {
@@ -195,7 +213,7 @@ void RegisterGlobalNotify() {
 
 void HookNotifyApi() {
     // The below just delegate to CM, but to a private function, so could've implemented that instead...
-    AddGlobalHook(&RegisterDeviceNotificationA_Real, RegisterDeviceNotificationA_Hook);
-    AddGlobalHook(&RegisterDeviceNotificationW_Real, RegisterDeviceNotificationW_Hook);
-    AddGlobalHook(&UnregisterDeviceNotification_Real, UnregisterDeviceNotification_Hook);
+    ADD_GLOBAL_HOOK(RegisterDeviceNotificationA);
+    ADD_GLOBAL_HOOK(RegisterDeviceNotificationW);
+    ADD_GLOBAL_HOOK(UnregisterDeviceNotification);
 }

@@ -25,7 +25,7 @@ void LogInit(const Path &inputPath) {
     }
 }
 
-void Log(const char *str, size_t size) {
+void Log(LogLevel level, const char *str, size_t size) {
     if (GLogFile) {
         OVERLAPPED overlapped = {};
         overlapped.Offset = -1;
@@ -33,5 +33,9 @@ void Log(const char *str, size_t size) {
 
         DWORD count;
         WriteFile(GLogFile, str, (DWORD)size, &count, &overlapped);
+    }
+
+    if (level == LogLevel::Error && IsDebuggerPresent()) {
+        DebugBreak();
     }
 }

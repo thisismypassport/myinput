@@ -11,12 +11,25 @@
 #include <cfgmgr32.h>
 #include <stdio.h>
 #include <Shlwapi.h>
-#include <inttypes.h>
 #include <Dbt.h>
 #include <Xinput.h>
+#include <WbemIdl.h>
+#include <roapi.h>
+#include <wrl.h>
+#include "windows.gaming.input.h"
 
 #include "Keys.h"
 #include "MyInputHook.h"
+#include "Inject.h"
+#include "TestUtils.h"
+
+namespace WF = ABI::Windows::Foundation;
+namespace WFC = ABI::Windows::Foundation::Collections;
+namespace WS = ABI::Windows::System;
+namespace WGI = ABI::Windows::Gaming::Input;
+namespace WGIF = ABI::Windows::Gaming::Input::ForceFeedback;
+namespace WRL = Microsoft::WRL;
+namespace WRLW = Microsoft::WRL::Wrappers;
 
 bool gPrintGamepad;
 bool gPrintKeyboard;
@@ -32,6 +45,7 @@ WeakAtomic<HWND> gNotifyWinA;
 HANDLE gSubProcess;
 WNDPROC gTestWindowProcBase;
 HANDLE gTestWindow;
+BOOL gWow64;
 
 struct LatencyMeasure {
     enum { MaxPrev = 0x80 };
@@ -41,61 +55,21 @@ struct LatencyMeasure {
     uint64_t LastTime = 0;
 } gKeyLatency{"key"}, gMouseLatency{"mouse"};
 
-#ifdef _WIN64 // some things are broken in wow64 mode
+#ifdef _WIN64 // some things are broken/questionable in wow64 mode (in windows, not in myinput)
 #define WOW64_BROKEN(x) x
 #else
 #define WOW64_BROKEN(x)
 #endif
 
-void AssertEquals(const char *name, int64_t value, int64_t expected) {
-    if (value != expected) {
-        Alert(L"%hs: %" PRId64 " != %" PRId64 "!", name, value, expected);
-    }
-}
+// #define CMEX_ENABLE
 
-void AssertNotEquals(const char *name, int64_t value, int64_t unexpected) {
-    if (value == unexpected) {
-        Alert(L"%hs: %" PRId64 " == %" PRId64 "!", name, value, unexpected);
-    }
-}
-
-void AssertEquals(const char *name, const char *value, const char *expected) {
-    if (strcmp(value, expected) != 0) {
-        Alert(L"%hs: %hs != %hs!", name, value, expected);
-    }
-}
-
-void AssertEquals(const char *name, void *value, void *expected, int size) {
-    if (memcmp(value, expected, size) != 0) {
-        Alert(L"%hs: *%p != *%p!", name, value, expected);
-    }
-}
-
-template <class TFunc>
-DWORD CreateThread(TFunc threadFunc) {
-    DWORD threadId;
-    CloseHandle(CreateThread(
-        nullptr, 0, [](PVOID param) -> DWORD {
-            (*((function<void()> *)param))();
-            return 0;
-        },
-        new function<void()>(threadFunc), 0, &threadId));
-    return threadId;
-}
-
-uint64_t GetPerfCounter() {
-    return GetOutput(QueryPerformanceCounter).QuadPart;
-}
-
-double GetPerfDelay(uint64_t prev, uint64_t *nowPtr = nullptr) {
-    static uint64_t freq = GetOutput(QueryPerformanceFrequency).QuadPart;
-
-    uint64_t now = GetPerfCounter();
-    if (nowPtr) {
-        *nowPtr = now;
-    }
-    return (double)(now - prev) / freq;
-}
+#ifdef CMEX_ENABLE
+#define CMEX(func, ...) func##_Ex(__VA_ARGS__, nullptr)
+#define CMEXAW(func, aw, ...) func##_Ex##aw(__VA_ARGS__, nullptr)
+#else
+#define CMEX(func, ...) func(__VA_ARGS__)
+#define CMEXAW(func, aw, ...) func##aw(__VA_ARGS__)
+#endif
 
 DWORD CALLBACK DeviceChangeCMCb(HCMNOTIFICATION notify, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA data, DWORD size);
 
@@ -218,7 +192,7 @@ void StressDevice(const wchar_t *path) {
     static bool started = false;
     if (!started) {
         wstring pathCopy = path;
-        CreateThread([pathCopy]() {
+        CreateThread([pathCopy] {
             uint64_t prev = GetPerfCounter();
             int i = 0;
             while (true) {
@@ -280,16 +254,17 @@ void ReadDevice(int idx, const wchar_t *path, uint8_t *preparsed, bool immediate
 
     AssertEquals("dev.flush", HidD_FlushQueue(file), TRUE);
 
-    CreateThread([idx, file, preparsed, immediate]() {
-        /* breaks things...
+    CreateThread([idx, file, preparsed, immediate] {
+#if ZERO
+        // breaks things...
         char buff1[0xe];
         OVERLAPPED ovrl1;
-        ZeroMemory (&ovrl1, sizeof (ovrl1));
-        BOOL result = ReadFile (file, buff1, sizeof (buff1), nullptr, &ovrl1);
+        ZeroMemory(&ovrl1, sizeof(ovrl1));
+        BOOL result = ReadFile(file, buff1, sizeof(buff1), nullptr, &ovrl1);
 
         DWORD length1;
-        result = GetOverlappedResult (file, &ovrl1, &length1, true);
-        */
+        result = GetOverlappedResult(file, &ovrl1, &length1, true);
+#endif
 
         DWORD stdLength = -1;
         RawDeviceReader reader(idx, preparsed, "device");
@@ -302,17 +277,15 @@ void ReadDevice(int idx, const wchar_t *path, uint8_t *preparsed, bool immediate
             DWORD length;
             GetOverlappedResult(file, &ovrl, &length, true);
 
-            if (stdLength == -1) {
+            if (stdLength == -1)
                 stdLength = length;
-            } else {
+            else
                 AssertEquals("dev.read.len", length, stdLength);
-            }
 
             reader.Read(buff, length);
 
-            if (immediate) {
+            if (immediate)
                 Sleep(200);
-            }
         }
     });
 }
@@ -385,10 +358,13 @@ struct RawInputData {
 };
 
 template <class TReadCb>
-void ProcessRawInputMsgs(TReadCb readCallback, bool readBuffer) {
+void ProcessRawInputMsgs(TReadCb readCallback, bool readBuffer, bool readWait) {
     MSG msg;
-    while (readBuffer || GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (readBuffer) {
+    while (readBuffer || readWait || GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (readWait) {
+            MsgWaitForMultipleObjectsEx(0, nullptr, INFINITE, QS_RAWINPUT, MWMO_INPUTAVAILABLE);
+            PeekMessageW(&msg, nullptr, 0, 0, (readBuffer ? PM_NOREMOVE : 0) | PM_QS_INPUT);
+        } else if (readBuffer) {
             while (!PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
                 WaitMessage();
             }
@@ -459,6 +435,14 @@ void ProcessRawInputMsgs(TReadCb readCallback, bool readBuffer) {
                 AssertNotEquals("ri.buf.c", count, (UINT)-1);
 
                 for (UINT i = 0; i < count; i++) {
+#ifndef _WIN64 // look at this mess windows made
+                    if (gWow64) {
+                        byte *ptr = (byte *)xinput;
+                        *(UINT *)(ptr + 0xc) = *(UINT *)(ptr + 0x10);
+                        MoveMemory(ptr + 0x10, ptr + 0x18, xinput->header.dwSize - 0x18);
+                    }
+#endif
+
                     readCallback(xinput);
                     xinput = NEXTRAWINPUTBLOCK(xinput);
                 }
@@ -472,8 +456,8 @@ void ProcessRawInputMsgs(TReadCb readCallback, bool readBuffer) {
     }
 }
 
-void ReadRawInput(RawInputData *data, int count, bool readBuffer, bool readPage) {
-    CreateThread([=]() {
+void ReadRawInput(RawInputData *data, int count, bool readBuffer, bool readWait, bool readPage) {
+    CreateThread([=] {
         for (int i = 0; i < count; i++) {
             data[i].reader = new RawDeviceReader(i, data[i].preparsed, readBuffer ? "rawbuffer" : "raw");
         }
@@ -511,7 +495,7 @@ void ReadRawInput(RawInputData *data, int count, bool readBuffer, bool readPage)
         AssertEquals("ri.greg.w", (intptr_t)irid[0].hwndTarget, (intptr_t)rid.hwndTarget);
         AssertEquals("ri.greg.f", irid[0].dwFlags & 0xfff, rid.dwFlags & 0xfff); // bug - some flags are lost?
 
-        ProcessRawInputMsgs(readCb, readBuffer);
+        ProcessRawInputMsgs(readCb, readBuffer, readWait);
     });
 }
 
@@ -547,7 +531,7 @@ void TestRawInputRegister() {
     AssertEquals("ri.greg.del", GetRegisteredRawInputDevices(irid, &count, sizeof(RAWINPUTDEVICE)), 0);
 }
 
-void TestRawInput(int numOurs, bool read, bool readBuffer, bool readPage, bool printDevices) {
+void TestRawInput(int numOurs, bool read, bool readBuffer, bool readWait, bool readPage, bool printDevices) {
     UINT count;
     AssertEquals("ri.list.count", GetRawInputDeviceList(nullptr, &count, sizeof(RAWINPUTDEVICELIST)), 0);
 
@@ -614,7 +598,7 @@ void TestRawInput(int numOurs, bool read, bool readBuffer, bool readPage, bool p
         UINT nameCountA = 0;
         AssertEquals("ri.name.a.count", GetRawInputDeviceInfoA(device, RIDI_DEVICENAME, nullptr, &nameCountA), 0);
 
-        char *expectedNameA = PathToStrTake(nameW);
+        PathA expectedNameA = PathToStr(nameW);
         UINT expectedNameACount = (UINT)strlen(expectedNameA) + 1;
 
         char *nameA = new char[nameCountA + junk];
@@ -664,7 +648,7 @@ void TestRawInput(int numOurs, bool read, bool readBuffer, bool readPage, bool p
     }
 
     if (read || readBuffer) {
-        ReadRawInput(data, numOurs, readBuffer, readPage);
+        ReadRawInput(data, numOurs, readBuffer, readWait, readPage);
     }
 }
 
@@ -749,18 +733,16 @@ void TestCfgMgrPrintProp(int depth, DEVPROPKEY *key, DEVPROPTYPE type, uint8_t *
 
     switch (type) {
     case DEVPROP_TYPE_STRING: {
-        char *str = PathToStrTake((wchar_t *)value);
-        printf("(str) %s\n", str);
-        delete[] str;
+        PathA str = PathToStr((wchar_t *)value);
+        printf("(str) %s\n", str.Get());
         break;
     }
     case DEVPROP_TYPE_STRING_LIST: {
         printf("(strs) ");
         wchar_t *ptr = (wchar_t *)value;
         while (*ptr) {
-            char *str = PathToStrTake(ptr);
-            printf(",\"%s\"", str);
-            delete[] str;
+            PathA str = PathToStr(ptr);
+            printf(",\"%s\"", str.Get());
             ptr += wcslen(ptr) + 1;
         }
         printf("\n");
@@ -836,37 +818,37 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
     // (assuming no changes in device tree)
 
     if (!dev) {
-        AssertEquals("cm.locate", CM_Locate_DevNodeA(&dev, NULL, 0), CR_SUCCESS);
+        AssertEquals("cm.locate", CMEXAW(CM_Locate_DevNode, A, &dev, NULL, 0), CR_SUCCESS);
 
         ULONG allLen;
-        AssertEquals("cm.all.size", CM_Get_Device_ID_List_SizeA(&allLen, NULL, 0), CR_SUCCESS);
+        AssertEquals("cm.all.size", CMEXAW(CM_Get_Device_ID_List_Size, A, &allLen, NULL, 0), CR_SUCCESS);
 
         char *all = new char[allLen];
-        AssertEquals("cm.all.bad", CM_Get_Device_ID_ListA(NULL, all, allLen - 1, 0), CR_BUFFER_SMALL);
-        AssertEquals("cm.all", CM_Get_Device_ID_ListA(NULL, all, allLen, 0), CR_SUCCESS);
+        AssertEquals("cm.all.bad", CMEXAW(CM_Get_Device_ID_List, A, NULL, all, allLen - 1, 0), CR_BUFFER_SMALL);
+        AssertEquals("cm.all", CMEXAW(CM_Get_Device_ID_List, A, NULL, all, allLen, 0), CR_SUCCESS);
         delete[] all;
     }
 
     while (dev) {
         ULONG len;
-        AssertEquals("cm.did.size", CM_Get_Device_ID_Size(&len, dev, 0), CR_SUCCESS);
+        AssertEquals("cm.did.size", CMEX(CM_Get_Device_ID_Size, &len, dev, 0), CR_SUCCESS);
 
         ULONG bufLen = len + 1;
         char *did = new char[bufLen];
-        AssertEquals("cm.did.bad", CM_Get_Device_IDA(dev, did, len, 0), CR_BUFFER_SMALL);
-        AssertEquals("cm.did", CM_Get_Device_IDA(dev, did, bufLen, 0), CR_SUCCESS);
+        AssertEquals("cm.did.bad", CMEXAW(CM_Get_Device_ID, A, dev, did, len, 0), CR_BUFFER_SMALL);
+        AssertEquals("cm.did", CMEXAW(CM_Get_Device_ID, A, dev, did, bufLen, 0), CR_SUCCESS);
 
         ULONG depth = 0;
-        AssertEquals("cm.depth", CM_Get_Depth(&depth, dev, 0), CR_SUCCESS);
+        AssertEquals("cm.depth", CMEX(CM_Get_Depth, &depth, dev, 0), CR_SUCCESS);
 
         DEVINST mydev;
-        AssertEquals("cm.did.locate", CM_Locate_DevNodeA(&mydev, did, 0), CR_SUCCESS);
+        AssertEquals("cm.did.locate", CMEXAW(CM_Locate_DevNode, A, &mydev, did, 0), CR_SUCCESS);
         AssertEquals("cm.did.locate.me", mydev, dev);
-        AssertEquals("cm.did.locate.nv", CM_Locate_DevNodeA(&mydev, did, CM_LOCATE_DEVNODE_NOVALIDATION), CR_SUCCESS);
+        AssertEquals("cm.did.locate.nv", CMEXAW(CM_Locate_DevNode, A, &mydev, did, CM_LOCATE_DEVNODE_NOVALIDATION), CR_SUCCESS);
         AssertEquals("cm.did.locate.nv.me", mydev, dev);
 
         ULONG status, problem;
-        AssertEquals("cm.status", CM_Get_DevNode_Status(&status, &problem, dev, 0), CR_SUCCESS);
+        AssertEquals("cm.status", CMEX(CM_Get_DevNode_Status, &status, &problem, dev, 0), CR_SUCCESS);
 
         if (printDevices) {
             printf("%*s%s (%x,%x)\n", depth * 2, "", did, status, problem);
@@ -875,7 +857,7 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
         bool propsPrinted = false;
         for (size_t ci = 0; ci < numClasses; ci++) {
             ULONG ibuflen;
-            AssertEquals("cm.ilist.size", CM_Get_Device_Interface_List_SizeA(&ibuflen, &classes[ci], did, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_SUCCESS);
+            AssertEquals("cm.ilist.size", CMEXAW(CM_Get_Device_Interface_List_Size, A, &ibuflen, &classes[ci], did, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_SUCCESS);
 
             // avoid print props for irrelevant devices except under printAll
             if (!propsPrinted && (printAll || ibuflen > 1)) {
@@ -894,31 +876,31 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
 
                 // device props
                 ULONG dpcount = 0;
-                AssertEquals("cm.prop.keys.size", CM_Get_DevNode_Property_Keys(dev, nullptr, &dpcount, 0), CR_BUFFER_SMALL);
+                AssertEquals("cm.prop.keys.size", CMEX(CM_Get_DevNode_Property_Keys, dev, nullptr, &dpcount, 0), CR_BUFFER_SMALL);
                 if (dpcount) {
                     DEVPROPKEY *dpkeys = new DEVPROPKEY[dpcount];
                     ULONG dpbad = dpcount - 1;
-                    AssertEquals("cm.prop.keys.bad", CM_Get_DevNode_Property_Keys(dev, dpkeys, &dpbad, 0), CR_BUFFER_SMALL);
+                    AssertEquals("cm.prop.keys.bad", CMEX(CM_Get_DevNode_Property_Keys, dev, dpkeys, &dpbad, 0), CR_BUFFER_SMALL);
                     AssertEquals("cm.prop.keys.bad.size", dpbad, dpcount);
                     ULONG dpgood = dpcount + 1;
-                    AssertEquals("cm.prop.keys", CM_Get_DevNode_Property_Keys(dev, dpkeys, &dpgood, 0), CR_SUCCESS);
+                    AssertEquals("cm.prop.keys", CMEX(CM_Get_DevNode_Property_Keys, dev, dpkeys, &dpgood, 0), CR_SUCCESS);
                     AssertEquals("cm.prop.keys.size", dpgood, dpcount);
 
                     DEVPROPKEY badkey = {1, 2, 3, 4};
                     DEVPROPTYPE type;
                     ULONG unused = 0;
-                    AssertEquals("cm.prop.miss", CM_Get_DevNode_PropertyW(dev, &badkey, &type, nullptr, &unused, 0), CR_NO_SUCH_VALUE);
+                    AssertEquals("cm.prop.miss", CMEXAW(CM_Get_DevNode_Property, W, dev, &badkey, &type, nullptr, &unused, 0), CR_NO_SUCH_VALUE);
 
                     for (ULONG i = 0; i < dpcount; i++) {
                         DEVPROPKEY *key = &dpkeys[i];
                         ULONG dpsize = 0;
-                        AssertEquals("cm.prop.size", CM_Get_DevNode_PropertyW(dev, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
+                        AssertEquals("cm.prop.size", CMEXAW(CM_Get_DevNode_Property, W, dev, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
 
                         uint8_t *dprop = new uint8_t[dpsize];
                         dpbad = dpsize - 1;
-                        AssertEquals("cm.prop.bad", CM_Get_DevNode_PropertyW(dev, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
+                        AssertEquals("cm.prop.bad", CMEXAW(CM_Get_DevNode_Property, W, dev, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
                         AssertEquals("cm.prop.bad.size", dpbad, dpsize);
-                        AssertEquals("cm.prop", CM_Get_DevNode_PropertyW(dev, key, &type, dprop, &dpsize, 0), CR_SUCCESS);
+                        AssertEquals("cm.prop", CMEXAW(CM_Get_DevNode_Property, W, dev, key, &type, dprop, &dpsize, 0), CR_SUCCESS);
 
                         if (printDevices) {
                             TestCfgMgrPrintProp(depth + 2, key, type, dprop, dpsize);
@@ -932,7 +914,7 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
                 // registry props
                 for (int p = CM_DRP_MIN; p <= CM_DRP_MAX; p++) {
                     ULONG plen = 0;
-                    int ret = CM_Get_DevNode_Registry_PropertyW(dev, p, nullptr, nullptr, &plen, 0);
+                    int ret = CMEXAW(CM_Get_DevNode_Registry_Property, W, dev, p, nullptr, nullptr, &plen, 0);
                     if (ret == CR_NO_SUCH_VALUE || ret == CR_FAILURE) {
                         continue;
                     }
@@ -945,9 +927,9 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
                     uint8_t *prop = new uint8_t[plen];
                     ULONG pbad = plen - 1;
                     ULONG regType;
-                    AssertEquals("cm.rprop.bad", CM_Get_DevNode_Registry_PropertyW(dev, p, &regType, prop, &pbad, 0), CR_BUFFER_SMALL);
+                    AssertEquals("cm.rprop.bad", CMEXAW(CM_Get_DevNode_Registry_Property, W, dev, p, &regType, prop, &pbad, 0), CR_BUFFER_SMALL);
                     AssertEquals("cm.rprop.bad.size", pbad, plen);
-                    AssertEquals("cm.rprop", CM_Get_DevNode_Registry_PropertyW(dev, p, &regType, prop, &plen, 0), CR_SUCCESS);
+                    AssertEquals("cm.rprop", CMEXAW(CM_Get_DevNode_Registry_Property, W, dev, p, &regType, prop, &plen, 0), CR_SUCCESS);
 
                     if (printDevices) {
                         DEVPROPTYPE realType = DEVPROP_TYPE_NULL;
@@ -981,9 +963,9 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
             if (ibuflen > 1) {
                 // interfaces
                 char *diids = new char[ibuflen];
-                int iret = CM_Get_Device_Interface_ListA(&classes[ci], did, diids, ibuflen - 1, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+                int iret = CMEXAW(CM_Get_Device_Interface_List, A, &classes[ci], did, diids, ibuflen - 1, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
                 AssertEquals("cm.ilist.bad", iret, CR_BUFFER_SMALL);
-                AssertEquals("cm.ilist", CM_Get_Device_Interface_ListA(&classes[ci], did, diids, ibuflen, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_SUCCESS);
+                AssertEquals("cm.ilist", CMEXAW(CM_Get_Device_Interface_List, A, &classes[ci], did, diids, ibuflen, CM_GET_DEVICE_INTERFACE_LIST_PRESENT), CR_SUCCESS);
 
                 char *diidp = diids;
                 while (*diidp) {
@@ -1017,31 +999,31 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
 
                     // interface props
                     ULONG dpcount = 0;
-                    AssertEquals("cm.iprop.keys.size", CM_Get_Device_Interface_Property_KeysW(diidpw, nullptr, &dpcount, 0), CR_BUFFER_SMALL);
+                    AssertEquals("cm.iprop.keys.size", CMEXAW(CM_Get_Device_Interface_Property_Keys, W, diidpw, nullptr, &dpcount, 0), CR_BUFFER_SMALL);
                     if (dpcount) {
                         DEVPROPKEY *dpkeys = new DEVPROPKEY[dpcount];
                         ULONG dpbad = dpcount - 1;
-                        AssertEquals("cm.iprop.keys.bad", CM_Get_Device_Interface_Property_KeysW(diidpw, dpkeys, &dpbad, 0), CR_BUFFER_SMALL);
+                        AssertEquals("cm.iprop.keys.bad", CMEXAW(CM_Get_Device_Interface_Property_Keys, W, diidpw, dpkeys, &dpbad, 0), CR_BUFFER_SMALL);
                         AssertEquals("cm.iprop.keys.bad.size", dpbad, dpcount);
                         ULONG dpgood = dpcount + 1;
-                        AssertEquals("cm.iprop.keys", CM_Get_Device_Interface_Property_KeysW(diidpw, dpkeys, &dpgood, 0), CR_SUCCESS);
+                        AssertEquals("cm.iprop.keys", CMEXAW(CM_Get_Device_Interface_Property_Keys, W, diidpw, dpkeys, &dpgood, 0), CR_SUCCESS);
                         AssertEquals("cm.iprop.keys.size", dpgood, dpcount);
 
                         DEVPROPKEY badkey = {1, 2, 3, 4};
                         DEVPROPTYPE type;
                         ULONG unused = 0;
-                        AssertEquals("cm.iprop.miss", CM_Get_Device_Interface_PropertyW(diidpw, &badkey, &type, nullptr, &unused, 0), CR_NO_SUCH_VALUE);
+                        AssertEquals("cm.iprop.miss", CMEXAW(CM_Get_Device_Interface_Property, W, diidpw, &badkey, &type, nullptr, &unused, 0), CR_NO_SUCH_VALUE);
 
                         for (ULONG i = 0; i < dpcount; i++) {
                             DEVPROPKEY *key = &dpkeys[i];
                             ULONG dpsize = 0;
-                            AssertEquals("cm.iprop.size", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
+                            AssertEquals("cm.iprop.size", CMEXAW(CM_Get_Device_Interface_Property, W, diidpw, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
 
                             uint8_t *dprop = new uint8_t[dpsize];
                             dpbad = dpsize - 1;
-                            AssertEquals("cm.iprop.bad", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
+                            AssertEquals("cm.iprop.bad", CMEXAW(CM_Get_Device_Interface_Property, W, diidpw, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
                             AssertEquals("cm.iprop.bad.size", dpbad, dpsize);
-                            AssertEquals("cm.iprop", CM_Get_Device_Interface_PropertyW(diidpw, key, &type, dprop, &dpsize, 0), CR_SUCCESS);
+                            AssertEquals("cm.iprop", CMEXAW(CM_Get_Device_Interface_Property, W, diidpw, key, &type, dprop, &dpsize, 0), CR_SUCCESS);
 
                             if (printDevices) {
                                 TestCfgMgrPrintProp(depth + 3, key, type, dprop, dpsize);
@@ -1062,13 +1044,18 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
         delete[] did;
 
         DEVINST child;
-        CONFIGRET ret = CM_Get_Child(&child, dev, 0);
+        CONFIGRET ret = CMEX(CM_Get_Child, &child, dev, 0);
         AssertEquals("cm.child", ret, child ? CR_SUCCESS : CR_NO_SUCH_DEVNODE);
         if (child) {
             TestCfgMgrNode(printDevices, printAll, child, classes, numClasses);
+
+            DEVINST parent;
+            CONFIGRET ret = CMEX(CM_Get_Parent, &parent, child, 0);
+            AssertEquals("cm.parent", ret, CR_SUCCESS);
+            AssertEquals("cm.parent.eq", parent, dev);
         }
 
-        ret = CM_Get_Sibling(&dev, dev, 0);
+        ret = CMEX(CM_Get_Sibling, &dev, dev, 0);
         AssertEquals("cm.sibling", ret, dev ? CR_SUCCESS : CR_NO_SUCH_DEVNODE);
     }
 }
@@ -1079,7 +1066,7 @@ void TestCfgMgr(bool printDevices, bool printAll) {
         ULONG idx = 0;
         while (true) {
             GUID newCls;
-            auto result = CM_Enumerate_Classes(idx, &newCls, CM_ENUMERATE_CLASSES_INTERFACE);
+            auto result = CMEX(CM_Enumerate_Classes, idx, &newCls, CM_ENUMERATE_CLASSES_INTERFACE);
             if (result == CR_NO_SUCH_VALUE) {
                 break;
             }
@@ -1098,7 +1085,7 @@ void TestCfgMgr(bool printDevices, bool printAll) {
 }
 
 void ReadJoysticks(int count) {
-    CreateThread([=]() {
+    CreateThread([=] {
         auto oldInfos = new JOYINFOEX[count];
         ZeroMemory(oldInfos, sizeof(JOYINFOEX) * count);
 
@@ -1177,16 +1164,18 @@ typedef DWORD(WINAPI *XInputSetState_T)(DWORD dwUserIndex, XINPUT_VIBRATION *pVi
 typedef DWORD(WINAPI *XInputGetKeystroke_T)(DWORD dwUserIndex, DWORD dwReserved, XINPUT_KEYSTROKE *pKeystroke);
 typedef DWORD(WINAPI *XInputGetCapabilities_T)(DWORD dwUserIndex, DWORD dwFlags, XINPUT_CAPABILITIES *pCapabilities);
 typedef DWORD(WINAPI *XInputGetBatteryInformation_T)(DWORD dwUserIndex, BYTE devType, XINPUT_BATTERY_INFORMATION *pBatteryInformation);
+typedef DWORD(WINAPI *XInputGetAudioDeviceIds_T)(DWORD dwUserIndex, LPWSTR pRenderDeviceId, UINT *pRenderCount, LPWSTR pCaptureDeviceId, UINT *pCaptureCount);
 XInputGetState_T XInputGetState_F, XInputGetStateEx_F;
 XInputSetState_T XInputSetState_F;
 XInputGetKeystroke_T XInputGetKeystroke_F;
 XInputGetCapabilities_T XInputGetCapabilities_F;
 XInputGetBatteryInformation_T XInputGetBatteryInformation_F;
+XInputGetAudioDeviceIds_T XInputGetAudioDeviceIds_F;
 
 void ReadXInput(bool ex) {
     XInputGetState_T XInputGetState = (ex && XInputGetStateEx_F) ? XInputGetStateEx_F : XInputGetState_F;
 
-    CreateThread([XInputGetState]() {
+    CreateThread([XInputGetState] {
         XINPUT_STATE oldState[XUSER_MAX_COUNT] = {};
         for (int i = 0; i < XUSER_MAX_COUNT; i++) {
             XInputGetState(i, &oldState[i]);
@@ -1236,7 +1225,7 @@ void ReadXInput(bool ex) {
 }
 
 void ReadXInputStroke() {
-    CreateThread([]() {
+    CreateThread([] {
         while (true) {
             XINPUT_KEYSTROKE key;
             while (XInputGetKeystroke_F(XUSER_INDEX_ANY, 0, &key) == ERROR_SUCCESS &&
@@ -1253,7 +1242,7 @@ void ReadXInputStroke() {
 }
 
 void RumbleXInput() {
-    CreateThread([]() {
+    CreateThread([] {
         double left = 0, right = 0;
         while (true) {
             if (left < 1.0) {
@@ -1337,7 +1326,7 @@ LRESULT CALLBACK VisualizeWindowProc(HWND win, UINT msg, WPARAM w, LPARAM l) {
 }
 
 void VisualizeXInput() {
-    CreateThread([]() {
+    CreateThread([] {
         RECT rect = {0, 0, 450, 260};
         AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, false);
         HWND window = CreateWindowW(L"STATIC", L"Visualize", WS_OVERLAPPEDWINDOW, 400, 0, rect.right - rect.left, rect.bottom - rect.top, 0, NULL, NULL, NULL);
@@ -1383,6 +1372,7 @@ void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumbl
     XInputGetKeystroke_F = (XInputGetKeystroke_T)GetProcAddress(xdll, "XInputGetKeystroke");
     XInputGetCapabilities_F = (XInputGetCapabilities_T)GetProcAddress(xdll, "XInputGetCapabilities");
     XInputGetBatteryInformation_F = (XInputGetBatteryInformation_T)GetProcAddress(xdll, "XInputGetBatteryInformation");
+    XInputGetAudioDeviceIds_F = (XInputGetAudioDeviceIds_T)GetProcAddress(xdll, "XInputGetAudioDeviceIds");
     XInputGetStateEx_F = (XInputGetState_T)GetProcAddress(xdll, MAKEINTRESOURCEA(100));
 
     for (int i = 0; i < XUSER_MAX_COUNT; i++) {
@@ -1397,6 +1387,13 @@ void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumbl
             XINPUT_BATTERY_INFORMATION binfo;
             if (XInputGetBatteryInformation_F) {
                 AssertEquals("x.gbi", XInputGetBatteryInformation_F(i, BATTERY_DEVTYPE_GAMEPAD, &binfo), ERROR_SUCCESS);
+            }
+
+            if (XInputGetAudioDeviceIds_F && i == 0) // bug(?) - i > 0 always end up on first device but with non-0 index
+            {
+                wchar_t renderAudio[100], captureAudio[100];
+                UINT renderAudioSz = (UINT)size(renderAudio), captureAudioSz = (UINT)size(captureAudio);
+                AssertEquals("x.gaud", XInputGetAudioDeviceIds_F(i, renderAudio, &renderAudioSz, captureAudio, &captureAudioSz), ERROR_SUCCESS);
             }
 
             XINPUT_KEYSTROKE stroke;
@@ -1417,6 +1414,218 @@ void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumbl
     if (visualize) {
         VisualizeXInput();
     }
+}
+
+static int sWgiGamepadId = 0; // any better way?
+static int sWgiRawCtrlId = 0; // any better way?
+
+void ProcessWgiGamepad(int gamepadId, WGI::IGamepad *gamepad, bool rumble) {
+    gamepad->AddRef();
+    CreateThread([=] {
+        WGI::GamepadReading oldReading = {};
+
+        while (true) {
+            Sleep(10);
+
+            WGI::GamepadReading reading;
+            AssertEquals("ro.wgig.read", gamepad->GetCurrentReading(&reading), S_OK);
+
+            const char *buttons[] = {"st", "vk", "a", "b", "x", "y", "du", "dd", "dl", "dr", "lb", "rb", "l", "r", "p1", "p2", "p3", "p4"};
+
+            for (int mask = 1, b = 0; mask < 0x10000; mask <<= 1, b++) {
+                if ((reading.Buttons & mask) != (oldReading.Buttons & mask)) {
+                    printf("pad.%d %s -> %d : wgi\n", gamepadId, buttons[b], (reading.Buttons & mask) != 0);
+                }
+            }
+
+            if (reading.LeftTrigger != oldReading.LeftTrigger) {
+                printf("pad.%d lt -> %lf : wgi\n", gamepadId, reading.LeftTrigger);
+            }
+            if (reading.RightTrigger != oldReading.RightTrigger) {
+                printf("pad.%d rt -> %lf : wgi\n", gamepadId, reading.RightTrigger);
+            }
+
+            if (reading.LeftThumbstickX != oldReading.LeftThumbstickX) {
+                printf("pad.%d lx -> %lf : wgi\n", gamepadId, reading.LeftThumbstickX);
+            }
+            if (reading.LeftThumbstickY != oldReading.LeftThumbstickY) {
+                printf("pad.%d ly -> %lf : wgi\n", gamepadId, reading.LeftThumbstickY);
+            }
+            if (reading.RightThumbstickX != oldReading.RightThumbstickX) {
+                printf("pad.%d rx -> %lf : wgi\n", gamepadId, reading.RightThumbstickX);
+            }
+            if (reading.RightThumbstickY != oldReading.RightThumbstickY) {
+                printf("pad.%d ry -> %lf : wgi\n", gamepadId, reading.RightThumbstickY);
+            }
+
+            oldReading = reading;
+        }
+    });
+
+    if (rumble) {
+        CreateThread([=] {
+            double left = 0, right = 0;
+            while (true) {
+                if (left < 1.0) {
+                    left = Clamp(left + 0.2, 0.0, 1.0);
+                } else if (right < 1.0) {
+                    right = Clamp(right + 0.2, 0.0, 1.0);
+                } else {
+                    left = right = 0;
+                }
+
+                Sleep(2000);
+
+                WGI::GamepadVibration vibration = {};
+                vibration.LeftMotor = left;
+                vibration.RightMotor = right;
+                // TODO: trigger vibration?
+                AssertEquals("ro.wgig.vib", gamepad->put_Vibration(vibration), S_OK);
+            }
+        });
+    }
+}
+
+void ProcessWgiRawCtrl(int rawctrlId, WGI::IRawGameController *rawctrl) {
+    rawctrl->AddRef();
+    CreateThread([=] {
+        INT32 nButtons;
+        AssertEquals("ro.wgir.nbtn", rawctrl->get_ButtonCount(&nButtons), S_OK);
+        INT32 nAxes;
+        AssertEquals("ro.wgir.naxe", rawctrl->get_AxisCount(&nAxes), S_OK);
+        INT32 nSwitches;
+        AssertEquals("ro.wgir.nswi", rawctrl->get_SwitchCount(&nSwitches), S_OK);
+
+        auto buttons = new boolean[nButtons];
+        auto oldButtons = new boolean[nButtons]{};
+        auto switches = new WGI::GameControllerSwitchPosition[nSwitches];
+        auto oldSwitches = new WGI::GameControllerSwitchPosition[nSwitches]{};
+        auto axes = new DOUBLE[nAxes];
+        auto oldAxes = new DOUBLE[nAxes]{};
+
+        while (true) {
+            Sleep(10);
+
+            UINT64 timestamp;
+            AssertEquals("ro.wgir.read", rawctrl->GetCurrentReading(nButtons, buttons, nSwitches, switches, nAxes, axes, &timestamp), S_OK);
+
+            for (int i = 0; i < nButtons; i++) {
+                if (buttons[i] != oldButtons[i]) {
+                    printf("pad.%d b%d -> %d : wgiraw\n", rawctrlId, i, buttons[i]);
+                    oldButtons[i] = buttons[i];
+                }
+            }
+
+            for (int i = 0; i < nAxes; i++) {
+                if (axes[i] != oldAxes[i]) {
+                    printf("pad.%d a%d -> %lf : wgiraw\n", rawctrlId, i, axes[i]);
+                    oldAxes[i] = axes[i];
+                }
+            }
+
+            for (int i = 0; i < nSwitches; i++) {
+                if (switches[i] != oldSwitches[i]) {
+                    printf("pad.%d s%d -> %d : wgiraw\n", rawctrlId, i, switches[i]);
+                    oldSwitches[i] = switches[i];
+                }
+            }
+        }
+    });
+}
+
+void TestWgi(bool gamepad, bool raw, bool rumble) {
+    // TODO: also test add/remove...
+    CreateThread([=] {
+        AssertEquals("ro.init", RoInitialize(RO_INIT_MULTITHREADED), S_OK);
+
+        if (gamepad) {
+            WRL::ComPtr<WGI::IGamepadStatics> gamepadStatics;
+            AssertEquals("ro.act.wgig", RoGetActivationFactory(WRLW::HStringReference(L"Windows.Gaming.Input.Gamepad").Get(), __uuidof(WGI::IGamepadStatics), &gamepadStatics), S_OK);
+
+            EventRegistrationToken addedToken;
+            AssertEquals("ro.wgig.addev", gamepadStatics->add_GamepadAdded(WRL::Callback<WF::IEventHandler<WGI::Gamepad *>>([=](auto, WGI::IGamepad *gamepad) -> HRESULT {
+                                                                               int gamepadId = sWgiGamepadId++;
+                                                                               if (gPrintDeviceChange) {
+                                                                                   printf("event : wgi device add : %d\n", gamepadId);
+                                                                               }
+
+                                                                               ProcessWgiGamepad(gamepadId, gamepad, rumble);
+                                                                               return S_OK;
+                                                                           }).Get(),
+                                                                           &addedToken),
+                         S_OK);
+
+            EventRegistrationToken removeToken;
+            AssertEquals("ro.wgig.remev", gamepadStatics->add_GamepadRemoved(WRL::Callback<WF::IEventHandler<WGI::Gamepad *>>([=](auto, WGI::IGamepad *gamepad) -> HRESULT {
+                                                                                 if (gPrintDeviceChange) {
+                                                                                     printf("event : wgi device remove\n"); // id unknown...
+                                                                                 }
+
+                                                                                 return S_OK;
+                                                                             }).Get(),
+                                                                             &removeToken),
+                         S_OK);
+
+            WRL::ComPtr<WFC::IVectorView<WGI::Gamepad *>> gamepads;
+            AssertEquals("ro.wgig.get", gamepadStatics->get_Gamepads(&gamepads), S_OK);
+
+            uint32_t gamepadCount;
+            AssertEquals("ro.wgig.size", gamepads->get_Size(&gamepadCount), S_OK);
+
+            for (uint32_t i = 0; i < gamepadCount; i++) {
+                WRL::ComPtr<WGI::IGamepad> gamepad;
+                AssertEquals("ro.wgig.at", gamepads->GetAt(i, &gamepad), S_OK);
+
+                ProcessWgiGamepad(sWgiGamepadId++, gamepad.Get(), rumble);
+            }
+        }
+
+        if (raw) {
+            WRL::ComPtr<WGI::IRawGameControllerStatics> rawctrlStatics;
+            AssertEquals("ro.act.wgir", RoGetActivationFactory(WRLW::HStringReference(L"Windows.Gaming.Input.RawGameController").Get(), __uuidof(WGI::IRawGameControllerStatics), &rawctrlStatics), S_OK);
+
+            EventRegistrationToken addedToken;
+            AssertEquals("ro.wgir.addev", rawctrlStatics->add_RawGameControllerAdded(WRL::Callback<WF::IEventHandler<WGI::RawGameController *>>([=](auto, WGI::IRawGameController *rawctrl) -> HRESULT {
+                                                                                         int rawctrlId = sWgiRawCtrlId++;
+                                                                                         if (gPrintDeviceChange) {
+                                                                                             printf("event : wgi-raw device add : %d\n", rawctrlId);
+                                                                                         }
+
+                                                                                         ProcessWgiRawCtrl(rawctrlId, rawctrl);
+                                                                                         return S_OK;
+                                                                                     }).Get(),
+                                                                                     &addedToken),
+                         S_OK);
+
+            EventRegistrationToken removeToken;
+            AssertEquals("ro.wgir.remev", rawctrlStatics->add_RawGameControllerRemoved(WRL::Callback<WF::IEventHandler<WGI::RawGameController *>>([=](auto, WGI::IRawGameController *rawctrl) -> HRESULT {
+                                                                                           if (gPrintDeviceChange) {
+                                                                                               printf("event : wgi-raw device remove\n"); // id unknown...
+                                                                                           }
+
+                                                                                           return S_OK;
+                                                                                       }).Get(),
+                                                                                       &removeToken),
+                         S_OK);
+
+            WRL::ComPtr<WFC::IVectorView<WGI::RawGameController *>> rawctrls;
+            AssertEquals("ro.wgir.get", rawctrlStatics->get_RawGameControllers(&rawctrls), S_OK);
+
+            uint32_t rawctrlCount;
+            AssertEquals("ro.wgir.size", rawctrls->get_Size(&rawctrlCount), S_OK);
+
+            for (uint32_t i = 0; i < rawctrlCount; i++) {
+                WRL::ComPtr<WGI::IRawGameController> rawctrl;
+                AssertEquals("ro.wgir.at", rawctrls->GetAt(i, &rawctrl), S_OK);
+
+                ProcessWgiRawCtrl(sWgiRawCtrlId++, rawctrl.Get());
+            }
+        }
+
+        while (true) {
+            Sleep(1000); // seems needed to avoid callbacks dying...
+        }
+    });
 }
 
 void TestWindowMsg(UINT msg, WPARAM w, LPARAM l, LONG time, bool injected, ULONG_PTR xinfo, const char *source) {
@@ -1542,7 +1751,7 @@ LRESULT CALLBACK HighMouseHook(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 void RegisterHook(bool keyboard, bool mouse, int count, bool low, DWORD thread) {
-    CreateThread([=]() {
+    CreateThread([=] {
         for (int i = 0; i < count; i++) {
             if (keyboard) {
                 HHOOK keyHook = SetWindowsHookExW(low ? WH_KEYBOARD_LL : WH_KEYBOARD, low ? LowKeyHook : HighKeyHook, thread ? nullptr : GetModuleHandle(nullptr), thread);
@@ -1564,7 +1773,7 @@ void RegisterHook(bool keyboard, bool mouse, int count, bool low, DWORD thread) 
 }
 
 void RegisterHotKeys() {
-    CreateThread([=]() {
+    CreateThread([=] {
         for (int i = VK_F1; i < VK_F24; i++) {
             RegisterHotKey(NULL, i, 0, i);
         }
@@ -1582,7 +1791,7 @@ void RegisterHotKeys() {
 }
 
 void SendInputs() {
-    CreateThread([=]() {
+    CreateThread([=] {
         // while (true)
         {
             Sleep(3000);
@@ -1642,7 +1851,7 @@ void SendInputs() {
 enum { MeasureLatencyXInfo = 0x12345 };
 
 void MeasureLatency() {
-    CreateThread([=]() {
+    CreateThread([=] {
         bool first = true;
         while (true) {
             if (GetForegroundWindow() == gTestWindow && gTestWindow) {
@@ -1714,15 +1923,15 @@ void ResistCursorHideInit(HWND window) {
         ShowCursor(true);
     }
 
-    /*
+#if ZERO
     RECT rect = {};
-    GetWindowRect (window, &rect);
+    GetWindowRect(window, &rect);
     int w = rect.right - rect.left;
     int h = rect.bottom - rect.top;
 
-    HWND topwin = CreateWindowExW (WS_EX_TOPMOST, L"EDIT", L"", WS_BORDER, rect.left + w/2 - 50, rect.top + h/2 - 50, 100, 100, 0, NULL, NULL, NULL);
-    ShowWindow (topwin, SW_SHOWNOACTIVATE);
-    */
+    HWND topwin = CreateWindowExW(WS_EX_TOPMOST, L"EDIT", L"", WS_BORDER, rect.left + w / 2 - 50, rect.top + h / 2 - 50, 100, 100, 0, NULL, NULL, NULL);
+    ShowWindow(topwin, SW_SHOWNOACTIVATE);
+#endif
 }
 
 void ResistCursorHide(HWND window) {
@@ -1820,12 +2029,12 @@ DWORD ShowTestWindow(int count, bool resistHideCursor) {
     return threadId;
 }
 
-void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, bool hotkey, bool captureMouse) {
+void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, bool hotkey, bool captureMouse, bool readBuffer, bool readWait) {
     if (!keyboard && !mouse) {
         return;
     }
 
-    CreateThread([=]() {
+    CreateThread([=] {
         LONG prevX = 0, prevY = 0;
         auto readCb = [&prevX, &prevY](RAWINPUT *ri) {
             bool injected = ri->header.hDevice == nullptr;
@@ -1947,7 +2156,7 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
         }
         AssertEquals("ri.greg.count", found, ridI);
 
-        ProcessRawInputMsgs(readCb, false);
+        ProcessRawInputMsgs(readCb, readBuffer, readWait);
     });
 }
 
@@ -1967,16 +2176,12 @@ void CreateNewProcess(bool isChild, bool otherBitness, bool withIO, const string
         Path ownPath = PathGetModulePath(nullptr);
         if (otherBitness) {
             wstring ownPathWStr(ownPath);
-            if (StrContains(ownPathWStr, L"Win32")) {
-                StrReplaceFirst(ownPathWStr, L"Win32", L"x64");
-            } else if (StrContains(ownPathWStr, L"x64")) {
-                StrReplaceFirst(ownPathWStr, L"x64", L"Win32");
-            }
+            ReplaceWithOtherBitness(&ownPathWStr);
             ownPath = ownPathWStr.c_str();
         }
 
         PROCESS_INFORMATION pi;
-        Path cmdLine = args.empty() ? PathFromStr((string(GetCommandLineA()) + " --child").c_str()) : PathFromStr(("myinput_test.exe " + args).c_str());
+        Path cmdLine = args.empty() ? PathConcatRaw(GetCommandLineW(), L" --child") : PathConcatRaw(L"myinput_test.exe ", PathFromStr(args.c_str()));
 
         if (withIO) {
             HANDLE outrd, outwr, errrd, errwr, inrd, inwr;
@@ -2181,7 +2386,7 @@ LRESULT CALLBACK NotifyWindowProc(HWND win, UINT msg, WPARAM w, LPARAM l) {
 void CreateNotifyWindow() {
     HANDLE event = CreateEventW(nullptr, true, false, nullptr);
 
-    CreateThread([event]() {
+    CreateThread([event] {
         HWND window = CreateWindowW(L"STATIC", L"NOTIFY", 0, 0, 0, 0, 0, 0, NULL, NULL, NULL);
         SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)NotifyWindowProc);
         AssertEquals("ntf.win.uni", IsWindowUnicode(window), TRUE);
@@ -2222,6 +2427,219 @@ void CreateNotifyWindow() {
     });
 
     WaitForSingleObject(event, INFINITE);
+}
+
+void ReadWmi(bool printDevices) {
+    AssertEquals("co.init", CoInitializeEx(NULL, COINIT_APARTMENTTHREADED), S_OK);
+
+    IWbemLocator *wbemLoc = nullptr;
+    AssertEquals("co.create", CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER, IID_IWbemLocator, (void **)&wbemLoc), S_OK);
+    AssertNotEquals("co.created", (intptr_t)wbemLoc, 0);
+
+    IUnknown *wbemLocU = nullptr;
+    AssertEquals("co.createu", CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER, IID_IUnknown, (void **)&wbemLocU), S_OK);
+    AssertNotEquals("co.createdu", (intptr_t)wbemLocU, 0);
+
+    MULTI_QI mq[] = {
+        {&IID_IUnknown},
+        {&IID_IWbemLocator},
+    };
+    AssertEquals("co.createx", CoCreateInstanceEx(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER, nullptr, 2, mq), S_OK);
+
+    IClassFactory *wbemLocCls = nullptr;
+    AssertEquals("co.cls", CoGetClassObject(CLSID_WbemLocator, CLSCTX_INPROC_SERVER, nullptr, IID_IClassFactory, (void **)&wbemLocCls), S_OK);
+    AssertNotEquals("co.cls.got", (intptr_t)wbemLocCls, 0);
+
+    IWbemLocator *wbemLocC = nullptr;
+    AssertEquals("co.cls.create", wbemLocCls->CreateInstance(nullptr, IID_IWbemLocator, (void **)&wbemLocC), S_OK);
+    AssertNotEquals("co.cls.created", (intptr_t)wbemLocC, 0);
+
+    IUnknown *wbemLocClsU = nullptr;
+    AssertEquals("co.clsu", CoGetClassObject(CLSID_WbemLocator, CLSCTX_INPROC_SERVER, nullptr, IID_IUnknown, (void **)&wbemLocClsU), S_OK);
+    AssertNotEquals("co.clsu.got", (intptr_t)wbemLocClsU, 0);
+
+    BSTR ns = SysAllocString(L"\\\\.\\Root\\CIMV2");
+    IWbemServices *svc = nullptr;
+    AssertEquals("wb.conn", wbemLoc->ConnectServer(ns, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &svc), S_OK);
+    AssertNotEquals("wb.conn.val", (intptr_t)svc, 0);
+
+    AssertEquals("wb.sec", CoSetProxyBlanket(svc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE), S_OK);
+
+    IWbemServices *svcpcp = nullptr;
+    AssertEquals("wb.seccp", CoCopyProxy(svc, (IUnknown **)&svcpcp), S_OK);
+    AssertNotEquals("wb.seccp.neq", (intptr_t)svcpcp, (intptr_t)svc);
+    IWbemServices *svcpcpq = nullptr;
+    AssertEquals("wb.seccp.q", svcpcp->QueryInterface(&svcpcpq), S_OK);
+    AssertEquals("wb.seccp.eq", (intptr_t)svcpcpq, (intptr_t)svc);
+
+    BSTR ns0 = SysAllocString(L"\\\\.\\Root\\CIMV2");
+    IWbemServices *svc0 = nullptr;
+    AssertEquals("wb.conn0", wbemLoc->ConnectServer(ns, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &svc0), S_OK);
+    AssertNotEquals("wb.conn0.val", (intptr_t)svc0, 0);
+
+    AssertEquals("wb.sec0", CoSetProxyBlanket(svc0, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE), S_OK);
+
+    // svc0->OpenNamespace (SysAllocString (L"cimv2"), 0, nullptr,
+
+    IEnumWbemClassObject *enm = nullptr;
+#if ZERO
+    BSTR ql = SysAllocString(L"WQL");
+    BSTR qry = SysAllocString(L"SELECT * FROM Win32_PNPEntity");
+    AssertEquals("wb.exec", svc->ExecQuery(ql, qry, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &enm), S_OK);
+    AssertNotEquals("wb.exec.val", (intptr_t)enm, 0);
+#else
+    BSTR clsn = SysAllocString(L"Win32_PNPEntity");
+    AssertEquals("wb.enum", svc->CreateInstanceEnum(clsn, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &enm), S_OK);
+    AssertNotEquals("wb.enum.val", (intptr_t)enm, 0);
+#endif
+
+    BSTR propName = SysAllocString(L"Name");
+    while (true) {
+        constexpr int ENUM_SIZE = 10;
+
+        IWbemClassObject *objs[ENUM_SIZE] = {};
+        ULONG ret;
+        HRESULT res = enm->Next(WBEM_INFINITE, ENUM_SIZE, objs, &ret);
+        AssertEquals("wb.next", res, ret == ENUM_SIZE ? S_OK : S_FALSE);
+        if (!ret) {
+            break;
+        }
+
+        for (ULONG objI = 0; objI < ret; objI++) {
+            IWbemClassObject *obj = objs[objI];
+
+            if (printDevices) {
+                printf("WMI Device:\n");
+            }
+
+            AssertEquals("wb.objenum", obj->BeginEnumeration(0), S_OK);
+            while (true) {
+                BSTR key;
+                VARIANT value;
+                VariantInit(&value);
+                CIMTYPE type;
+                res = obj->Next(0, &key, &value, &type, nullptr);
+                if (res == WBEM_S_NO_MORE_DATA) {
+                    break;
+                }
+
+                AssertEquals("wb.objnext", res, S_OK);
+
+                if (printDevices) {
+                    printf("  %ls -> ", key);
+
+                    switch (type & ~CIM_FLAG_ARRAY) {
+                    case CIM_EMPTY:
+                        printf("(null) ");
+                        break;
+                    case CIM_SINT8:
+                        printf("(int8) ");
+                        break;
+                    case CIM_SINT16:
+                        printf("(int16) ");
+                        break;
+                    case CIM_SINT32:
+                        printf("(int32) ");
+                        break;
+                    case CIM_SINT64:
+                        printf("(int64) ");
+                        break;
+                    case CIM_UINT8:
+                        printf("(uint8) ");
+                        break;
+                    case CIM_UINT16:
+                        printf("(uint16) ");
+                        break;
+                    case CIM_UINT32:
+                        printf("(uint32) ");
+                        break;
+                    case CIM_UINT64:
+                        printf("(uint64) ");
+                        break;
+                    case CIM_REAL32:
+                        printf("(real32) ");
+                        break;
+                    case CIM_REAL64:
+                        printf("(real64) ");
+                        break;
+                    case CIM_BOOLEAN:
+                        printf("(bool) ");
+                        break;
+                    case CIM_CHAR16:
+                        printf("(char) ");
+                        break;
+                    case CIM_STRING:
+                        printf("(str) ");
+                        break;
+                    case CIM_DATETIME:
+                        printf("(time) ");
+                        break;
+                    case CIM_REFERENCE:
+                        printf("(ref) ");
+                        break;
+                    case CIM_OBJECT:
+                        printf("(obj) ");
+                        break;
+                    default:
+                        printf("(??? %d)", type);
+                        break;
+                    }
+
+                    if (value.vt == VT_NULL) {
+                        printf("null");
+                    } else if (type & CIM_FLAG_ARRAY) {
+                        printf("{");
+                        byte *ptr = (byte *)value.parray->pvData;
+                        for (ULONG i = 0; i < value.parray->rgsabound[0].cElements; i++) {
+                            if (i > 0) {
+                                printf(", ");
+                            }
+
+                            switch (type & ~CIM_FLAG_ARRAY) {
+                            case CIM_STRING:
+                                printf("\"%ls\"", *(wchar_t **)ptr);
+                                break;
+                            default:
+                                printf("???");
+                                break;
+                            }
+
+                            ptr += value.parray->cbElements;
+                        }
+                        printf("}");
+                    } else {
+                        switch (type) {
+                        case CIM_SINT32:
+                        case CIM_UINT32:
+                            printf("%d", value.intVal);
+                            break;
+                        case CIM_BOOLEAN:
+                            printf(value.boolVal ? "true" : "false");
+                            break;
+                        case CIM_STRING:
+                            printf("\"%ls\"", value.bstrVal);
+                            break;
+                        default:
+                            printf("???");
+                            break;
+                        }
+                    }
+
+                    printf("\n");
+                }
+
+                SysFreeString(key);
+                VariantClear(&value);
+            }
+
+            obj->Release();
+        }
+    }
+
+    enm->Release();
+    svc->Release();
+    svc0->Release();
+    wbemLoc->Release();
 }
 
 class Args {
@@ -2298,8 +2716,13 @@ int main(int argc, char **argv) {
     BOOL_ARG(readDeviceImmediate, "read-dev-immed");
     BOOL_ARG(readJoystick, "read-joy");
 
+    BOOL_ARG(readWgi, "read-wgi");
+    BOOL_ARG(readWgiRaw, "read-wgi-raw");
+    BOOL_ARG(rumbleWgi, "rumble-wgi");
+
     BOOL_ARG(readRaw, "read-raw");
     BOOL_ARG(readRawBuffer, "read-raw-buf");
+    BOOL_ARG(readRawWait, "read-raw-wait");
     BOOL_ARG(readRawFullPage, "read-raw-page");
 
     BOOL_ARG(readXInput, "read-x");
@@ -2323,6 +2746,7 @@ int main(int argc, char **argv) {
     INT_ARG(registerHookCount, "reg-hook-count", 1);
     BOOL_ARG(registerHotkey, "reg-hotkey");
 
+    BOOL_ARG(readWmi, "read-wmi");
     BOOL_ARG(resistHideCursor, "resist-hide-cursor");
     BOOL_ARG(sendInputs, "send-inputs");
     G_BOOL_ARG(gStressDevice, "stress-device");
@@ -2338,15 +2762,24 @@ int main(int argc, char **argv) {
     BOOL_ARG(printCfgMgrDevices, "print-cfg-dev");
     BOOL_ARG(printAllCfgMgrDevices, "print-cfg-dev-all");
     G_BOOL_ARG(gPrintDeviceChange, "print-dev-chg");
+    BOOL_ARG(printWmiDevices, "print-wmi");
 
     BOOL_ARG(createProcess, "create-process");
     BOOL_ARG(createProcessOther, "create-process-other");
     BOOL_ARG(createProcessWithIo, "create-process-io");
     STR_ARG(processArgs, "process-args");
     BOOL_ARG(isChild, "child");
+    BOOL_ARG(printProcessArgs, "print-process-args");
+
+    IsWow64Process(GetCurrentProcess(), &gWow64);
 
     if (!args.Process(argc, argv)) {
         testWindow = readDevice = gPrintGamepad = visualizeWindow = true;
+    }
+
+    if (printProcessArgs) {
+        printf("cmdline: %ls\n", GetCommandLineW());
+        printf("workdir: %ls\n", PathGetCurrentDirectory().Get());
     }
 
     if (loadHook && !isChild) {
@@ -2360,7 +2793,7 @@ int main(int argc, char **argv) {
     int numOurs = 0;
     HMODULE hookLib = GetModuleHandleA("myinput_hook.dll");
     if (hookLib) {
-        numOurs = MyInputHook_GetUserCount();
+        numOurs = MyInputHook_InternalForTest();
     } else if (loadHook) {
         Alert(L"Hook not loaded in child!");
     }
@@ -2368,21 +2801,29 @@ int main(int argc, char **argv) {
     CreateNotifyWindow();
 
     TestJoystick(readJoystick);
-    TestRawInput(numOurs, readRaw, readRawBuffer, readRawFullPage, printRawInputDevices);
+    TestRawInput(numOurs, readRaw, readRawBuffer, readRawWait, readRawFullPage, printRawInputDevices);
     TestSetupDi(numOurs, readDevice, readDeviceImmediate);
     TestCfgMgr(printCfgMgrDevices, printAllCfgMgrDevices);
     TestXInput(xinputVersion, readXInput, readXInputEx, readXInputStroke, rumbleXInput, visualizeWindow);
 
+    if (readWgi || readWgiRaw) {
+        TestWgi(readWgi, readWgiRaw, rumbleWgi);
+    }
+
     if (registerRaw) {
         RegisterRawInput(!registerRawNoKeyboard, !registerRawNoMouse,
-                         registerRawNoLegacy, registerRawNoHotkey, registerRawHotkey, registerRawCaptureMouse);
+                         registerRawNoLegacy, registerRawNoHotkey, registerRawHotkey, registerRawCaptureMouse,
+                         readRawBuffer, readRawWait);
     }
 
     if (registerLowHook) {
         RegisterHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, true, 0);
     }
-    // if (registerGlobalHook) - nope...
-    //     RegisterHook (!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, 0);
+#if ZERO
+    if (registerGlobalHook) { // - nope...
+        RegisterHook(!registerHookNoKeyboard, !registerHookNoMouse, registerHookCount, false, 0);
+    }
+#endif
 
     DWORD testWindowThread = 0;
     if (testWindow) {
@@ -2403,6 +2844,10 @@ int main(int argc, char **argv) {
 
     if (measureLatency) {
         MeasureLatency();
+    }
+
+    if (readWmi) {
+        ReadWmi(printWmiDevices);
     }
 
     if (createProcess) {

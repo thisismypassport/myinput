@@ -75,7 +75,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <IntDir>Build\$(Configuration)-$(Platform)-hook\</IntDir>
-    <OutDir>$(SolutionDir)Run\$(Configuration)-$(Platform)\</OutDir>
+    <OutDir>$(SolutionDir)Run\$(Platform)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <IntDir>Build\$(Configuration)-$(Platform)-hook\</IntDir>
@@ -83,7 +83,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <IntDir>Build\$(Configuration)-$(Platform)-hook\</IntDir>
-    <OutDir>$(SolutionDir)Run\$(Configuration)-$(Platform)\</OutDir>
+    <OutDir>$(SolutionDir)Run\$(Platform)\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -98,18 +98,24 @@
     <Link>
       <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X86</AdditionalLibraryDirectories>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
-      <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;ole32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ForceFileOutput>
       </ForceFileOutput>
       <IgnoreAllDefaultLibraries>
       </IgnoreAllDefaultLibraries>
       <IgnoreSpecificDefaultLibraries>
       </IgnoreSpecificDefaultLibraries>
+      <ModuleDefinitionFile>
+      </ModuleDefinitionFile>
     </Link>
     <PostBuildEvent>
       <Command>
       </Command>
     </PostBuildEvent>
+    <Manifest>
+      <AdditionalManifestFiles>
+      </AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -123,7 +129,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X64</AdditionalLibraryDirectories>
-      <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;ole32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <ForceFileOutput>
       </ForceFileOutput>
@@ -131,11 +137,17 @@
       </IgnoreAllDefaultLibraries>
       <IgnoreSpecificDefaultLibraries>
       </IgnoreSpecificDefaultLibraries>
+      <ModuleDefinitionFile>
+      </ModuleDefinitionFile>
     </Link>
     <PostBuildEvent>
       <Command>
       </Command>
     </PostBuildEvent>
+    <Manifest>
+      <AdditionalManifestFiles>
+      </AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -155,18 +167,24 @@
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X86</AdditionalLibraryDirectories>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
-      <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;ole32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ForceFileOutput>
       </ForceFileOutput>
       <IgnoreAllDefaultLibraries>
       </IgnoreAllDefaultLibraries>
       <IgnoreSpecificDefaultLibraries>
       </IgnoreSpecificDefaultLibraries>
+      <ModuleDefinitionFile>
+      </ModuleDefinitionFile>
     </Link>
     <PostBuildEvent>
       <Command>
       </Command>
     </PostBuildEvent>
+    <Manifest>
+      <AdditionalManifestFiles>
+      </AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -185,7 +203,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalLibraryDirectories>..\3rdparty\detours\lib.X64</AdditionalLibraryDirectories>
-      <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;cfgmgr32.lib;ole32.lib;detours.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <ForceFileOutput>
       </ForceFileOutput>
@@ -193,16 +211,24 @@
       </IgnoreAllDefaultLibraries>
       <IgnoreSpecificDefaultLibraries>
       </IgnoreSpecificDefaultLibraries>
+      <ModuleDefinitionFile>
+      </ModuleDefinitionFile>
     </Link>
     <PostBuildEvent>
       <Command>
       </Command>
     </PostBuildEvent>
+    <Manifest>
+      <AdditionalManifestFiles>
+      </AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="MyInputHook.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ComApi.h" />
+    <ClInclude Include="ComUtils.h" />
     <ClInclude Include="Config.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="DeviceApi.h" />
@@ -218,6 +244,7 @@
     <ClInclude Include="MyInputHook.h" />
     <ClInclude Include="NotifyApi.h" />
     <ClInclude Include="RawRegister.h" />
+    <ClInclude Include="StateUtils.h" />
     <ClInclude Include="Thunk.h" />
     <ClInclude Include="UtilsBase.h" />
     <ClInclude Include="Log.h" />
@@ -230,6 +257,7 @@
     <ClInclude Include="UtilsUiBase.h" />
     <ClInclude Include="Keys.h" />
     <ClInclude Include="ImplFeedback.h" />
+    <ClInclude Include="WbemApi.h" />
     <ClInclude Include="WinCursor.h" />
     <ClInclude Include="WinHooks.h" />
     <ClInclude Include="WinInput.h" />

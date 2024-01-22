@@ -1,7 +1,11 @@
 #include "UtilsPath.h"
 #include "UtilsStr.h"
 #include "UtilsUiBase.h"
+#include "Inject.h"
+#include "Link.h"
 #include <Windows.h>
+
+DEFINE_ALERT_ON_LOG(LogLevel::Error)
 
 wchar_t *SkipCommandLineArgs(wchar_t *cmdLine, int count) {
     bool inQuotes = false;
@@ -43,13 +47,13 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     int argI = 0;
     if (numArgs > 1) {
         for (argI = 1; argI < numArgs; argI++) {
-            if (wcseq(args[argI], L"-r")) {
+            if (tstreq(args[argI], L"-r")) {
                 registered = true;
-            } else if (wcseq(args[argI], L"-p")) {
+            } else if (tstreq(args[argI], L"-p")) {
                 byPid = true;
-            } else if (wcseq(args[argI], L"-h")) {
+            } else if (tstreq(args[argI], L"-h")) {
                 byHandle = true;
-            } else if (wcseq(args[argI], L"-c") && argI + 1 < numArgs) {
+            } else if (tstreq(args[argI], L"-c") && argI + 1 < numArgs) {
                 config = args[++argI];
             } else if (args[argI][0] != L'-') {
                 break; // followed by args
@@ -114,11 +118,14 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         success = true;
     } else {
         wchar_t *processCmdLine = SkipCommandLineArgs(cmdLine, argI);
+        Path workDir = registered ? Path() : PathGetDirName(args[argI]);
+        wstring cmdLineBuf;
 
+    retry:
         // debug flags prevent debugger (which might be us again!) from interfering
         if (CreateProcessW(nullptr, processCmdLine, nullptr, nullptr, registered,
                            CREATE_SUSPENDED | DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS,
-                           nullptr, registered ? Path() : PathGetDirName(args[argI]),
+                           nullptr, workDir,
                            &si, &pi)) {
             DebugActiveProcessStop(pi.dwProcessId); // was needed just at creation time
             created = true;
@@ -142,6 +149,31 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
                 Alert(L"Failed elevating %ws", args[argI]);
                 return -1;
             }
+        } else if (GetLastError() == ERROR_BAD_EXE_FORMAT) {
+            Path targetExe, targetArgs, targetWorkDir;
+            if (ResolveLink(args[argI], &targetExe, &targetArgs, &targetWorkDir) &&
+                targetExe) {
+                cmdLineBuf = L"\"" + wstring(targetExe) + L"\"";
+
+                if (targetArgs && *targetArgs) {
+                    cmdLineBuf += L" " + wstring(targetArgs);
+                }
+
+                const wchar_t *extraArgs = SkipCommandLineArgs(processCmdLine, 1);
+                if (extraArgs && *extraArgs) {
+                    cmdLineBuf += L" " + wstring(extraArgs);
+                }
+
+                if (targetWorkDir && *targetWorkDir) {
+                    workDir = move(targetWorkDir);
+                }
+
+                processCmdLine = cmdLineBuf.data();
+                goto retry;
+            } else {
+                Alert(L"Failed starting %ws - not an executable.", args[argI]);
+                return -1;
+            }
         } else {
             Alert(L"Failed starting %ws. File not found?", args[argI]);
             return -1;
@@ -159,14 +191,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         success = false;
 
         wstring dirName(PathGetBaseName(ownDir));
-        bool replaced = false;
-        if (StrContains(dirName, L"Win32")) {
-            replaced = StrReplaceFirst(dirName, L"Win32", L"x64");
-        } else if (StrContains(dirName, L"x64")) {
-            replaced = StrReplaceFirst(dirName, L"x64", L"Win32");
-        }
-
-        if (replaced) {
+        if (ReplaceWithOtherBitness(&dirName)) {
             Path otherExePath = PathCombine(PathCombine(PathGetDirName(ownDir), dirName.c_str()), L"myinput_inject.exe");
 
             PROCESS_INFORMATION redirectPi;
@@ -190,33 +215,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     }
 
     if (success && !redirected) {
-        void *loadLibAddr = GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
+        Path dllPath = PathCombine(ownDir, L"myinput_hook.dll");
 
-        const wchar_t *dllName = L"myinput_hook.dll";
-        Path dllPath = PathCombine(ownDir, dllName);
-
-        size_t dllPathSize = (wcslen(dllPath) + 1) * sizeof(wchar_t);
-
-        LPVOID dllAddr = VirtualAllocEx(pi.hProcess, nullptr, dllPathSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-        if (dllAddr) {
-            if (WriteProcessMemory(pi.hProcess, dllAddr, dllPath, dllPathSize, nullptr)) {
-                HANDLE hRemote = CreateRemoteThread(pi.hProcess, nullptr, 0, (LPTHREAD_START_ROUTINE)loadLibAddr,
-                                                    dllAddr, 0, nullptr);
-                if (hRemote) {
-                    WaitForSingleObject(hRemote, INFINITE);
-                    CloseHandle(hRemote);
-                    success = true;
-                } else {
-                    Alert(L"Couldn't inject thread in process (%d)", GetLastError());
-                }
-            } else {
-                Alert(L"Couldn't write memory to process (%d)", GetLastError());
-            }
-
-            VirtualFreeEx(pi.hProcess, dllAddr, 0, MEM_RELEASE);
-        } else {
-            Alert(L"Couldn't allocate memory in process (%d)", GetLastError());
-        }
+        success = DoInject(pi.hProcess, dllPath);
     }
 
     if (pi.hThread) {

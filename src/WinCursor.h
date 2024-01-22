@@ -259,8 +259,8 @@ BOOL WINAPI GetClipCursor_Hook(LPRECT lpRect) {
 }
 
 void HookWinCursor() {
-    AddGlobalHook(&ShowCursor_Real, ShowCursor_Hook);
-    AddGlobalHook(&GetCursorInfo_Real, GetCursorInfo_Hook);
-    AddGlobalHook(&ClipCursor_Real, ClipCursor_Hook);
-    AddGlobalHook(&GetClipCursor_Real, GetClipCursor_Hook);
+    ADD_GLOBAL_HOOK(ShowCursor);
+    ADD_GLOBAL_HOOK(GetCursorInfo);
+    ADD_GLOBAL_HOOK(ClipCursor);
+    ADD_GLOBAL_HOOK(GetClipCursor);
 }
