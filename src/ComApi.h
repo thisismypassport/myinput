@@ -232,23 +232,6 @@ public:
 template <class TInst>
 class ComClassFactory : public ComWrapperBase<ComClassFactory<TInst>, ComClassFactoryIntf<TInst>, ComUnknownIntf<ComClassFactory<TInst>>> {};
 
-template <class TCls>
-TCls *GetComSingleton(WeakAtomic<TCls *> &singleton) {
-    TCls *cls = singleton.get();
-    if (cls) {
-        return cls;
-    }
-
-    cls = new TCls();
-    TCls *expected = nullptr;
-    if (singleton.compare_exchange(expected, cls)) {
-        return cls;
-    }
-
-    delete cls;
-    return expected;
-}
-
 template <class TRoot>
 class ComClientSecurityIntf : public ComIntfWrapper<IClientSecurity, TRoot> {
     IUnknown *UnwrapProxy(IUnknown *proxy, IID *outIntf = nullptr) {

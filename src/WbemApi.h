@@ -353,11 +353,9 @@ public:
 
 class MyWbemLocator : public ComWrapperBase<MyWbemLocator, MyWbemLocatorIntf, ComUnknownIntf<MyWbemLocator>> {};
 
-WeakAtomic<ComClassFactory<MyWbemLocator> *> mWbemLocatorFactory;
-
 void WrapClassIfNeeded(REFCLSID rclsid, REFIID riid, LPVOID *ppv) {
     if (rclsid == __uuidof(WbemLocator)) {
-        *ppv = GetComSingleton(mWbemLocatorFactory)->WrapInterface(riid, *ppv);
+        *ppv = WrapNewComInstance<ComClassFactory<MyWbemLocator>>(riid, *ppv);
     }
 }
 
