@@ -1,6 +1,12 @@
 #include "UtilsPath.h"
 #include "UtilsStr.h"
 #include "UtilsUiBase.h"
+#include "WinUtils.h"
+#include "Keys.h"
+#include "MyInputHook.h"
+#include "Inject.h"
+#include "ComUtils.h"
+#include "TestUtils.h"
 
 #include <Windows.h>
 #include <hidusage.h>
@@ -17,11 +23,6 @@
 #include <roapi.h>
 #include <wrl.h>
 #include "windows.gaming.input.h"
-
-#include "Keys.h"
-#include "MyInputHook.h"
-#include "Inject.h"
-#include "TestUtils.h"
 
 namespace WF = ABI::Windows::Foundation;
 namespace WFC = ABI::Windows::Foundation::Collections;
@@ -363,7 +364,7 @@ void ProcessRawInputMsgs(TReadCb readCallback, bool readBuffer, bool readWait) {
     while (readBuffer || readWait || GetMessageW(&msg, nullptr, 0, 0) > 0) {
         if (readWait) {
             MsgWaitForMultipleObjectsEx(0, nullptr, INFINITE, QS_RAWINPUT, MWMO_INPUTAVAILABLE);
-            PeekMessageW(&msg, nullptr, 0, 0, (readBuffer ? PM_NOREMOVE : 0) | PM_QS_INPUT);
+            PeekMessageW(&msg, nullptr, 0, 0, (readBuffer ? PM_NOREMOVE : PM_REMOVE) | PM_QS_INPUT);
         } else if (readBuffer) {
             while (!PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
                 WaitMessage();
@@ -523,6 +524,11 @@ void TestRawInputRegister() {
 
     AssertEquals("ri.reg.gen", RegisterRawInputDevices(rids, 6, sizeof(RAWINPUTDEVICE)), TRUE);
     AssertEquals("ri.greg.gen", GetRegisteredRawInputDevices(irid, &count, sizeof(RAWINPUTDEVICE)), 6);
+
+    UINT badCount = 3;
+    AssertEquals("ri.greg.badgen", GetRegisteredRawInputDevices(irid, &badCount, sizeof(RAWINPUTDEVICE)), INVALID_UINT_VALUE);
+    AssertEquals("ri.greg.badgen.err", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
+    AssertEquals("ri.greg.badgen.sz", badCount, 6);
 
     for (int i = 0; i < 6; i++) {
         rids[i].dwFlags = (rids[i].dwFlags & RIDEV_PAGEONLY) | RIDEV_REMOVE;
@@ -994,7 +1000,10 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
                         filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE;
                         filter.u.DeviceHandle.hTarget = devh;
                         HCMNOTIFICATION notify;
-                        AssertEquals("cm.ntf.hdl", CM_Register_Notification(&filter, (void *)devh, DeviceChangeCMCb, &notify), CR_SUCCESS);
+                        HANDLE devh2;
+                        AssertNotEquals("cm.ntf.hdl.dup", DuplicateHandle(GetCurrentProcess(), devh, GetCurrentProcess(), &devh2, 0, false, PROCESS_DUP_HANDLE), 0);
+                        AssertEquals("cm.ntf.hdl", CM_Register_Notification(&filter, (void *)devh2, DeviceChangeCMCb, &notify), CR_SUCCESS);
+                        CloseHandle(devh);
                     }
 
                     // interface props
@@ -2254,7 +2263,7 @@ DWORD CALLBACK DeviceChangeCMCb(HCMNOTIFICATION notify, PVOID context, CM_NOTIFY
     case CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE: {
         if (action == CM_NOTIFY_ACTION_DEVICEREMOVECOMPLETE) {
             AssertEquals("cm.ntf.hdl.close", CloseHandle((HANDLE)context), TRUE);
-            AssertEquals("cm.ntf.hdl.unreg", CM_Unregister_Notification(notify), CR_SUCCESS);
+            CreateThread([=] { AssertEquals("cm.ntf.hdl.unreg", CM_Unregister_Notification(notify), CR_SUCCESS); });
         }
 
         if (gPrintDeviceChange) {
@@ -2429,217 +2438,463 @@ void CreateNotifyWindow() {
     WaitForSingleObject(event, INFINITE);
 }
 
-void ReadWmi(bool printDevices) {
-    AssertEquals("co.init", CoInitializeEx(NULL, COINIT_APARTMENTTHREADED), S_OK);
+void PrintWmiProp(BSTR key, const VARIANT &value, CIMTYPE type) {
+    printf("  %ls -> ", key);
 
-    IWbemLocator *wbemLoc = nullptr;
+    switch (type & ~CIM_FLAG_ARRAY) {
+    case CIM_EMPTY:
+        printf("(null) ");
+        break;
+    case CIM_SINT8:
+        printf("(int8) ");
+        break;
+    case CIM_SINT16:
+        printf("(int16) ");
+        break;
+    case CIM_SINT32:
+        printf("(int32) ");
+        break;
+    case CIM_SINT64:
+        printf("(int64) ");
+        break;
+    case CIM_UINT8:
+        printf("(uint8) ");
+        break;
+    case CIM_UINT16:
+        printf("(uint16) ");
+        break;
+    case CIM_UINT32:
+        printf("(uint32) ");
+        break;
+    case CIM_UINT64:
+        printf("(uint64) ");
+        break;
+    case CIM_REAL32:
+        printf("(real32) ");
+        break;
+    case CIM_REAL64:
+        printf("(real64) ");
+        break;
+    case CIM_BOOLEAN:
+        printf("(bool) ");
+        break;
+    case CIM_CHAR16:
+        printf("(char) ");
+        break;
+    case CIM_STRING:
+        printf("(str) ");
+        break;
+    case CIM_DATETIME:
+        printf("(time) ");
+        break;
+    case CIM_REFERENCE:
+        printf("(ref) ");
+        break;
+    case CIM_OBJECT:
+        printf("(obj) ");
+        break;
+    default:
+        printf("(??? %d)", type);
+        break;
+    }
+
+    if (value.vt == VT_NULL) {
+        printf("null");
+    } else if (type & CIM_FLAG_ARRAY) {
+        printf("{");
+        byte *ptr = (byte *)value.parray->pvData;
+        for (ULONG i = 0; i < value.parray->rgsabound[0].cElements; i++) {
+            if (i > 0) {
+                printf(", ");
+            }
+
+            switch (type & ~CIM_FLAG_ARRAY) {
+            case CIM_STRING:
+                printf("\"%ls\"", *(wchar_t **)ptr);
+                break;
+            default:
+                printf("???");
+                break;
+            }
+
+            ptr += value.parray->cbElements;
+        }
+        printf("}");
+    } else {
+        switch (type) {
+        case CIM_SINT32:
+        case CIM_UINT32:
+            printf("%d", value.intVal);
+            break;
+        case CIM_BOOLEAN:
+            printf(value.boolVal ? "true" : "false");
+            break;
+        case CIM_STRING:
+            printf("\"%ls\"", value.bstrVal);
+            break;
+        default:
+            printf("???");
+            break;
+        }
+    }
+
+    printf("\n");
+}
+
+bool ProcessWmiDevice(IWbemClassObject *obj, bool print = false, bool printAll = false) {
+    Variant path;
+    AssertEquals("wb.objpath", obj->Get(L"__PATH", 0, &path, nullptr, nullptr), S_OK);
+    AssertTrue("wb.objpath.str", path.IsBstr());
+
+    Variant cls;
+    AssertEquals("wb.objget", obj->Get(L"PNPClass", 0, &cls, nullptr, nullptr), S_OK);
+
+    bool isHid = cls.IsBstr() && tstreq(cls.GetBstr(), L"HIDClass");
+    if (!printAll && !isHid) {
+        return false;
+    }
+
+    if (print) {
+        printf("WMI Device: %ls\n", path.GetBstr());
+    }
+
+    AssertEquals("wb.objenum", obj->BeginEnumeration(0), S_OK);
+    while (true) {
+        Bstr key;
+        Variant value;
+        CIMTYPE type;
+        HRESULT res = obj->Next(0, &key, &value, &type, nullptr);
+        if (res == WBEM_S_NO_MORE_DATA) {
+            break;
+        }
+
+        AssertEquals("wb.objnext", res, S_OK);
+
+        if (print) {
+            PrintWmiProp(key, value, type);
+        }
+    }
+
+#if ZERO
+    ComRef<IWbemObjectAccess> access;
+    AssertEquals("wb.objacc", obj->QueryInterface(&access), S_OK);
+
+    long phdl = 33;
+    AssertEquals("wb.acc.hdl", access->GetPropertyHandle(L"__PATH", nullptr, &phdl), S_OK);
+
+    DWORD dw;
+    AssertEquals("wb.acc.bad", access->ReadDWORD(phdl, &dw), WBEM_E_INVALID_PARAMETER);
+
+    wchar_t path2[0x1000];
+    long path2Sz;
+    AssertEquals("wb.acc.path", access->ReadPropertyValue(phdl, sizeof(path2), &path2Sz, (byte *)path2), S_OK);
+    AssertEquals("wb.acc.sz", path2Sz, (wcslen(path.GetBstr()) + 1) * sizeof(wchar_t));
+    AssertEquals("wb.acc.val", path2, path.GetBstr());
+#endif
+
+    return isHid;
+}
+
+class WbemObjectSinkImpl : public ComBase<IWbemObjectSink> {
+    function<void(long, IWbemClassObject **)> mIndicate;
+    function<void(HRESULT, BSTR, IWbemClassObject *, long)> mSetStatus;
+    atomic<long> mTotalIndicated = 0;
+    atomic<long> mGrandTotal = 0;
+
+public:
+    void Init(function<void(long, IWbemClassObject **)> &&indicate,
+              function<void(HRESULT, BSTR, IWbemClassObject *, long)> &&setStatus) {
+        mIndicate = indicate;
+        mSetStatus = setStatus;
+    }
+
+    STDMETHODIMP Indicate(long lObjectCount, IWbemClassObject **apObjArray) override {
+        mTotalIndicated += lObjectCount;
+        mGrandTotal += lObjectCount;
+        mIndicate(lObjectCount, apObjArray);
+        return S_OK;
+    }
+
+    STDMETHODIMP SetStatus(long lFlags, HRESULT hResult, BSTR strParam, IWbemClassObject *pObjParam) override {
+        switch (lFlags) {
+        case WBEM_STATUS_COMPLETE:
+            mSetStatus(hResult, strParam, pObjParam, mTotalIndicated.exchange(0));
+            return S_OK;
+        default:
+            printf("sink status %lx ; %lx\n", lFlags, hResult);
+            return S_OK;
+        }
+    }
+
+    long GrandTotal() { return mGrandTotal; }
+};
+
+template <class TIntf>
+ComRef<TIntf> RemarshalIntf(TIntf *intf, bool check = true) {
+    if (check) {
+        ComRef<IMarshal> marshal;
+        AssertEquals("co.marshal.qry", intf->QueryInterface(&marshal), S_OK);
+        AssertNotEquals("co.marshal.val", (uintptr_t)marshal.Get(), 0);
+    }
+
+    ComRef<IStream> stream;
+    AssertEquals("co.marshal.xth", CoMarshalInterThreadInterfaceInStream(__uuidof(TIntf), intf, &stream), S_OK);
+
+    ComRef<TIntf> outIntf;
+    AssertEquals("co.unmarshal.xth", CoGetInterfaceAndReleaseStream(stream, __uuidof(TIntf), (LPVOID *)&outIntf), S_OK);
+    return outIntf;
+    return intf;
+}
+
+void ReadWmi(bool print, bool printAll) {
+    constexpr int ENUM_SIZE = 1;
+    constexpr int ASYNC_SIZE = 3;
+
+    AssertEquals("co.init", CoInitializeEx(NULL, COINIT_MULTITHREADED), S_OK);
+
+    ComRef<IWbemLocator> wbemLoc;
     AssertEquals("co.create", CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER, IID_IWbemLocator, (void **)&wbemLoc), S_OK);
-    AssertNotEquals("co.created", (intptr_t)wbemLoc, 0);
+    AssertNotEquals("co.created", (intptr_t)wbemLoc.Get(), 0);
 
-    IUnknown *wbemLocU = nullptr;
+    ComRef<IUnknown> wbemLocU;
     AssertEquals("co.createu", CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER, IID_IUnknown, (void **)&wbemLocU), S_OK);
-    AssertNotEquals("co.createdu", (intptr_t)wbemLocU, 0);
+    AssertNotEquals("co.createdu", (intptr_t)wbemLocU.Get(), 0);
 
     MULTI_QI mq[] = {
         {&IID_IUnknown},
         {&IID_IWbemLocator},
     };
     AssertEquals("co.createx", CoCreateInstanceEx(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER, nullptr, 2, mq), S_OK);
+    AssertEquals("co.createx.0", mq[0].hr, S_OK);
+    AssertEquals("co.createx.0", mq[1].hr, S_OK);
+    mq[0].pItf->Release();
+    mq[1].pItf->Release();
 
-    IClassFactory *wbemLocCls = nullptr;
+    ComRef<IClassFactory> wbemLocCls;
     AssertEquals("co.cls", CoGetClassObject(CLSID_WbemLocator, CLSCTX_INPROC_SERVER, nullptr, IID_IClassFactory, (void **)&wbemLocCls), S_OK);
-    AssertNotEquals("co.cls.got", (intptr_t)wbemLocCls, 0);
+    AssertNotEquals("co.cls.got", (intptr_t)wbemLocCls.Get(), 0);
 
-    IWbemLocator *wbemLocC = nullptr;
+    ComRef<IWbemLocator> wbemLocC;
     AssertEquals("co.cls.create", wbemLocCls->CreateInstance(nullptr, IID_IWbemLocator, (void **)&wbemLocC), S_OK);
-    AssertNotEquals("co.cls.created", (intptr_t)wbemLocC, 0);
+    AssertNotEquals("co.cls.created", (intptr_t)wbemLocC.Get(), 0);
 
-    IUnknown *wbemLocClsU = nullptr;
+    ComRef<IUnknown> wbemLocClsU;
     AssertEquals("co.clsu", CoGetClassObject(CLSID_WbemLocator, CLSCTX_INPROC_SERVER, nullptr, IID_IUnknown, (void **)&wbemLocClsU), S_OK);
-    AssertNotEquals("co.clsu.got", (intptr_t)wbemLocClsU, 0);
+    AssertNotEquals("co.clsu.got", (intptr_t)wbemLocClsU.Get(), 0);
 
-    BSTR ns = SysAllocString(L"\\\\.\\Root\\CIMV2");
-    IWbemServices *svc = nullptr;
-    AssertEquals("wb.conn", wbemLoc->ConnectServer(ns, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &svc), S_OK);
-    AssertNotEquals("wb.conn.val", (intptr_t)svc, 0);
+    ComRef<IWbemServices> svc1;
+    Bstr root(L"\\\\.\\ROOT");
+    AssertEquals("wb.conn", wbemLoc->ConnectServer(root, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &svc1), S_OK);
+    AssertNotEquals("wb.conn.val", (intptr_t)svc1.Get(), 0);
+    svc1 = RemarshalIntf(svc1.Get());
+
+    AssertEquals("wb.sec", CoSetProxyBlanket(svc1, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE), S_OK);
+
+    ComRef<IWbemServices> svcpcp;
+    AssertEquals("wb.seccp", CoCopyProxy(svc1, (IUnknown **)&svcpcp), S_OK);
+    AssertNotEquals("wb.seccp.neq", (intptr_t)svcpcp.Get(), (intptr_t)svc1.Get());
+    ComRef<IWbemServices> svcpcpq;
+    AssertEquals("wb.seccp.q", svcpcp->QueryInterface(&svcpcpq), S_OK);
+    AssertEquals("wb.seccp.eq", (intptr_t)svcpcpq.Get(), (intptr_t)svc1.Get());
+
+    ComRef<IRpcOptions> rpco;
+    svc1->QueryInterface<IRpcOptions>(&rpco);
+    AssertEquals("wb.rpco", rpco->Set(svc1, COMBND_RPCTIMEOUT, RPC_C_BINDING_INFINITE_TIMEOUT), S_OK);
+
+    ComRef<IWbemServices> svc0;
+    Bstr cim(L"cimv2");
+    AssertEquals("wb.open", svc1->OpenNamespace(cim, 0, nullptr, &svc0, nullptr), S_OK);
+    AssertNotEquals("wb.open.done", (intptr_t)svc0.Get(), 0);
+
+    ComRef<IWbemCallResult> svcRes;
+    AssertEquals("wb.open.ss", svc1->OpenNamespace(cim, WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, nullptr, &svcRes), S_OK);
+    svcRes = RemarshalIntf(svcRes.Get());
+
+    long svcResSt;
+    AssertEquals("wb.cr.stat", svcRes->GetCallStatus(WBEM_INFINITE, &svcResSt), S_OK);
+    AssertEquals("wb.open.ss.res", svcResSt, S_OK);
+
+    ComRef<IWbemServices> svc;
+    AssertEquals("wb.cr.svc", svcRes->GetResultServices(0, &svc), S_OK);
+    AssertNotEquals("wb.open.ss.done", (intptr_t)svc.Get(), 0);
+    svc = RemarshalIntf(svc.Get());
 
     AssertEquals("wb.sec", CoSetProxyBlanket(svc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE), S_OK);
 
-    IWbemServices *svcpcp = nullptr;
-    AssertEquals("wb.seccp", CoCopyProxy(svc, (IUnknown **)&svcpcp), S_OK);
-    AssertNotEquals("wb.seccp.neq", (intptr_t)svcpcp, (intptr_t)svc);
-    IWbemServices *svcpcpq = nullptr;
-    AssertEquals("wb.seccp.q", svcpcp->QueryInterface(&svcpcpq), S_OK);
-    AssertEquals("wb.seccp.eq", (intptr_t)svcpcpq, (intptr_t)svc);
+    ComRef<IWbemClassObject> bad1;
+    AssertEquals("wb.cr.bad1", svcRes->GetResultObject(0, &bad1), S_OK);
+    AssertEquals("wb.cr.bad1.0", (intptr_t)bad1.Get(), 0);
+    Bstr bad2;
+    AssertEquals("wb.cr.bad2", svcRes->GetResultString(0, &bad2), WBEM_E_INVALID_OPERATION);
 
-    BSTR ns0 = SysAllocString(L"\\\\.\\Root\\CIMV2");
-    IWbemServices *svc0 = nullptr;
-    AssertEquals("wb.conn0", wbemLoc->ConnectServer(ns, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &svc0), S_OK);
-    AssertNotEquals("wb.conn0.val", (intptr_t)svc0, 0);
+    ComRef<IEnumWbemClassObject> enm;
+    Bstr clsn(L"Win32_PNPEntity");
+    AssertEquals("wb.enum", svc->CreateInstanceEnum(clsn, 0, nullptr, &enm), S_OK);
+    AssertNotEquals("wb.enum.val", (intptr_t)enm.Get(), 0);
+    enm = RemarshalIntf(enm.Get());
 
-    AssertEquals("wb.sec0", CoSetProxyBlanket(svc0, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE), S_OK);
-
-    // svc0->OpenNamespace (SysAllocString (L"cimv2"), 0, nullptr,
-
-    IEnumWbemClassObject *enm = nullptr;
-#if ZERO
-    BSTR ql = SysAllocString(L"WQL");
-    BSTR qry = SysAllocString(L"SELECT * FROM Win32_PNPEntity");
-    AssertEquals("wb.exec", svc->ExecQuery(ql, qry, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &enm), S_OK);
-    AssertNotEquals("wb.exec.val", (intptr_t)enm, 0);
-#else
-    BSTR clsn = SysAllocString(L"Win32_PNPEntity");
-    AssertEquals("wb.enum", svc->CreateInstanceEnum(clsn, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &enm), S_OK);
-    AssertNotEquals("wb.enum.val", (intptr_t)enm, 0);
-#endif
-
-    BSTR propName = SysAllocString(L"Name");
+    long enumTotal = 0;
+    long enumHid = 0;
     while (true) {
-        constexpr int ENUM_SIZE = 10;
-
         IWbemClassObject *objs[ENUM_SIZE] = {};
         ULONG ret;
         HRESULT res = enm->Next(WBEM_INFINITE, ENUM_SIZE, objs, &ret);
         AssertEquals("wb.next", res, ret == ENUM_SIZE ? S_OK : S_FALSE);
         if (!ret) {
+            AssertEquals("wb.next.end", enm->Next(WBEM_INFINITE, ENUM_SIZE, objs, &ret), S_FALSE);
             break;
         }
 
+        enumTotal += ret;
         for (ULONG objI = 0; objI < ret; objI++) {
-            IWbemClassObject *obj = objs[objI];
-
-            if (printDevices) {
-                printf("WMI Device:\n");
+            if (ProcessWmiDevice(objs[objI])) {
+                enumHid++;
             }
 
-            AssertEquals("wb.objenum", obj->BeginEnumeration(0), S_OK);
-            while (true) {
-                BSTR key;
-                VARIANT value;
-                VariantInit(&value);
-                CIMTYPE type;
-                res = obj->Next(0, &key, &value, &type, nullptr);
-                if (res == WBEM_S_NO_MORE_DATA) {
-                    break;
-                }
+            Variant deviceId;
+            AssertEquals("wb.obj.did", objs[objI]->Get(L"deviceid", 0, &deviceId, nullptr, nullptr), S_OK);
 
-                AssertEquals("wb.objnext", res, S_OK);
+            wstring objName = deviceId.GetBstr();
+            StrReplaceAll(objName, L"\\", L"\\\\");
+            StrReplaceAll(objName, L"\"", L"\\\"");
+            objName = L"win32_pnpentity.deviceid=\"" + objName + L"\"";
 
-                if (printDevices) {
-                    printf("  %ls -> ", key);
+            ComRef<IWbemClassObject> objBn;
+            ComRef<IWbemCallResult> objBnSr;
+            AssertEquals("wb.getobj", svc->GetObject(Bstr(objName.c_str()), 0, nullptr, &objBn, &objBnSr), S_OK);
+            AssertNotEquals("wb.getobj.res", (uintptr_t)objBn.Get(), 0);
+            objBn = RemarshalIntf(objBn.Get());
+            objBnSr = RemarshalIntf(objBnSr.Get());
 
-                    switch (type & ~CIM_FLAG_ARRAY) {
-                    case CIM_EMPTY:
-                        printf("(null) ");
-                        break;
-                    case CIM_SINT8:
-                        printf("(int8) ");
-                        break;
-                    case CIM_SINT16:
-                        printf("(int16) ");
-                        break;
-                    case CIM_SINT32:
-                        printf("(int32) ");
-                        break;
-                    case CIM_SINT64:
-                        printf("(int64) ");
-                        break;
-                    case CIM_UINT8:
-                        printf("(uint8) ");
-                        break;
-                    case CIM_UINT16:
-                        printf("(uint16) ");
-                        break;
-                    case CIM_UINT32:
-                        printf("(uint32) ");
-                        break;
-                    case CIM_UINT64:
-                        printf("(uint64) ");
-                        break;
-                    case CIM_REAL32:
-                        printf("(real32) ");
-                        break;
-                    case CIM_REAL64:
-                        printf("(real64) ");
-                        break;
-                    case CIM_BOOLEAN:
-                        printf("(bool) ");
-                        break;
-                    case CIM_CHAR16:
-                        printf("(char) ");
-                        break;
-                    case CIM_STRING:
-                        printf("(str) ");
-                        break;
-                    case CIM_DATETIME:
-                        printf("(time) ");
-                        break;
-                    case CIM_REFERENCE:
-                        printf("(ref) ");
-                        break;
-                    case CIM_OBJECT:
-                        printf("(obj) ");
-                        break;
-                    default:
-                        printf("(??? %d)", type);
-                        break;
-                    }
+            ComRef<IWbemClassObject> objBn0;
+            AssertEquals("wb.getobj.cr", objBnSr->GetResultObject(0, &objBn0), S_OK);
+            AssertNotEquals("wb.getobj.cr.res", (uintptr_t)objBn0.Get(), 0);
 
-                    if (value.vt == VT_NULL) {
-                        printf("null");
-                    } else if (type & CIM_FLAG_ARRAY) {
-                        printf("{");
-                        byte *ptr = (byte *)value.parray->pvData;
-                        for (ULONG i = 0; i < value.parray->rgsabound[0].cElements; i++) {
-                            if (i > 0) {
-                                printf(", ");
-                            }
+            if (!StrContains(objName, L"'")) {
+                wstring objName2 = deviceId.GetBstr();
+                objName2 = L"win32_pnpentity.deviceid='" + objName2 + L"'";
+                ComRef<IWbemCallResult> objBnRes;
+                AssertEquals("wb.getobj.ss", svc->GetObject(Bstr(objName2.c_str()), WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, nullptr, &objBnRes), S_OK);
+                objBnRes = RemarshalIntf(objBnRes.Get());
 
-                            switch (type & ~CIM_FLAG_ARRAY) {
-                            case CIM_STRING:
-                                printf("\"%ls\"", *(wchar_t **)ptr);
-                                break;
-                            default:
-                                printf("???");
-                                break;
-                            }
+                ComRef<IWbemClassObject> objBn2;
+                AssertEquals("wb.getobj.ss.cr", objBnRes->GetResultObject(WBEM_INFINITE, &objBn2), S_OK);
+                AssertNotEquals("wb.getobj.ss.res", (uintptr_t)objBn2.Get(), 0);
 
-                            ptr += value.parray->cbElements;
-                        }
-                        printf("}");
-                    } else {
-                        switch (type) {
-                        case CIM_SINT32:
-                        case CIM_UINT32:
-                            printf("%d", value.intVal);
-                            break;
-                        case CIM_BOOLEAN:
-                            printf(value.boolVal ? "true" : "false");
-                            break;
-                        case CIM_STRING:
-                            printf("\"%ls\"", value.bstrVal);
-                            break;
-                        default:
-                            printf("???");
-                            break;
-                        }
-                    }
+                long objStat;
+                AssertEquals("wb.getobj.ss.crs", objBnRes->GetCallStatus(WBEM_INFINITE, &objStat), S_OK);
+                AssertEquals("wb.getobj.ss.stat", objStat, S_OK);
 
-                    printf("\n");
-                }
+                ComRef<IWbemServices> bad1;
+                Bstr bad2;
+                AssertEquals("wb.getobj.ss.bad1", objBnRes->GetResultServices(WBEM_INFINITE, &bad1), S_OK);
+                AssertEquals("wb.getobj.ss.bad1r", (uintptr_t)bad1.Get(), 0);
+                AssertEquals("wb.getobj.ss.bad2", objBnRes->GetResultString(WBEM_INFINITE, &bad2), WBEM_E_INVALID_OPERATION);
 
-                SysFreeString(key);
-                VariantClear(&value);
+                wstring objName3 = deviceId.GetBstr();
+                objName3 = L"\\\\.\\rOOt\\cimV2:win32_pnpentity='" + objName3 + L"'";
+                StrToLowerCase(objName3);
+
+                ComRef<WbemObjectSinkImpl> asyncobj = new WbemObjectSinkImpl();
+                asyncobj->Init([=](long count, IWbemClassObject **objs) {
+                    AssertEquals ("wb.getobj.a.c", count, 1);
+                    AssertNotEquals ("wb.getobj.a.res", (uintptr_t) objs[0], 0); }, [=](HRESULT res, BSTR str, IWbemClassObject *obj, long total) {
+                    AssertTrue ("wb.getobj.a.args", !str && !obj);
+                    AssertEquals ("wb.getobj.a.res", res, S_OK); });
+                AssertEquals("wb.getobj.a", svc1->GetObjectAsync(Bstr(objName3.c_str()), 0, nullptr, asyncobj), S_OK);
             }
 
-            obj->Release();
+            objs[objI]->Release();
         }
     }
 
-    enm->Release();
-    svc->Release();
-    svc0->Release();
-    wbemLoc->Release();
+    ComRef<IEnumWbemClassObject> enmclone;
+    AssertEquals("wb.enum.cl", enm->Clone(&enmclone), S_OK);
+    enmclone = RemarshalIntf(enmclone.Get());
+    AssertEquals("wb.enum.skend", enmclone->Skip(WBEM_INFINITE, 1), S_FALSE);
+    AssertEquals("wb.enum.reset", enmclone->Reset(), S_OK);
+    AssertEquals("wb.enum.sk1", enmclone->Skip(WBEM_INFINITE, 1), S_OK);
+
+    AssertEquals("wb.enum.reset", enmclone->Reset(), S_OK);
+    ComRef<WbemObjectSinkImpl> enumasync = new WbemObjectSinkImpl();
+    enumasync->Init([=](long count, IWbemClassObject **objs) {
+        for (long objI = 0; objI < count; objI++){
+            ProcessWmiDevice (objs[objI], print, printAll);
+} }, [=](HRESULT res, BSTR str, IWbemClassObject *obj, long total) {
+        AssertTrue ("wb.enum.nexta.args", !str && !obj);
+        AssertTrue ("wb.enum.nexta.res", res == S_OK || (res == S_FALSE && total != ENUM_SIZE));
+
+        if (res == S_OK)
+        {
+            if (!total){ return; // happens from S_FALSE branch NextAsync call...
+}
+
+            CreateThread ([=]
+            {
+                HRESULT res2 = enmclone->NextAsync (ENUM_SIZE, enumasync);
+                AssertTrue ("wb.enum.nexta.more", res2 == S_OK || res2 == S_FALSE);
+            });
+        }
+        else
+        {
+            CreateThread ([=]
+            {
+                HRESULT res2 = enmclone->NextAsync (ENUM_SIZE, enumasync);
+                AssertEquals ("wb.enum.nexta.nomore", res2, S_FALSE);
+                AssertEquals ("wb.enum.nexta.gtotal", enumTotal, enumasync->GrandTotal ());
+            });
+        } });
+    for (int i = 0; i < ASYNC_SIZE; i++) {
+        AssertEquals("wb.enum.nexta", enmclone->NextAsync(ENUM_SIZE, enumasync), S_OK);
+    }
+
+    ComRef<WbemObjectSinkImpl> asyncenum = new WbemObjectSinkImpl();
+    asyncenum->Init([=](long count, IWbemClassObject **objs) {
+        for (long objI = 0; objI < count; objI++){
+            ProcessWmiDevice (objs[objI]);
+} }, [=](HRESULT res, BSTR str, IWbemClassObject *obj, long total) {
+        AssertTrue ("wb.aenum.args", !str && !obj);
+        AssertEquals ("wb.aenum.res", res, S_OK);
+        AssertEquals ("wb.aenum.gtotal", enumTotal, asyncenum->GrandTotal ()); });
+
+    AssertEquals("wb.aenum", svc->CreateInstanceEnumAsync(clsn, 0, nullptr, asyncenum), S_OK);
+
+    long queryTotal = 0;
+    ComRef<IEnumWbemClassObject> queryEnum;
+    AssertEquals("wb.query", svc->ExecQuery(Bstr(L"WQL"), Bstr(L"select __PATH, PNPClass, ClassGuid from win32_pnpentity"), WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &queryEnum), S_OK);
+    AssertNotEquals("wb.query.val", (intptr_t)queryEnum.Get(), 0);
+    queryEnum = RemarshalIntf(queryEnum.Get());
+
+    while (true) {
+        IWbemClassObject *objs[ENUM_SIZE] = {};
+        ULONG ret;
+        HRESULT res = queryEnum->Next(WBEM_INFINITE, ENUM_SIZE, objs, &ret);
+        AssertEquals("wb.query.next", res, ret == ENUM_SIZE ? S_OK : S_FALSE);
+        if (!ret) {
+            AssertEquals("wb.query.next.end", enm->Next(WBEM_INFINITE, ENUM_SIZE, objs, &ret), S_FALSE);
+            AssertEquals("wb.query.total", enumTotal, queryTotal);
+            break;
+        }
+
+        queryTotal += ret;
+        for (ULONG objI = 0; objI < ret; objI++) {
+            objs[objI] = RemarshalIntf(objs[objI]).Take();
+            ProcessWmiDevice(objs[objI]);
+            objs[objI]->Release();
+        }
+    }
+
+    ComRef<WbemObjectSinkImpl> queryAsync = new WbemObjectSinkImpl();
+    queryAsync->Init([=](long count, IWbemClassObject **objs) {
+        for (long objI = 0; objI < count; objI++){
+            ProcessWmiDevice (objs[objI]);
+} }, [=](HRESULT res, BSTR str, IWbemClassObject *obj, long total) {
+        AssertTrue ("wb.aquery.args", !str && !obj);
+        AssertEquals ("wb.aquery.res", res, S_OK);
+        AssertEquals ("wb.aquery.gtotal", enumHid, queryAsync->GrandTotal ()); });
+
+    ComRef<IWbemObjectSink> sink = RemarshalIntf((IWbemObjectSink *)queryAsync.Get(), false);
+    AssertEquals("wb.aquery", svc->ExecQueryAsync(Bstr(L"WQL"), Bstr(L"select * from win32_pnpentity WHERE __path is not null and pnpclass = 'hidclass'"), 0, nullptr, sink), S_OK);
 }
 
 class Args {
@@ -2762,7 +3017,8 @@ int main(int argc, char **argv) {
     BOOL_ARG(printCfgMgrDevices, "print-cfg-dev");
     BOOL_ARG(printAllCfgMgrDevices, "print-cfg-dev-all");
     G_BOOL_ARG(gPrintDeviceChange, "print-dev-chg");
-    BOOL_ARG(printWmiDevices, "print-wmi");
+    BOOL_ARG(printWmi, "print-wmi");
+    BOOL_ARG(printWmiAll, "print-wmi-all");
 
     BOOL_ARG(createProcess, "create-process");
     BOOL_ARG(createProcessOther, "create-process-other");
@@ -2847,7 +3103,7 @@ int main(int argc, char **argv) {
     }
 
     if (readWmi) {
-        ReadWmi(printWmiDevices);
+        ReadWmi(printWmi, printWmiAll);
     }
 
     if (createProcess) {

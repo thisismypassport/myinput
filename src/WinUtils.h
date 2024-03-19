@@ -65,18 +65,20 @@ class ReusableThread {
         while (true) {
             WaitForSingleObject(self->Event, INFINITE);
 
-            Action action;
-            {
-                lock_guard<mutex> lock(self->Mutex);
-                if (self->Actions.empty()) {
-                    continue;
+            while (true) {
+                Action action;
+                {
+                    lock_guard<mutex> lock(self->Mutex);
+                    if (self->Actions.empty()) {
+                        break;
+                    }
+
+                    action = self->Actions.front();
+                    self->Actions.pop_front();
                 }
 
-                action = self->Actions.front();
-                self->Actions.pop_front();
+                action.Routine(action.Param);
             }
-
-            action.Routine(action.Param);
         }
     }
 
@@ -124,8 +126,7 @@ public:
     void CreateThread(LPTHREAD_START_ROUTINE routine, void *param) {
         lock_guard<mutex> lock(Mutex);
         if (!IdleThreads.empty()) {
-            ThreadEntry *entry = IdleThreads.back();
-            IdleThreads.pop_back();
+            ThreadEntry *entry = ExtractBack(IdleThreads);
 
             entry->Routine = routine;
             entry->Param = param;
@@ -177,6 +178,18 @@ public:
         Thread = thread;
     }
 };
+
+#define INVALID_UINT_VALUE ((UINT)-1)
+
+DWORD GetWindowThreadInOurProcess(HWND window) {
+    DWORD processId = 0;
+    DWORD threadId = GetWindowThreadProcessId(window, &processId);
+    return processId == GetCurrentProcessId() ? threadId : 0;
+}
+
+bool IsWindowInOurProcess(HWND window) {
+    return GetWindowThreadInOurProcess(window) != 0;
+}
 
 int wsprintfT(char *dest, const char *src, ...) {
     va_list va;

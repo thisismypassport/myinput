@@ -40,14 +40,16 @@ bool StrReplaceFirst(std::basic_string<TChar> &str, const TChar *other, const TC
 template <class TChar>
 int StrReplaceAll(std::basic_string<TChar> &str, const TChar *other, const TChar *replacement) {
     int count = 0;
+    size_t startPos = 0;
     while (true) {
-        auto pos = str.find(other);
+        auto pos = str.find(other, startPos);
         if (pos == std::basic_string<TChar>::npos) {
             return count;
         }
 
         str.replace(pos, tstrlen(other), replacement);
         count++;
+        startPos = pos + tstrlen(replacement);
     }
 }
 
@@ -81,12 +83,14 @@ std::basic_string<TChar> StrFromValue(T value) {
 }
 
 template <class TChar>
-void StrToLowerCase(std::basic_string<TChar> &str) {
+void StrToLowerCase(std::basic_string<TChar> &str) // ascii tolower!
+{
     transform(str.begin(), str.end(), str.begin(), tolower);
 }
 
 template <class TChar>
-std::basic_string<TChar> StrLowerCase(const std::basic_string<TChar> &str) {
+std::basic_string<TChar> StrLowerCase(const std::basic_string<TChar> &str) // ascii tolower!
+{
     std::basic_string<TChar> dest;
     dest.resize(str.size());
     transform(str.begin(), str.end(), dest.begin(), tolower);
@@ -102,3 +106,29 @@ bool tstreq(const wchar_t *str1, const wchar_t *str2) { return wcscmp(str1, str2
 bool tstrieq(const wchar_t *str1, const wchar_t *str2) { return _wcsicmp(str1, str2) == 0; }
 bool tstrneq(const wchar_t *str1, const wchar_t *str2, size_t count) { return wcsncmp(str1, str2, count) == 0; }
 bool tstrnieq(const wchar_t *str1, const wchar_t *str2, size_t count) { return _wcsnicmp(str1, str2, count) == 0; }
+
+const wchar_t *wcsistr(const wchar_t *str, const wchar_t *subStr) {
+    if (!*subStr) {
+        return str;
+    }
+
+    wchar_t l = towlower(*subStr);
+    wchar_t u = towupper(*subStr);
+
+    for (; *str; ++str) {
+        if (*str == l || *str == u) {
+            const wchar_t *s1 = str + 1;
+            const wchar_t *s2 = subStr + 1;
+
+            while (*s1 && *s2 && towupper(*s1) == towupper(*s2)) {
+                ++s1, ++s2;
+            }
+
+            if (!*s2) {
+                return str;
+            }
+        }
+    }
+
+    return nullptr;
+}

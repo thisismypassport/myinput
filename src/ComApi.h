@@ -21,7 +21,8 @@ public:
 
     void AddRef() { mRefCount++; }
     void Release() {
-        if (--mRefCount == 0) {
+        ULONG refCount = --mRefCount;
+        if (refCount == 0) {
             delete (TActual *)this;
         }
     }
@@ -42,6 +43,14 @@ public:
     template <class TIntf>
     TIntf *WrapInterface(TIntf *input) {
         return (TIntf *)WrapInterface(__uuidof(TIntf), input);
+    }
+
+    void UndoWrapInterface(void *intf) // removes the refcount that WrapInterface adds
+    {
+        apply([&](auto &...intfs) {
+            (intfs.TryUndoWrapInterface(intf) || ...);
+        },
+              mIntfs);
     }
 
     void *UnwrapInterface(void *input, IID *outIntf) {
@@ -129,6 +138,15 @@ public:
         return true;
     }
 
+    bool TryUndoWrapInterface(void *inObj) {
+        if (inObj != (TIntf *)this) {
+            return false;
+        }
+
+        OnRelease(); // may delete this
+        return true;
+    }
+
     bool TryUnwrapInterface(void *inObj, void **outObj, IID *outIntf) {
         if (inObj != (TIntf *)this) {
             return false;
@@ -139,6 +157,18 @@ public:
             *outIntf = __uuidof(TIntf);
         }
         return true;
+    }
+};
+
+template <class TIntf, class TRoot, class... TSupers>
+class ComIntfWrapperWithSupers : public ComIntfWrapper<TIntf, TRoot> {
+public:
+    bool TryWrapInterface(REFIID intf, void *inObj, void **outObj) {
+        if (((intf == __uuidof(TSupers)) || ...)) {
+            return ComIntfWrapper<TIntf, TRoot>::TryWrapInterface(__uuidof(TIntf), inObj, outObj);
+        } else {
+            return ComIntfWrapper<TIntf, TRoot>::TryWrapInterface(intf, inObj, outObj);
+        }
     }
 };
 
@@ -163,6 +193,14 @@ public:
         }
 
         return true;
+    }
+
+    bool TryUndoWrapInterface(void *inObj) {
+        if (ComIntfWrapper<TIntf, TRoot>::TryUndoWrapInterface(inObj)) {
+            return true;
+        }
+
+        return mNext ? mNext->TryUndoWrapInterface(inObj) : false;
     }
 
     bool TryUnwrapInterface(void *inObj, void **outObj, IID *outIntf) {
@@ -233,32 +271,98 @@ template <class TInst>
 class ComClassFactory : public ComWrapperBase<ComClassFactory<TInst>, ComClassFactoryIntf<TInst>, ComUnknownIntf<ComClassFactory<TInst>>> {};
 
 template <class TRoot>
-class ComClientSecurityIntf : public ComIntfWrapper<IClientSecurity, TRoot> {
-    IUnknown *UnwrapProxy(IUnknown *proxy, IID *outIntf = nullptr) {
-        auto unwrapped = (IUnknown *)this->mRoot->UnwrapInterface(proxy, outIntf);
-        return unwrapped ? unwrapped : proxy; // (nullptr and invalid ptrs (like proxy) behave differently)
-    }
+IUnknown *ComUnwrapProxy(TRoot *root, void *proxy, IID *outIntf = nullptr) {
+    auto unwrapped = (IUnknown *)root->UnwrapInterface(proxy, outIntf);
+    return unwrapped ? unwrapped : (IUnknown *)proxy; // (nullptr and invalid ptrs (like proxy) behave differently)
+}
 
+// (observed to need Multi on EnumWbemClassObject, thus making proxy-ish intfs all multi, just in case)
+template <class TRoot>
+class ComClientSecurityIntf : public ComIntfMultiWrapper<ComClientSecurityIntf<TRoot>, IClientSecurity, TRoot> {
 public:
     STDMETHODIMP QueryBlanket(IUnknown *pProxy, DWORD *pAuthnSvc, DWORD *pAuthzSvc, OLECHAR **pServerPrincName,
                               DWORD *pAuthnLevel, DWORD *pImpLevel, void **pAuthInfo, DWORD *pCapabilities) override {
-        return this->mInner->QueryBlanket(UnwrapProxy(pProxy), pAuthnSvc, pAuthzSvc, pServerPrincName, pAuthnLevel, pImpLevel, pAuthInfo, pCapabilities);
+        IUnknown *innerProxy = ComUnwrapProxy(this->mRoot, pProxy);
+        return this->mInner->QueryBlanket(innerProxy, pAuthnSvc, pAuthzSvc, pServerPrincName, pAuthnLevel, pImpLevel, pAuthInfo, pCapabilities);
     }
 
     STDMETHODIMP SetBlanket(IUnknown *pProxy, DWORD dwAuthnSvc, DWORD dwAuthzSvc, OLECHAR *pServerPrincName,
                             DWORD dwAuthnLevel, DWORD dwImpLevel, void *pAuthInfo, DWORD dwCapabilities) override {
-        return this->mInner->SetBlanket(UnwrapProxy(pProxy), dwAuthnSvc, dwAuthzSvc, pServerPrincName, dwAuthnLevel, dwImpLevel, pAuthInfo, dwCapabilities);
+        IUnknown *innerProxy = ComUnwrapProxy(this->mRoot, pProxy);
+        return this->mInner->SetBlanket(innerProxy, dwAuthnSvc, dwAuthzSvc, pServerPrincName, dwAuthnLevel, dwImpLevel, pAuthInfo, dwCapabilities);
     }
 
     STDMETHODIMP CopyProxy(IUnknown *pProxy, IUnknown **ppCopy) override {
         IID intf = {};
-        HRESULT res = this->mInner->CopyProxy(UnwrapProxy(pProxy, &intf), ppCopy);
+        IUnknown *innerProxy = ComUnwrapProxy(this->mRoot, pProxy, &intf);
+        HRESULT res = this->mInner->CopyProxy(innerProxy, ppCopy);
         if (res == S_OK && ppCopy) {
             *ppCopy = (IUnknown *)this->mRoot->WrapInterface(intf, *ppCopy);
         }
         return res;
     }
 };
+
+template <class TRoot>
+class ComRpcOptionsIntf : public ComIntfMultiWrapper<ComRpcOptionsIntf<TRoot>, IRpcOptions, TRoot> {
+public:
+    STDMETHODIMP Set(IUnknown *pProxy, RPCOPT_PROPERTIES dwProperty, ULONG_PTR dwValue) override {
+        IUnknown *innerProxy = ComUnwrapProxy(this->mRoot, pProxy);
+        return this->mInner->Set(innerProxy, dwProperty, dwValue);
+    }
+
+    STDMETHODIMP Query(IUnknown *pProxy, RPCOPT_PROPERTIES dwProperty, ULONG_PTR *pdwValue) override {
+        IUnknown *innerProxy = ComUnwrapProxy(this->mRoot, pProxy);
+        return this->mInner->Query(innerProxy, dwProperty, pdwValue);
+    }
+};
+
+// TODO: needs more work
+template <class TRoot>
+class ComMarshalIntf : public ComIntfMultiWrapper<ComMarshalIntf<TRoot>, IMarshal, TRoot> {
+public:
+    STDMETHODIMP GetUnmarshalClass(REFIID riid, void *pv, DWORD dwDestContext, void *pvDestContext, DWORD mshlflags, CLSID *pCid) override {
+        ComRef<IMarshal> marshal;
+        if (dwDestContext == MSHCTX_INPROC &&
+            SUCCEEDED(CoGetStandardMarshal(riid, (IUnknown *)this, dwDestContext, pvDestContext, mshlflags, &marshal))) {
+            return marshal->GetUnmarshalClass(riid, pv, dwDestContext, pvDestContext, mshlflags, pCid);
+        }
+
+        pv = pv ? ComUnwrapProxy(this->mRoot, pv) : pv;
+        return this->mInner->GetUnmarshalClass(riid, pv, dwDestContext, pvDestContext, mshlflags, pCid);
+    }
+    STDMETHODIMP GetMarshalSizeMax(REFIID riid, void *pv, DWORD dwDestContext, void *pvDestContext, DWORD mshlflags, DWORD *pSize) override {
+        ComRef<IMarshal> marshal;
+        if (dwDestContext == MSHCTX_INPROC &&
+            SUCCEEDED(CoGetStandardMarshal(riid, (IUnknown *)this, dwDestContext, pvDestContext, mshlflags, &marshal))) {
+            return marshal->GetMarshalSizeMax(riid, pv, dwDestContext, pvDestContext, mshlflags, pSize);
+        }
+
+        pv = pv ? ComUnwrapProxy(this->mRoot, pv) : pv;
+        return this->mInner->GetMarshalSizeMax(riid, pv, dwDestContext, pvDestContext, mshlflags, pSize);
+    }
+    STDMETHODIMP MarshalInterface(IStream *pStm, REFIID riid, void *pv, DWORD dwDestContext, void *pvDestContext, DWORD mshlflags) override {
+        ComRef<IMarshal> marshal;
+        if (dwDestContext == MSHCTX_INPROC &&
+            SUCCEEDED(CoGetStandardMarshal(riid, (IUnknown *)this, dwDestContext, pvDestContext, mshlflags, &marshal))) {
+            return marshal->MarshalInterface(pStm, riid, pv, dwDestContext, pvDestContext, mshlflags);
+        }
+
+        pv = pv ? ComUnwrapProxy(this->mRoot, pv) : pv;
+        return this->mInner->MarshalInterface(pStm, riid, pv, dwDestContext, pvDestContext, mshlflags);
+    }
+    STDMETHODIMP UnmarshalInterface(IStream *pStm, REFIID riid, void **ppv) override {
+        return this->mInner->UnmarshalInterface(pStm, riid, ppv);
+    }
+    STDMETHODIMP ReleaseMarshalData(IStream *pStm) override {
+        return this->mInner->ReleaseMarshalData(pStm);
+    }
+    STDMETHODIMP DisconnectObject(DWORD dwReserved) override {
+        return this->mInner->DisconnectObject(dwReserved);
+    }
+};
+
+#define COM_RPC_INTERFACES(TRoot) ComRpcOptionsIntf<TRoot>, ComClientSecurityIntf<TRoot>, ComMarshalIntf<TRoot>, ComUnknownIntf<TRoot>
 
 void WrapClassIfNeeded(REFCLSID rclsid, REFIID riid, LPVOID *ppv);
 void WrapInstanceIfNeeded(REFCLSID rclsid, REFIID riid, LPVOID *ppv);

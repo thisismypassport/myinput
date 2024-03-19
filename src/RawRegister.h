@@ -506,7 +506,7 @@ public:
                     continue;
                 }
 
-                // can we do something smarter than choosing at random?
+                // can we do something smarter than choosing arbitrarily?
                 HANDLE newDevice = nullptr;
                 if (realCount != INVALID_UINT_VALUE) {
                     for (UINT i = 0; i < realCount; i++) {

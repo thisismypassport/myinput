@@ -10,6 +10,8 @@ DEVINST gRootDevInst;
 UniqueLog gUniqLogCfgMgrFind;
 AddrRange gCfgMgrAddrs;
 
+// Note - I'm ignoring HMACHINE since in modern windows, non-local HMACHINEs aren't supported anyway
+
 enum {
     CustomDevInstStart = 0x71feffff, // DEVINST are indices to an array, so a large value seems safe
 };
@@ -251,19 +253,41 @@ CONFIGRET WINAPI CM_Get_Device_ID_ExW_Hook(DEVINST dnDevInst, PWSTR buffer, ULON
                                     [&] { return CM_Get_Device_ID_ExW_Real(dnDevInst, buffer, bufferLen, ulFlags, hMachine); });
 }
 
+struct FilterResult {
+    int User = -1;
+    int Types = ~0;
+
+    bool Matches(DeviceNode *node) const {
+        return (User < 0 || User == node->UserIdx) &&
+               (node->NodeType & Types) != 0;
+    }
+};
+
 template <class tchar>
-static bool DeviceIDListFilterMatches(const tchar *pszFilter, ULONG ulFlags) {
-    ulFlags &= ~CM_GETIDLIST_FILTER_PRESENT;
+static bool DeviceIDListFilterMatches(const tchar *pszFilter, ULONG ulFlags, FilterResult *outFilter) {
+    ulFlags &= ~(CM_GETIDLIST_FILTER_PRESENT | CM_GETIDLIST_DONOTGENERATE);
 
     if (ulFlags == CM_GETIDLIST_FILTER_NONE) {
         return true;
     }
 
-    if (ulFlags == CM_GETIDLIST_FILTER_ENUMERATOR && pszFilter && tstreq(pszFilter, TSTR("ROOT"))) {
+    if (ulFlags == CM_GETIDLIST_FILTER_ENUMERATOR && pszFilter && tstrieq(pszFilter, TSTR("ROOT"))) {
         return true;
     }
 
-    // TODO: CM_GETIDLIST_FILTER_CLASS ?
+    if (ulFlags == CM_GETIDLIST_FILTER_CLASS) {
+        if (pszFilter && tstrieq(pszFilter, TSTR(GUID_DEVCLASS_XUSB_STR))) {
+            outFilter->Types = DEVICE_NODE_TYPE_XUSB;
+        } else if (pszFilter && tstrieq(pszFilter, TSTR(GUID_DEVCLASS_HIDCLASS_STR))) {
+            outFilter->Types = DEVICE_NODE_TYPE_HID;
+        } else {
+            return false;
+        }
+
+        return true;
+    }
+
+    // CM_GETIDLIST_FILTER_SERVICE?
     return false;
 }
 
@@ -279,10 +303,11 @@ CONFIGRET WINAPI CM_Get_Device_ID_List_Size_GenHook(PULONG pulLen, const tchar *
 
     CONFIGRET ret = origCall();
 
-    if (ret == CR_SUCCESS && pulLen && DeviceIDListFilterMatches(pszFilter, ulFlags)) {
+    FilterResult filter;
+    if (ret == CR_SUCCESS && pulLen && DeviceIDListFilterMatches(pszFilter, ulFlags, &filter)) {
         for (int i = 0; i < IMPL_MAX_DEVNODES; i++) {
             DeviceNode *node = ImplGetDeviceNode(i);
-            if (node) {
+            if (node && filter.Matches(node)) {
                 *pulLen += (ULONG)tstrlen(node->DeviceInstName<tchar>()) + 1;
             }
         }
@@ -320,13 +345,14 @@ CONFIGRET WINAPI CM_Get_Device_ID_List_GenHook(const tchar *pszFilter, tchar *bu
 
     CONFIGRET ret = origCall();
 
-    if (ret == CR_SUCCESS && buffer && DeviceIDListFilterMatches(pszFilter, ulFlags)) {
+    FilterResult filter;
+    if (ret == CR_SUCCESS && buffer && DeviceIDListFilterMatches(pszFilter, ulFlags, &filter)) {
         ZZTStrMoveToEnd(buffer, bufferLen);
 
         bool ok = true;
         for (int i = 0; i < IMPL_MAX_DEVNODES; i++) {
             DeviceNode *node = ImplGetDeviceNode(i);
-            if (ok && node) {
+            if (ok && node && filter.Matches(node)) {
                 ok = ZZTStrAppend(buffer, bufferLen, node->DeviceInstName<tchar>());
             }
         }
@@ -358,7 +384,7 @@ template <class tchar>
 static DEVINST LocateCustomDevNode(tchar *pDeviceID) {
     for (int i = 0; i < IMPL_MAX_DEVNODES; i++) {
         DeviceNode *node = ImplGetDeviceNode(i);
-        if (node && tstreq(pDeviceID, node->DeviceInstName<tchar>())) {
+        if (node && tstrieq(pDeviceID, node->DeviceInstName<tchar>())) {
             if (G.ApiDebug) {
                 LOG << "CM_Locate_DevNode " << pDeviceID << END;
             }
@@ -531,6 +557,8 @@ CONFIGRET WINAPI CM_Get_DevNode_Property_Keys_GenHook(DEVINST dnDevInst, DEVPROP
         }
 
         // TODO: more!
+        // (e.g. Service [also wbem] is set to xusb22?)
+        // and many many other props, likely
         return CMGetPropertyKeys(propKeys, propKeyCount, {
                                                              DEVPKEY_Device_DeviceDesc,
                                                              DEVPKEY_Device_HardwareIds,
@@ -690,16 +718,6 @@ CONFIGRET WINAPI CM_Get_DevNode_Registry_Property_ExW_Hook(DEVINST dnDevInst, UL
                                                              [&] { return CM_Get_DevNode_Registry_Property_ExW_Real(dnDevInst, prop, propType, buffer, pulLength, ulFlags, hMachine); });
 }
 
-struct FilterResult {
-    int User = -1;
-    int Types = ~0;
-
-    bool Matches(DeviceNode *node) const {
-        return (User < 0 || User == node->UserIdx) &&
-               (node->NodeType & Types) != 0;
-    }
-};
-
 template <class tchar>
 static bool DeviceInterfaceListFilterMatches(LPGUID clsGuid, const tchar *pDeviceID, FilterResult *outFilter) {
     FilterResult filter;
@@ -716,7 +734,7 @@ static bool DeviceInterfaceListFilterMatches(LPGUID clsGuid, const tchar *pDevic
     if (pDeviceID && *pDeviceID) {
         for (int i = 0; i < IMPL_MAX_DEVNODES; i++) {
             DeviceNode *node = ImplGetDeviceNode(i);
-            if (node && tstreq(pDeviceID, node->DeviceInstName<tchar>()) &&
+            if (node && tstrieq(pDeviceID, node->DeviceInstName<tchar>()) &&
                 filter.Matches(node)) {
                 filter.User = i;
                 *outFilter = filter;
@@ -840,7 +858,7 @@ CONFIGRET WINAPI CM_Get_Device_Interface_Property_Keys_GenHook(LPCWSTR pszIntf, 
         *propKeyCount = oldKeyCount;
         for (int i = 0; i < IMPL_MAX_DEVNODES; i++) {
             DeviceNode *node = ImplGetDeviceNode(i);
-            if (node && tstreq(pszIntf, node->DevicePathW)) {
+            if (node && tstrieq(pszIntf, node->DevicePathW)) {
                 ret = CMGetPropertyKeys(propKeys, propKeyCount, {
                                                                     DEVPKEY_DeviceInterface_ClassGuid,
                                                                     DEVPKEY_DeviceInterface_Enabled,
@@ -887,7 +905,7 @@ CONFIGRET WINAPI CM_Get_Device_Interface_Property_GenHook(LPCWSTR pszIntf, const
         for (int i = 0; i < IMPL_MAX_DEVNODES; i++) {
             DeviceIntf *device = nullptr;
             DeviceNode *node = ImplGetDeviceNode(i, &device);
-            if (node && tstreq(pszIntf, node->DevicePathW)) {
+            if (node && tstrieq(pszIntf, node->DevicePathW)) {
                 if (*propKey == DEVPKEY_DeviceInterface_ClassGuid) {
                     ret = CMGetPropertyValue(propType, propBuf, propSize, node->DeviceIntfGuid());
                 } else if (*propKey == DEVPKEY_DeviceInterface_Enabled) {
@@ -946,6 +964,7 @@ CONFIGRET WINAPI CM_Register_Notification_Hook(PCM_NOTIFY_FILTER pFilter, PVOID 
                         if (filter.Matches(node)) {
                             CM_NOTIFY_ACTION action = added ? CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL : CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL;
 
+                            // the CM_NOTIFY_EVENT_DATA sizeof includes the null char
                             size_t size = sizeof(CM_NOTIFY_EVENT_DATA) + wcslen(node->DevicePathW) * sizeof(wchar_t);
                             CM_NOTIFY_EVENT_DATA *event = (CM_NOTIFY_EVENT_DATA *)new byte[size];
                             ZeroMemory(event, sizeof(*event));
@@ -978,6 +997,7 @@ CONFIGRET WINAPI CM_Register_Notification_Hook(PCM_NOTIFY_FILTER pFilter, PVOID 
                         if (filter.Matches(node)) {
                             CM_NOTIFY_ACTION action = added ? CM_NOTIFY_ACTION_DEVICEINSTANCEENUMERATED : CM_NOTIFY_ACTION_DEVICEINSTANCEREMOVED;
 
+                            // the CM_NOTIFY_EVENT_DATA sizeof includes the null char
                             size_t size = sizeof(CM_NOTIFY_EVENT_DATA) + wcslen(node->DeviceInstNameW) * sizeof(wchar_t);
                             CM_NOTIFY_EVENT_DATA *event = (CM_NOTIFY_EVENT_DATA *)new byte[size];
                             ZeroMemory(event, sizeof(*event));
@@ -1006,6 +1026,7 @@ CONFIGRET WINAPI CM_Register_Notification_Hook(PCM_NOTIFY_FILTER pFilter, PVOID 
                         CM_NOTIFY_EVENT_DATA event;
                         ZeroMemory(&event, sizeof(event));
                         event.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE;
+                        event.u.DeviceHandle.NameOffset = -1;
 
                         pCallback(notify, pContext, CM_NOTIFY_ACTION_DEVICEREMOVECOMPLETE, &event, sizeof(event));
                     }

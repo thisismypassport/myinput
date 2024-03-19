@@ -51,6 +51,7 @@ static int ImplNextUser(UINT *refMask) {
 }
 
 // might not be ideal in the future, if some types are exclusive...
+// (e.g. used as local array size, and enumerated over)
 #define IMPL_MAX_DEVNODES (IMPL_MAX_USERS * DEVICE_NODE_TYPE_COUNT)
 
 static DeviceNode *ImplGetDeviceNode(int devNodeIdx, DeviceIntf **outDevice = nullptr) {
@@ -82,6 +83,10 @@ static DeviceNode *ImplNextDeviceNode(int devNodeIdx, int *outDevNodeIdx) {
 breakboth:
     *outDevNodeIdx = user + (typeIdx * IMPL_MAX_USERS);
     return node;
+}
+
+static DeviceNode *ImplNextDeviceNode(int *refDevNodeIdx) {
+    return ImplNextDeviceNode(*refDevNodeIdx + 1, refDevNodeIdx);
 }
 
 ImplInput *ImplGetInput(int key, int userIndex) {

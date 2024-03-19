@@ -12,8 +12,8 @@ Path GetDefaultConfigPath() {
     return GetPath(L"Configs", L"_default", L"ini");
 }
 
-void OpenInShell(const Path &path, const Path &params = nullptr) {
-    ShellExecuteW(nullptr, nullptr, path, params, nullptr, SW_SHOWNORMAL);
+void OpenInShell(const Path &path, const Path &params = nullptr, const Path &workDir = nullptr) {
+    ShellExecuteW(nullptr, nullptr, path, params, workDir, SW_SHOWNORMAL);
 }
 
 class ExePanel : public Panel {
@@ -150,7 +150,7 @@ class ExePanel : public Panel {
             UpdateList();
         });
 
-        mCustomCfgChk = Add<CheckBox>(L"Use Config", [this](bool value) {
+        mCustomCfgChk = Add<CheckBox>(L"Use Custom Config", [this](bool value) {
             mCustomCfgEdit->Enable(value);
             mCustomCfgBtn->Enable(true);
         });
@@ -215,7 +215,7 @@ class ExePanel : public Panel {
                 } else if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
                     Alert(L"%ws doesn't exist", path.Get());
                 } else {
-                    OpenInShell(path);
+                    OpenInShell(path, nullptr, PathGetDirName(path));
                 }
             }
         });
@@ -225,7 +225,7 @@ class ExePanel : public Panel {
             if (selected) {
                 Path injectPath = PathCombine(PathGetDirName(PathGetModulePath(nullptr)), L"myinput_inject.exe");
                 wstring launchCmd = L"\"" + wstring(selected.Get()) + L"\"";
-                OpenInShell(injectPath, launchCmd.c_str());
+                OpenInShell(injectPath, launchCmd.c_str(), PathGetDirName(selected.Get()));
             }
         });
 

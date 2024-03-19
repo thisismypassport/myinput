@@ -56,7 +56,7 @@ vector<ExeEntry> ExeConfigLoad(const wchar_t *path, const RegIfeoKey *ifeo) {
     if (ifeo && *ifeo) {
         unordered_map<wstring_view, int> entriesByName;
         unordered_map<wstring_view, int> entriesByPath;
-        for (int i = 0; i < entries.size(); i++) {
+        for (int i = 0; i < (int)entries.size(); i++) {
             if (entries[i].UsePath && entries[i].FullPath) {
                 entriesByPath[entries[i].FullPath.Get()] = i;
             } else {

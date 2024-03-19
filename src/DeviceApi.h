@@ -527,11 +527,14 @@ BOOL WINAPI DeviceIoControl_Hook(HANDLE hDevice, DWORD dwIoControlCode, LPVOID l
             BOOL result = deviceType == FILE_DEVICE_KEYBOARD ? ImplDoDeviceIoControl(finalPathBuf, device, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned) : XUsbDeviceIoControl(finalPathBuf, device, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned, hDevice, lpOverlapped, &isAsync);
 
             if (lpOverlapped && !isAsync) {
-                lpOverlapped->Internal = result ? 0 : GetLastError();
+                DWORD err = GetLastError();
+                lpOverlapped->Internal = result ? 0 : err;
                 lpOverlapped->InternalHigh = *lpBytesReturned;
 
                 if (lpOverlapped->hEvent) {
-                    SetEvent(lpOverlapped->hEvent);
+                    if (!SetEvent(lpOverlapped->hEvent)) {
+                        SetLastError(err); // restore last error
+                    }
                 }
             }
 

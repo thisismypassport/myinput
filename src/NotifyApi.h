@@ -40,22 +40,22 @@ public:
         notify->Cb = move(cb);
 
         notify->CbIter = G.GlobalCallbacks.Add([notify](ImplUser *user, bool added) {
-            QueueUserWorkItem([](LPVOID param) -> DWORD {
-                (*((function<void()> *)param))();
-                return 0;
-            },
-                              new function<void()>([notify, user, added] {
-                                  DeviceIntf *device = user->Device;
-                                  if (device) {
+            DeviceIntf *device = user->Device; // user->Device may change (currently never freed)
+            if (device) {
+                QueueUserWorkItem([](LPVOID param) -> DWORD {
+                    (*((function<void()> *)param))();
+                    return 0;
+                },
+                                  new function<void()>([notify, device, added] {
                                       if (device->HasHid()) {
                                           notify->Cb(device, added);
                                       }
                                       if (device->HasXUsb()) {
                                           notify->Cb(&device->XUsbNode, added);
                                       }
-                                  }
-                              }),
-                              0);
+                                  }),
+                                  0);
+            }
             return true;
         });
     }
@@ -152,6 +152,7 @@ HDEVNOTIFY WINAPI RegisterDeviceNotification_Hook(HANDLE hRecepient, LPVOID Noti
                         broadcast.dbch_devicetype = DBT_DEVTYP_HANDLE;
                         broadcast.dbch_handle = handle;
                         broadcast.dbch_hdevnotify = notify;
+                        broadcast.dbch_nameoffset = -1;
 
                         if (IsWindowUnicode(window)) {
                             SendMessageW(window, WM_DEVICECHANGE, DBT_DEVICEREMOVECOMPLETE, (LPARAM)&broadcast);

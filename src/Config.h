@@ -400,11 +400,7 @@ void ConfigLoadPlugin(const string &val) {
     Path path;
     string name = ConfigReadPlugin(val, GConfig.Directory, &path);
 
-#ifdef _WIN64
-    path = PathCombine(path, L"x64");
-#else
-    path = PathCombine(path, L"Win32");
-#endif
+    path = PathCombine(path, PathGetBaseNamePtr(PathGetDirName(PathGetModulePath(G.HInstance))));
 
     path = PathCombine(path, PathFromStr((name + "_hook.dll").c_str()));
 
@@ -604,6 +600,7 @@ static bool ConfigReloadNoUpdate() {
         ConfigLoadFrom(L"_default.ini");
     }
 
+    // for now, we leak any old Device (this is relied upon by e.g. ThreadPoolNotificationRegister, could refcount?)
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
         if (G.Users[i].Connected && !G.Users[i].DeviceSpecified) {
             G.Users[i].Device = new XDeviceIntf(i);

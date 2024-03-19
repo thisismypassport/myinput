@@ -25,6 +25,7 @@
 using std::mutex;
 using recmutex = std::recursive_mutex;
 using std::atomic;
+using std::call_once;
 using std::deque;
 using std::forward;
 using std::function;
@@ -39,6 +40,7 @@ using std::max;
 using std::min;
 using std::move;
 using std::numeric_limits;
+using std::once_flag;
 using std::ostream;
 using std::size;
 using std::string;
@@ -104,6 +106,13 @@ tuple<T, T> SinCos(T value) {
 template <class TC, class T>
 void Erase(TC &c, const T &val) {
     c.erase(std::remove(c.begin(), c.end(), val), c.end());
+}
+
+template <class TC>
+auto ExtractBack(TC &c) -> TC::value_type {
+    typename TC::value_type val = c.back();
+    c.pop_back();
+    return val;
 }
 
 template <class TFunc>

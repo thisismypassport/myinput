@@ -4,6 +4,24 @@
 #include "UtilsPath.h"
 #include <Windows.h>
 
+#if ZERO
+// the function defined in assembly below
+DWORD InjectedFunc() {
+    HMODULE module = LoadLibraryW(<myinput_hook.dll path>);
+    if (!module) {
+        return 0;
+    }
+
+    auto func = (void (*)())GetProcAddress(module, "MyInputHookInternal_WaitInit");
+    if (!func) {
+        return 0;
+    }
+
+    func();
+    return 1;
+}
+#endif
+
 #ifdef _WIN64
 
 #pragma pack(push, 1)
@@ -91,8 +109,6 @@ struct InjectedData {
 };
 
 bool DoInject(HANDLE process, const Path &dllPath) {
-    void *loadLibAddr = GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
-
     size_t dllPathSize = (wcslen(dllPath) + 1) * sizeof(wchar_t);
     size_t injectSize = sizeof(InjectedData) + dllPathSize;
 

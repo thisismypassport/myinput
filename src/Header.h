@@ -177,8 +177,6 @@ BOOL(WINAPI *ClipCursor_Real)
 BOOL(WINAPI *GetClipCursor_Real)
 (LPRECT lpRect) = GetClipCursor;
 
-#define INVALID_UINT_VALUE ((UINT)-1)
-
 enum {
     // (Note: below applies to user32 handles only!)
     OurHandleLow = 0xffff, // the lower 16bits are an index, so this seems safest
@@ -204,16 +202,6 @@ WORD GetOurHandle(HANDLE handle) {
 
 HANDLE MakeOurHandle(WORD high) {
     return (HANDLE)(intptr_t)MAKELONG(OurHandleLow, high);
-}
-
-DWORD GetWindowThreadInOurProcess(HWND window) {
-    DWORD processId = 0;
-    DWORD threadId = GetWindowThreadProcessId(window, &processId);
-    return processId == GetCurrentProcessId() ? threadId : 0;
-}
-
-bool IsWindowInOurProcess(HWND window) {
-    return GetWindowThreadInOurProcess(window) != 0;
 }
 
 enum : ULONG {

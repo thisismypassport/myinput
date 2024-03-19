@@ -21,9 +21,21 @@ void AssertEquals(const char *name, const char *value, const char *expected) {
     }
 }
 
+void AssertEquals(const char *name, const wchar_t *value, const wchar_t *expected) {
+    if (wcscmp(value, expected) != 0) {
+        Alert(L"%hs: %ws != %ws!", name, value, expected);
+    }
+}
+
 void AssertEquals(const char *name, void *value, void *expected, int size) {
     if (memcmp(value, expected, size) != 0) {
         Alert(L"%hs: *%p != *%p!", name, value, expected);
+    }
+}
+
+void AssertTrue(const char *name, bool cond) {
+    if (!cond) {
+        Alert(L"%hs: false!", name);
     }
 }
 

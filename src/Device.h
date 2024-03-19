@@ -127,6 +127,9 @@ struct PreparsedHeader {
 const GUID GUID_DEVCLASS_XUSB = {0xd61ca365, 0x5af4, 0x4486, {0x99, 0x8b, 0x9d, 0xb4, 0x73, 0x4c, 0x6c, 0xa3}};
 const GUID GUID_DEVINTERFACE_XUSB = {0xEC87F1E3L, 0xC13B, 0x4100, {0xB5, 0xF7, 0x8B, 0x84, 0xD5, 0x42, 0x60, 0xCB}};
 
+#define GUID_DEVCLASS_XUSB_STR "{d61ca365-5af4-4486-998b-9db4734c6ca3}"
+#define GUID_DEVCLASS_HIDCLASS_STR "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}"
+
 struct DeviceNode {
     int UserIdx = 0;
     int NodeType = 0;
@@ -160,11 +163,11 @@ struct DeviceNode {
     }
     template <class tchar>
     const tchar *DeviceClassGuidStr() {
-        return IsXUsb() ? TSTR("{d61ca365-5af4-4486-998b-9db4734c6ca3}") : TSTR("{745a17a0-74d3-11d0-b6fe-00a0c90f57da}");
+        return IsXUsb() ? TSTR(GUID_DEVCLASS_XUSB_STR) : TSTR(GUID_DEVCLASS_HIDCLASS_STR);
     }
     template <class tchar>
     const tchar *DeviceClassDriver() {
-        return IsXUsb() ? TSTR("{d61ca365-5af4-4486-998b-9db4734c6ca3}\\0001") : TSTR("{745a17a0-74d3-11d0-b6fe-00a0c90f57da}\\0006"); // ?
+        return IsXUsb() ? TSTR(GUID_DEVCLASS_XUSB_STR "\\0001") : TSTR(GUID_DEVCLASS_HIDCLASS_STR "\\0006"); // ?
     }
     template <class tchar>
     vector<const tchar *> DeviceHardwareIDs() {

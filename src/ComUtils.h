@@ -12,25 +12,76 @@ public:
             mIntf->AddRef();
         }
     }
+    ComRef(const ComRef<TIntf> &other) : mIntf(other.mIntf) {
+        if (mIntf) {
+            mIntf->AddRef();
+        }
+    }
+    ComRef(ComRef<TIntf> &&other) : mIntf(other.mIntf) { other.mIntf = nullptr; }
     ~ComRef() {
         if (mIntf) {
             mIntf->Release();
         }
     }
 
-    operator TIntf *() { return mIntf; }
+    ComRef<TIntf> &operator=(const ComRef<TIntf> &other) {
+        if (mIntf == other.mIntf) {
+            return *this;
+        }
+        if (mIntf) {
+            mIntf->Release();
+        }
+        mIntf = other.mIntf;
+        if (mIntf) {
+            mIntf->AddRef();
+        }
+        return *this;
+    }
+    ComRef<TIntf> &operator=(ComRef<TIntf> &&other) {
+        if (mIntf) {
+            mIntf->Release();
+        }
+        mIntf = other.mIntf;
+        other.mIntf = nullptr;
+        return *this;
+    }
+
+    TIntf *Take() {
+        TIntf *intf = mIntf;
+        mIntf = nullptr;
+        return intf;
+    }
+    TIntf *TakeCopy() {
+        if (mIntf) {
+            mIntf->AddRef();
+        }
+        return mIntf;
+    }
+
+    TIntf *Get() const { return mIntf; }
+    operator TIntf *() const { return mIntf; }
+    TIntf *operator->() const { return mIntf; }
     TIntf **operator&() { return &mIntf; }
-    TIntf *operator->() { return mIntf; }
 };
 
 class Bstr {
     BSTR mValue;
 
 public:
-    Bstr(const wchar_t *input) { mValue = SysAllocString(input); }
-    ~Bstr() { SysFreeString(mValue); }
+    Bstr() : mValue(nullptr) {}
+    Bstr(const wchar_t *input) : mValue(input ? SysAllocString(input) : nullptr) {}
+    Bstr(const Bstr &other) = delete;
+    ~Bstr() {
+        if (mValue) {
+            SysFreeString(mValue);
+        }
+    }
 
-    operator BSTR() { return mValue; }
+    Bstr &operator=(const Bstr &other) = delete;
+
+    const BSTR Get() const { return mValue; }
+    operator const BSTR() const { return mValue; }
+    BSTR *operator&() { return &mValue; }
 };
 
 class Variant {
@@ -61,7 +112,68 @@ public:
             idx++;
         }
     }
+    Variant(const Variant &other) = delete;
     ~Variant() { VariantClear(&mVariant); }
 
+    Variant &operator=(const Variant &other) = delete;
+
+    VARIANT Take() {
+        VARIANT var = mVariant;
+        VariantInit(&mVariant);
+        return var;
+    }
+
+    operator VARIANT &() { return mVariant; }
     operator VARIANT *() { return &mVariant; }
+    VARIANT *operator&() { return &mVariant; }
+
+    bool IsBstr() { return mVariant.vt == VT_BSTR; }
+
+    const wchar_t *GetBstr() {
+        DBG_ASSERT(mVariant.vt == VT_BSTR, "bad type");
+        return mVariant.bstrVal;
+    }
+};
+
+template <class T, class... TSupers>
+class ComBase : public T {
+    atomic<int> mRefCount = 0;
+
+    template <class TSuper>
+    bool QueryInterfaceSuper(REFIID riid, void **ppvObject) {
+        if (riid == __uuidof(TSuper)) {
+            *ppvObject = (TSuper *)this;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+public:
+    STDMETHODIMP_(ULONG)
+    AddRef(void) override {
+        return ++mRefCount;
+    }
+
+    STDMETHODIMP_(ULONG)
+    Release(void) override {
+        int refCount = --mRefCount;
+        if (refCount == 0) {
+            delete this;
+        }
+        return refCount;
+    }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void **ppvObject) override {
+        *ppvObject = nullptr;
+        if (riid == __uuidof(T)) {
+            *ppvObject = (T *)this;
+        } else if (riid == __uuidof(IUnknown)) {
+            *ppvObject = (IUnknown *)this;
+        } else if (!(QueryInterfaceSuper<TSupers>(riid, ppvObject) || ...)) {
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
 };

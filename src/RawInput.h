@@ -337,7 +337,6 @@ BOOL WINAPI RegisterRawInputDevices_Hook(PCRAWINPUTDEVICE pRawInputDevices, UINT
     if (copy) {
         delete[] copy;
     }
-
     return success;
 }
 
@@ -369,6 +368,9 @@ UINT WINAPI GetRegisteredRawInputDevices_Hook(PRAWINPUTDEVICE pRawInputDevices, 
         UINT realResult = GetRegisteredRawInputDevices_Real(realDevices, &realCount, cbSize);
         if (!pRawInputDevices || realResult == INVALID_UINT_VALUE) {
             *puiNumDevices = realCount >= deltaReal ? realCount - deltaReal : 0;
+            if (copy) {
+                delete[] copy;
+            }
             return realResult;
         }
 
