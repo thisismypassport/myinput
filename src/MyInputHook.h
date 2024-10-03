@@ -22,17 +22,28 @@ DLLIMPORT void MyInputHook_AssertInDllThread();
 // Returns an opaque identifier of the custom key
 DLLIMPORT void *MyInputHook_RegisterCustomKey(const char *name, void (*cb)(bool down, double strength, unsigned long time, void *data), void *data);
 
+// Must be called from dll thread
+// Updates the state of a custom key, identifier by 'customKeyObj' (return value of MyInputHook_RegisterCustomKey)
+DLLIMPORT void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double strength, unsigned long time);
+
 // Must be called from dllmain
 // Registers a custom variable named 'name' (as it's appear in the config file: !<name> = <value>)
 // 'cb' is called from dllmain or dll thread when the variable is encountered in the config, with its value as the parameter
-DLLIMPORT void MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const char *value, void *data), void *data);
+// Returns an opaque identifier of the custom variable
+DLLIMPORT void *MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const char *value, void *data), void *data);
 
-// Must be called from dll thread
-// Registers a callback called whenever the virtual gamepad at index 'userIdx' is updated
+// Must be called from dllmain
+// Registers a custom device named 'name' (as it'd appear in the config file: !Device<i> <name>)
+// 'cb' is called from dllmain or dll thread whenever the device is added to or removed from a user
+// Returns an opaque identifier of the custom device
+DLLIMPORT void *MyInputHook_RegisterCustomDevice(const char *name, void (*cb)(int userIdx, bool added, void *data), void *data);
+
+// Must be called from dllmain or dll thread
+// Registers a callback called from dll thread whenever the virtual gamepad at index 'userIdx' is updated
 // Returns an opaque identifier of the callback
 DLLIMPORT void *MyInputHook_RegisterCallback(int userIdx, void (*cb)(int userIdx, void *data), void *data);
 
-// Must be called from dll thread
+// Must be called from dllmain or dll thread
 // Unregisters a callback registered via 'MyInputHook_RegisterCallback'
 DLLIMPORT void MyInputHook_UnregisterCallback(int userIdx, void *cbObj);
 
@@ -51,8 +62,4 @@ DLLIMPORT bool MyInputHook_GetState(int userIdx, int key, char type, void *dest)
 // if type is 'd', 'src' is const double* (for rumble)
 // Returns true if key recognized
 DLLIMPORT bool MyInputHook_SetState(int userIdx, int key, char type, const void *src);
-
-// Must be called from dll thread
-// Updates the state of a custom key, identifier by 'customKeyObj' (return value of MyInputHook_RegisterCustomKey)
-DLLIMPORT void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double strength, unsigned long time);
 }

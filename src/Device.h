@@ -182,6 +182,7 @@ ostream &operator<<(ostream &o, DeviceNode *node) {
 
 struct DeviceIntf : public DeviceNode {
     int Types = DEVICE_NODE_TYPE_HID;
+    int CustomIdx = -1;
 
     Path FinalPipePrefix;
     int FinalPipePrefixLen;

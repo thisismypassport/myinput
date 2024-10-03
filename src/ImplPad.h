@@ -188,7 +188,7 @@ static bool ImplHandleAxisRotatorChange(ImplRawState &state, ImplAxisState &axis
     bool changed = false;
     if (down && (otherAxisState.Pos.Pressed || otherAxisState.Neg.Pressed)) {
         if (!mapping.HasTimer()) {
-            mapping.StartTimerMs(30, ImplRepeatTimerProc);
+            mapping.StartTimerS(mapping.Rate, ImplRepeatTimerProc);
         }
 
         if (!axisState.Pos.Pressed && !axisState.Neg.Pressed && !axisState.RotateFakePressed) {
@@ -270,13 +270,13 @@ static bool ImplUpdateMotion(ImplMotionState &motion, DWORD time) {
         dim->OldValue = dim->NewValue;
         dim->Speed = newSpeed;
         dim->Accel = newAccel;
-        dim->FinalAccel = newAccel / ImplMotionState::GScale;
+        dim->GAccel = newAccel / ImplMotionState::GScale;
     }
 
     auto yaxis = motion.YAxis();
-    motion.X.FinalAccel -= yaxis.X;
-    motion.Y.FinalAccel -= yaxis.Y;
-    motion.Z.FinalAccel -= yaxis.Z;
+    motion.X.GAccel -= yaxis.X;
+    motion.Y.GAccel -= yaxis.Y;
+    motion.Z.GAccel -= yaxis.Z;
 
     motion.PrevTime = time;
     return changed;
@@ -301,7 +301,7 @@ static void CALLBACK ImplMotionTimerProc(HWND window, UINT msg, UINT_PTR id, DWO
     }
 }
 
-static void ImplHandleMotionDimChange(ImplMotionDimState &dimState, ImplUser *user, double scale, const InputValue &v, bool add = false) {
+static void ImplHandleMotionDimChange(ImplMotionDimState &dimState, ImplUser *user, double scale, const InputValue &v, double rate, bool add = false) {
     if (add && v.Down) {
         dimState.NewValue += v.Strength * scale;
     } else {
@@ -311,14 +311,14 @@ static void ImplHandleMotionDimChange(ImplMotionDimState &dimState, ImplUser *us
     auto &motion = user->State.Motion;
     if (!motion.Timer.IsSet()) {
         motion.PrevTime = v.Time;
-        motion.Timer.StartMs(10, ImplMotionTimerProc, user);
+        motion.Timer.StartS(rate, ImplMotionTimerProc, user);
     }
 }
 
-static void ImplHandleMotionRelDimChange(ImplMotionState &state, ImplUser *user, double scale, Vector3 axis, const InputValue &v, bool add = false) {
-    ImplHandleMotionDimChange(state.X, user, scale * axis.X, v, add);
-    ImplHandleMotionDimChange(state.Y, user, scale * axis.Y, v, add);
-    ImplHandleMotionDimChange(state.Z, user, scale * axis.Z, v, add);
+static void ImplHandleMotionRelDimChange(ImplMotionState &state, ImplUser *user, double scale, Vector3 axis, const InputValue &v, double rate, bool add = false) {
+    ImplHandleMotionDimChange(state.X, user, scale * axis.X, v, rate, add);
+    ImplHandleMotionDimChange(state.Y, user, scale * axis.Y, v, rate, add);
+    ImplHandleMotionDimChange(state.Z, user, scale * axis.Z, v, rate, add);
 }
 
 static bool ImplPadGetState(ImplUser *user, int key, int type, void *dest) {

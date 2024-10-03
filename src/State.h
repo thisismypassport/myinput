@@ -57,7 +57,7 @@ struct ImplMotionDimState {
     double OldValue = 0;
     double Speed = 0;
     double Accel = 0;
-    double FinalAccel = 0; // value in mult. of g
+    double GAccel = 0; // value in mult. of g
 };
 
 static constexpr double DegreesToRadians = std::numbers::pi / 180;
@@ -98,7 +98,7 @@ struct ImplMotionState {
     static constexpr double RotScale = DegreesToRadians;
     static constexpr double GScale = 9.80665;
 
-    ImplMotionState() { Y.FinalAccel = -1; } // gravity
+    ImplMotionState() { Y.GAccel = -1; } // gravity
 };
 
 struct ImplFeedbackState {
@@ -230,11 +230,16 @@ struct ImplMouseMotion {
     }
 };
 
+struct ImplMouseMotionTotal {
+    double X = 0, Y = 0;
+    int Time = 0;
+};
+
 struct ImplMouse : public ImplDeviceBase {
     ImplMouseMotion Motion;
     ImplMouseAxis Wheel, HWheel;
 
-    MOUSEINPUT MotionChange = {};
+    ImplMouseMotionTotal MotionTotal;
 
     void Reset() {
         Motion.Reset();
@@ -276,7 +281,7 @@ struct ImplG {
     DWORD DllThread = 0;
     HWND DllWindow = nullptr;
 
-    CallbackList<bool(ImplUser *, bool)> GlobalCallbacks;
+    CallbackList<bool(ImplUser *, bool, bool)> GlobalCallbacks;
 
     bool IsActive() { return InForeground || Always; }
 

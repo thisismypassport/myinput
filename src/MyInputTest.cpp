@@ -339,9 +339,11 @@ void TestDevice(const char *nameA, const wchar_t *nameW, bool ours, int userIdx,
             }
 
             // feature
-            DWORD featSize = 0;
-            AssertEquals("dev.io.feat.bad", DeviceIoControl(syncFile, IOCTL_HID_GET_FEATURE, nullptr, 0, nullptr, 0, &featSize, nullptr), FALSE);
-            AssertEquals("dev.io.feat.errno", GetLastError(), ERROR_INVALID_FUNCTION);
+            if (ours) {
+                DWORD featSize = 0;
+                AssertEquals("dev.io.feat.bad", DeviceIoControl(syncFile, IOCTL_HID_GET_FEATURE, nullptr, 0, nullptr, 0, &featSize, nullptr), FALSE);
+                AssertEquals("dev.io.feat.errno", GetLastError(), ERROR_INVALID_FUNCTION);
+            }
 
             CloseHandle(syncFile);
         }

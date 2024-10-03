@@ -85,8 +85,20 @@ DLLEXPORT void *MyInputHook_RegisterCustomKey(const char *name, void (*cb)(bool,
     return (void *)(uintptr_t)(index + 1);
 }
 
-DLLEXPORT void MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const char *value, void *data), void *data) {
-    ConfigRegisterCustomVar(name, [=](const auto &str) { cb(str.c_str(), data); });
+DLLEXPORT void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double strength, unsigned long time) {
+    DBG_ASSERT_DLL_THREAD();
+    int index = (int)(uintptr_t)customKeyObj - 1;
+    ImplOnCustomKey(index, InputValue{down, strength, time});
+}
+
+DLLEXPORT void *MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const char *, void *), void *data) {
+    int index = ConfigRegisterCustomVar(name, [=](const auto &str) { cb(str.c_str(), data); });
+    return (void *)(uintptr_t)(index + 1);
+}
+
+DLLEXPORT void *MyInputHook_RegisterCustomDevice(const char *name, void (*cb)(int, bool, void *), void *data) {
+    int index = ConfigRegisterCustomDevice(name, [=](int idx, bool add) { cb(idx, add, data); });
+    return (void *)(uintptr_t)(index + 1);
 }
 
 DLLEXPORT void *MyInputHook_RegisterCallback(int userIdx, void (*cb)(int, void *), void *data) {
@@ -122,12 +134,6 @@ DLLEXPORT bool MyInputHook_SetState(int userIdx, int key, char type, const void 
     DBG_ASSERT_DLL_THREAD();
     auto user = ImplGetUser(userIdx);
     return user ? ImplPadSetState(user, key, type, src) : false;
-}
-
-DLLEXPORT void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double strength, unsigned long time) {
-    DBG_ASSERT_DLL_THREAD();
-    int index = (int)(uintptr_t)customKeyObj - 1;
-    ImplOnCustomKey(index, InputValue{down, strength, time});
 }
 
 DLLEXPORT void MyInputHookInternal_WaitInit() {

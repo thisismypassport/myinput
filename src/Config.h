@@ -6,6 +6,7 @@
 struct ConfigCustomMap {
     unordered_map<string, int> Keys;
     unordered_map<string, int> Vars;
+    unordered_map<string, int> Devices;
 };
 
 struct ConfigState {
@@ -15,6 +16,7 @@ struct ConfigState {
     Path Directory;
     ConfigCustomMap CustomMap;
     vector<function<void(const string &)>> CustomVarCbs;
+    vector<function<void(int, bool)>> CustomDeviceCbs;
 } GConfig;
 
 bool ConfigLoadFrom(const wchar_t *filename);
@@ -104,7 +106,7 @@ double ConfigReadStrength(const string &str) {
     return 1;
 }
 
-double ConfigReadRate(const string &str) {
+double ConfigReadRate(const string &str, bool isTurbo) {
     if (!str.empty()) {
         double value;
         if (StrToValue(str, &value) && value > 0) {
@@ -113,7 +115,7 @@ double ConfigReadRate(const string &str) {
 
         LOG << "ERROR: Invalid rate (must be number greater than 0) : " << str << END;
     }
-    return 0.02;
+    return isTurbo ? 0.02 : 0.01;
 }
 
 SharedPtr<ImplCond> ConfigReadCond(const ConfigCustomMap &custom, const string &line, intptr_t *idxPtr) {
@@ -250,7 +252,7 @@ SharedPtr<ImplMapping> ConfigReadInputLine(const ConfigCustomMap &custom, const 
     cfg->SrcKey = ConfigReadKey(custom, inputStr, &cfg->SrcUser);
     cfg->DestKey = ConfigReadKey(custom, outputStr, &cfg->DestUser, true);
     cfg->Strength = ConfigReadStrength(strengthStr);
-    cfg->Rate = ConfigReadRate(rateStr);
+    cfg->Rate = ConfigReadRate(rateStr, cfg->Turbo);
     if (cfg->SrcKey != MY_VK_CUSTOM) {
         cfg->SrcUser = ConfigReadUser(inUserStr);
     }
@@ -347,7 +349,7 @@ int ConfigReadDeviceIdx(const string &key) {
     return ConfigReadUser(key.substr(6));
 }
 
-void ConfigLoadDevice(const string &key, const string &type) {
+void ConfigLoadDevice(const ConfigCustomMap &custom, const string &key, const string &type) {
     int userIdx = ConfigReadDeviceIdx(key);
 
     ImplUser *user = ImplGetUser(userIdx, true);
@@ -360,6 +362,8 @@ void ConfigLoadDevice(const string &key, const string &type) {
             device = new Ds4DeviceIntf(userIdx);
         } else if (typeLow == "none") {
             device = new NoDeviceIntf(userIdx);
+        } else if (custom.Devices.contains(typeLow)) {
+            device = new CustomDeviceIntf(userIdx, custom.Devices.at(typeLow));
         } else {
             LOG << "ERROR: Invalid device: " << type << END;
         }
@@ -515,11 +519,11 @@ void ConfigLoadVarLine(const string &line, intptr_t idx) {
             break;
 
         case ConfigVar::Device:
-            ConfigLoadDevice (keyLow, rest);
+            ConfigLoadDevice (GConfig.CustomMap, keyLow, rest);
             break;
 
         case ConfigVar::Custom:
-            GConfig.CustomVarCbs[GConfig.CustomMap.Vars[keyLow]] (rest);
+            GConfig.CustomVarCbs[GConfig.CustomMap.Vars.at (keyLow)] (rest);
             break;
         } });
 }
@@ -585,15 +589,15 @@ void ConfigReset() {
     GConfig.LoadedFiles.clear();
 }
 
-static void ConfigSendGlobalEvents(bool added) {
+static void ConfigSendGlobalEvents(bool added, bool onInit = false) {
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
         if (G.Users[i].Connected) {
-            G.GlobalCallbacks.Call(&G.Users[i], added);
+            G.GlobalCallbacks.Call(&G.Users[i], added, onInit);
         }
     }
 }
 
-static bool ConfigReloadNoUpdate() {
+static void ConfigReloadNoUpdate() {
     ConfigReset();
 
     if (!ConfigLoadFrom(GConfig.MainFile)) {
@@ -606,14 +610,13 @@ static bool ConfigReloadNoUpdate() {
             G.Users[i].Device = new XDeviceIntf(i);
         }
     }
-
-    return true;
 }
 
-bool ConfigInit(Path &&path, Path &&name) {
+void ConfigInit(Path &&path, Path &&name) {
     GConfig.Directory = move(path);
     GConfig.MainFile = move(name);
-    return ConfigReloadNoUpdate();
+    ConfigReloadNoUpdate();
+    ConfigSendGlobalEvents(true, true);
 }
 
 void ConfigReload() {
@@ -648,9 +651,36 @@ void ConfigRegisterCustomVar(ConfigCustomMap &custom, const char *name, int inde
     custom.Vars[nameLow] = index;
 }
 
-void ConfigRegisterCustomVar(const char *name, function<void(const string &)> &&cb) {
+int ConfigRegisterCustomVar(const char *name, function<void(const string &)> &&cb) {
     int index = (int)GConfig.CustomVarCbs.size();
     GConfig.CustomVarCbs.push_back(move(cb));
 
     ConfigRegisterCustomVar(GConfig.CustomMap, name, index);
+    return index;
+}
+
+void ConfigRegisterCustomDevice(ConfigCustomMap &custom, const char *name, int index) {
+    string nameLow = name;
+    StrToLowerCase(nameLow);
+    custom.Devices[nameLow] = index;
+}
+
+int ConfigRegisterCustomDevice(const char *name, function<void(int, bool)> &&cb) {
+    int index = (int)GConfig.CustomDeviceCbs.size();
+    GConfig.CustomDeviceCbs.push_back(move(cb));
+
+    ConfigRegisterCustomDevice(GConfig.CustomMap, name, index);
+
+    if (index == 0) // first time
+    {
+        G.GlobalCallbacks.Add([](ImplUser *user, bool added, bool onInit) {
+            DeviceIntf *device = user->Device;
+            if (device && device->CustomIdx >= 0) {
+                GConfig.CustomDeviceCbs[device->CustomIdx](device->UserIdx, added);
+            }
+            return true;
+        });
+    }
+
+    return index;
 }

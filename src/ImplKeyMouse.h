@@ -193,25 +193,27 @@ static void ImplGenerateMouseWheel(int flag, double strength, DWORD time) {
 }
 
 static void ImplGenerateMouseMotion(double dx, double dy, DWORD time, ChangedMask *changes) {
-    G.Mouse.MotionChange.dx += (int)ceil(dx);
-    G.Mouse.MotionChange.dy += (int)ceil(dy);
-    G.Mouse.MotionChange.time = time;
+    G.Mouse.MotionTotal.X += dx;
+    G.Mouse.MotionTotal.Y += dy;
+    G.Mouse.MotionTotal.Time = time;
     changes->ChangeMouseMotion();
 }
+
+static int RoundAway(double value) { return value > 0 ? (int)ceil(value) : (int)floor(value); }
 
 static void ImplGenerateMouseMotionFinish() {
     INPUT *input = (INPUT *)GImplInputBuffers.Get()->Take();
     input->type = INPUT_MOUSE;
     input->mi = {};
     input->mi.dwFlags = MOUSEEVENTF_MOVE;
-    input->mi.dx = G.Mouse.MotionChange.dx;
-    input->mi.dy = G.Mouse.MotionChange.dy;
-    input->mi.time = G.Mouse.MotionChange.time;
+    input->mi.dx = RoundAway(G.Mouse.MotionTotal.X);
+    input->mi.dy = RoundAway(G.Mouse.MotionTotal.Y);
+    input->mi.time = G.Mouse.MotionTotal.Time;
     input->mi.dwExtraInfo = ExtraInfoOurInject;
 
     GImplInputThread.CreateThread(ImplSendInputDelayed, input);
 
-    G.Mouse.MotionChange = {};
+    G.Mouse.MotionTotal = {};
 }
 
 static void ImplUpdateAsyncState() {

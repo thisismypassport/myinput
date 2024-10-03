@@ -150,12 +150,6 @@ bool DoInject(HANDLE process, const Path &dllPath) {
     DWORD code = -1;
     if (!GetExitCodeThread(hRemote, &code) || code != 1) {
         LOG_ERR << "Injected func returned with exit code " << code << END;
-        if (code != 0) {
-            // exit code is unrecognized, so the thread died and the process is likely soon to follow
-            // we kill it (just in case) & wait for it to die so that others know the process is dead
-            TerminateProcess(process, code);
-            WaitForSingleObject(process, INFINITE);
-        }
         return false;
     }
 

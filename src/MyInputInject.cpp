@@ -226,7 +226,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     }
 
     DWORD exitCode = -1;
-    if (registered) {
+    if (registered || redirected) {
         WaitForSingleObject(pi.hProcess, INFINITE);
         GetExitCodeProcess(pi.hProcess, &exitCode);
     } else {

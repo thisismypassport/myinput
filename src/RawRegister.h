@@ -439,7 +439,7 @@ public:
         RawInputRegBase::Register(window, flags, [this] {
             for (int i = 0; i < IMPL_MAX_USERS; i++) {
                 DeviceIntf *device = ImplGetDevice(i);
-                if (device) {
+                if (device && device->HasHid()) {
                     auto &reg = Regs[i];
                     reg.Active = true;
                     reg.BufList = GBufferLists.Get(GetRawInputSize(device));
@@ -456,7 +456,8 @@ public:
             }
 
             if (Flags & RIDEV_DEVNOTIFY) {
-                NotifyCbIter = G.GlobalCallbacks.Add([this](ImplUser *user, bool added) {
+                NotifyCbIter = G.GlobalCallbacks.Add([this](ImplUser *user, bool added, bool onInit) {
+                    DBG_ASSERT(!onInit, "too early");
                     OnNotifyMessage(user, added);
                     return true;
                 });

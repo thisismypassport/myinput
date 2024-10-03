@@ -16,6 +16,12 @@ struct NoDeviceIntf : public DeviceIntf {
     }
 };
 
+struct CustomDeviceIntf : public NoDeviceIntf {
+    CustomDeviceIntf(int userIdx, int customIdx) : NoDeviceIntf(userIdx) {
+        CustomIdx = customIdx;
+    }
+};
+
 #pragma pack(push, 1)
 struct XHidReport {
     uint8_t ReportId;
@@ -145,9 +151,9 @@ struct DS4HidReport {
         constexpr double gScale = 1.0 / 0x2000;
         constexpr double rotScale = DegreesToRadians / 16;
         auto &motion = state.Motion;
-        AX = ClampToInt<int16_t>(motion.X.FinalAccel / gScale);
-        AY = ClampToInt<int16_t>(motion.Y.FinalAccel / gScale);
-        AZ = ClampToInt<int16_t>(motion.Z.FinalAccel / gScale);
+        AX = ClampToInt<int16_t>(motion.X.GAccel / gScale);
+        AY = ClampToInt<int16_t>(motion.Y.GAccel / gScale);
+        AZ = ClampToInt<int16_t>(motion.Z.GAccel / gScale);
         GX = ClampToInt<int16_t>(motion.RX.Speed / rotScale);
         GY = ClampToInt<int16_t>(motion.RY.Speed / rotScale);
         GZ = ClampToInt<int16_t>(motion.RZ.Speed / rotScale);

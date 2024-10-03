@@ -121,40 +121,46 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
             break;
 
         case MY_VK_PAD_MOTION_UP:
-            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale, state.Motion.YAxis(), v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale,
+                                         state.Motion.YAxis(), v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_DOWN:
-            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale, state.Motion.YAxis(), v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale,
+                                         state.Motion.YAxis(), v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_RIGHT:
-            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale, state.Motion.XAxis(), v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale,
+                                         state.Motion.XAxis(), v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_LEFT:
-            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale, state.Motion.XAxis(), v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale,
+                                         state.Motion.XAxis(), v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_NEAR:
-            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale, state.Motion.ZAxis(), v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, ImplMotionState::PosScale,
+                                         state.Motion.ZAxis(), v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_FAR:
-            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale, state.Motion.ZAxis(), v, mapping.Add);
+            ImplHandleMotionRelDimChange(state.Motion, user, -ImplMotionState::PosScale,
+                                         state.Motion.ZAxis(), v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_ROT_UP:
-            ImplHandleMotionDimChange(state.Motion.RX, user, -ImplMotionState::RotScale, v, mapping.Add);
+            ImplHandleMotionDimChange(state.Motion.RX, user, -ImplMotionState::RotScale, v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_ROT_DOWN:
-            ImplHandleMotionDimChange(state.Motion.RX, user, ImplMotionState::RotScale, v, mapping.Add);
+            ImplHandleMotionDimChange(state.Motion.RX, user, ImplMotionState::RotScale, v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_ROT_RIGHT:
-            ImplHandleMotionDimChange(state.Motion.RY, user, ImplMotionState::RotScale, v, mapping.Add);
+            ImplHandleMotionDimChange(state.Motion.RY, user, ImplMotionState::RotScale, v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_ROT_LEFT:
-            ImplHandleMotionDimChange(state.Motion.RY, user, -ImplMotionState::RotScale, v, mapping.Add);
+            ImplHandleMotionDimChange(state.Motion.RY, user, -ImplMotionState::RotScale, v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_ROT_CW:
-            ImplHandleMotionDimChange(state.Motion.RZ, user, -ImplMotionState::RotScale, v, mapping.Add);
+            ImplHandleMotionDimChange(state.Motion.RZ, user, -ImplMotionState::RotScale, v, mapping.Rate, mapping.Add);
             break;
         case MY_VK_PAD_MOTION_ROT_CCW:
-            ImplHandleMotionDimChange(state.Motion.RZ, user, ImplMotionState::RotScale, v, mapping.Add);
+            ImplHandleMotionDimChange(state.Motion.RZ, user, ImplMotionState::RotScale, v, mapping.Rate, mapping.Add);
             break;
 
         case MY_VK_PAD_LTHUMB_HORZ_MODIFIER:
@@ -778,5 +784,5 @@ static void ImplToggleConnected(void *userIndex) {
     auto user = &G.Users[(int)(uintptr_t)userIndex];
 
     user->Connected = !user->Connected;
-    G.GlobalCallbacks.Call(user, user->Connected);
+    G.GlobalCallbacks.Call(user, user->Connected, false);
 }

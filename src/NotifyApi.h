@@ -39,9 +39,9 @@ public:
         }
         notify->Cb = move(cb);
 
-        notify->CbIter = G.GlobalCallbacks.Add([notify](ImplUser *user, bool added) {
+        notify->CbIter = G.GlobalCallbacks.Add([notify](ImplUser *user, bool added, bool onInit) {
             DeviceIntf *device = user->Device; // user->Device may change (currently never freed)
-            if (device) {
+            if (device && !onInit) {
                 QueueUserWorkItem([](LPVOID param) -> DWORD {
                     (*((function<void()> *)param))();
                     return 0;
