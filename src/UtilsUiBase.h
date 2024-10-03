@@ -49,11 +49,13 @@ Path SelectFileForSave(const wchar_t *filters = nullptr, const wchar_t *title = 
     return SelectFile(false, filters, title, overwritePrompt);
 }
 
-#define DEFINE_ALERT_ON_LOG(min_level)                       \
+#define DEFINE_ALERT_ON_LOG_COND(min_level, cond)            \
     void Log(LogLevel level, const char *str, size_t size) { \
-        if (level >= min_level)                              \
+        if (level >= min_level && (cond))                    \
             Alert(L"%hs", str);                              \
     }
+
+#define DEFINE_ALERT_ON_LOG(min_level) DEFINE_ALERT_ON_LOG_COND(min_level, true)
 
 void TurnOffFeedbackCursor() {
     MSG msg;

@@ -117,6 +117,7 @@ repeat:
 
             if (!injectSuccess) {
                 LOG << "Injection failed, retrying process creation without injection" << END;
+                TerminateProcess(procInfo->hProcess, -1);
                 CloseHandle(procInfo->hProcess);
                 CloseHandle(procInfo->hThread);
 

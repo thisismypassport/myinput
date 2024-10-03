@@ -5,7 +5,8 @@
 #include "Link.h"
 #include <Windows.h>
 
-DEFINE_ALERT_ON_LOG(LogLevel::Error)
+static bool gIsProgrammatic;
+DEFINE_ALERT_ON_LOG_COND(LogLevel::Error, !gIsProgrammatic)
 
 wchar_t *SkipCommandLineArgs(wchar_t *cmdLine, int count) {
     bool inQuotes = false;
@@ -52,7 +53,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
             } else if (tstreq(args[argI], L"-p")) {
                 byPid = true;
             } else if (tstreq(args[argI], L"-h")) {
-                byHandle = true;
+                gIsProgrammatic = byHandle = true;
             } else if (tstreq(args[argI], L"-c") && argI + 1 < numArgs) {
                 config = args[++argI];
             } else if (args[argI][0] != L'-') {
