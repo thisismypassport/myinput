@@ -66,6 +66,12 @@ You can specify a configuration for each executable, by either:
 * Clicking "Edit Config" and answering "Yes" to create a configuration for that executable.
 * Toggling "Use Config", writing the name of the config in the edit box, and clicking "Apply". (This allows you to have multiple executables using the same custom config file)
 
+# Troubleshooting
+
+For Steam Games:
+* Make sure to disable Steam Input (either globally or for that specific game)
+* You may have better luck if you register the executable to always run (via myinput_register.exe), as Steam games often ask Steam to relaunch them, even if you run them directly.
+
 # Building from Source
 
 Prerequisite: https://github.com/microsoft/Detours - copy to 3rdparty/detours folder
