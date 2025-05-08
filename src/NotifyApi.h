@@ -43,7 +43,9 @@ public:
             DeviceIntf *device = user->Device; // user->Device may change (currently never freed)
             if (device && !onInit) {
                 QueueUserWorkItem([](LPVOID param) -> DWORD {
-                    (*((function<void()> *)param))();
+                    auto cb = (function<void()> *)param;
+                    (*cb)();
+                    delete cb;
                     return 0;
                 },
                                   new function<void()>([notify, device, added] {

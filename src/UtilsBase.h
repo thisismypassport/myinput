@@ -12,9 +12,9 @@
 #include <functional>
 #include <numbers>
 #include <new>
+#include <bit>
+#include <ranges>
 
-#define DLLIMPORT __declspec(dllimport)
-#define DLLEXPORT __declspec(dllexport)
 #pragma warning(disable : 4995)
 
 #define QWORD unsigned __int64 // fix windows.h messup (for NEXTRAWINPUTBLOCK)
@@ -42,10 +42,12 @@ using std::move;
 using std::numeric_limits;
 using std::once_flag;
 using std::ostream;
+using std::popcount;
 using std::size;
 using std::string;
 using std::string_view;
 using std::stringstream;
+using std::swap;
 using std::tie;
 using std::tuple;
 using std::unique_lock;
@@ -55,6 +57,7 @@ using std::vector;
 using std::wstring;
 using std::wstring_view;
 using std::wstringstream;
+namespace views = std::ranges::views;
 
 constexpr auto _ = std::ignore;
 
@@ -104,6 +107,12 @@ tuple<T, T> SinCos(T value) {
 }
 
 template <class TC, class T>
+intptr_t Find(TC &c, const T &val) {
+    auto iter = std::find(c.begin(), c.end(), val);
+    return iter == c.end() ? -1 : iter - c.begin();
+}
+
+template <class TC, class T>
 void Erase(TC &c, const T &val) {
     c.erase(std::remove(c.begin(), c.end(), val), c.end());
 }
@@ -136,6 +145,8 @@ public:
     UniquePtr(nullptr_t) {}
     UniquePtr(std::unique_ptr<T> &&other) : std::unique_ptr<T>(move(other)) {}
 
+    static UniquePtr<T> From(T *ptr) { return UniquePtr<T>(std::unique_ptr<T>(ptr)); }
+
     template <class... TArgs>
     static UniquePtr<T> New(TArgs... args) {
         return UniquePtr<T>(std::make_unique<T>(forward<TArgs>(args)...));
@@ -149,7 +160,6 @@ class SharedPtr : public std::shared_ptr<T> {
 public:
     SharedPtr() {}
     SharedPtr(nullptr_t) {}
-    SharedPtr(const std::shared_ptr<T> &other) : std::shared_ptr<T>(other) {}
     SharedPtr(std::shared_ptr<T> &&other) : std::shared_ptr<T>(move(other)) {}
 
     template <class... TArgs>
@@ -222,6 +232,13 @@ template <class T, class R>
 T GetOutput(R(__stdcall *func)(T *)) {
     T value = {};
     func(&value);
+    return value;
+}
+
+template <class S, class T, class R>
+T GetOutput(R(__stdcall *func)(S, T *), S arg) {
+    T value = {};
+    func(forward<S>(arg), &value);
     return value;
 }
 

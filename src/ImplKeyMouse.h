@@ -119,6 +119,46 @@ static int ImplReextend(int virtKeyCode, bool *outExtended) {
     }
 }
 
+static void ImplSplitLeftRight(int *ptrKey, int *ptrFlags, int extFlag, int scanCode) {
+    switch (*ptrKey) {
+    case VK_SHIFT:
+        *ptrKey = MapVirtualKeyW(scanCode, MAPVK_VSC_TO_VK_EX);
+        if (*ptrKey == VK_RSHIFT) {
+            *ptrFlags |= extFlag;
+        } else if (*ptrKey != VK_LSHIFT) {
+            *ptrKey = VK_LSHIFT; // just in case
+        }
+        break;
+
+    case VK_CONTROL:
+        *ptrKey = (*ptrFlags & extFlag) ? VK_RCONTROL : VK_LCONTROL;
+        break;
+    case VK_MENU:
+        *ptrKey = (*ptrFlags & extFlag) ? VK_RMENU : VK_LMENU;
+        break;
+    }
+}
+
+static void ImplCombineLeftRight(int *ptrKey, int *ptrFlags, int extFlag) {
+    switch (*ptrKey) {
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+        *ptrKey = VK_SHIFT;
+        *ptrFlags &= ~extFlag;
+        break;
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+        *ptrKey = VK_CONTROL;
+        break;
+    case VK_LMENU:
+    case VK_RMENU:
+        *ptrKey = VK_MENU;
+        break;
+    }
+}
+
+#ifndef IMPL_KEY_MOUSE_UTILS_ONLY
+
 static int ImplKeyboardDelayTime() {
     int delay = 0;
     SystemParametersInfoW(SPI_GETKEYBOARDDELAY, 0, &delay, 0);
@@ -187,6 +227,12 @@ static void ImplGenerateKey(int key, bool down, DWORD time) {
     GImplInputThread.CreateThread(ImplSendInputDelayed, input);
 }
 
+static void ImplHandleKeyChange(int key, bool down, DWORD time, slot_t slot) {
+    auto &output = G.Keyboard.Keys[key].Output;
+    ImplProcessBoolOutput(output, down, slot);
+    ImplGenerateKey(key, output.Get(), time);
+}
+
 static void ImplGenerateMouseWheel(int flag, double strength, DWORD time) {
     int data = (int)strength * WHEEL_DELTA;
     ImplGenerateMouseEventCommon(flag, time, data);
@@ -222,3 +268,5 @@ static void ImplUpdateAsyncState() {
         // AsyncToggle?
     }
 }
+
+#endif

@@ -2,54 +2,161 @@
 #include "UtilsStr.h"
 #include "UtilsPath.h"
 #include "Keys.h"
+#include "LogUtils.h"
 #include "WinUtils.h"
 #include <Windows.h>
 
 #define IMPL_MAX_USERS 8
+#define IMPL_MAX_SLOTS 31 // last bit in ImplBoolOutput.Slots
 
-struct ImplRawState {
-    bool Pressed = false;
-    bool ModifierPressed = false;
-    bool PrevPressedForRotate = false;
-    double Strength = 0;
-    double Modifier = 1;
+using user_t = int8_t;
+using slot_t = uint8_t;
+
+#pragma pack(push, 1) // just because it's often followed by more uint8_t's
+struct ImplBoolOutput {
+    unsigned Slots = 0;
+    slot_t NumSlots = 0;
+
+    slot_t AllocSlot() {
+        if (NumSlots > IMPL_MAX_SLOTS) {
+            return IMPL_MAX_SLOTS; // better than failing
+        }
+
+        return NumSlots++;
+    }
+
+    void UndoAllocSlot() { NumSlots--; }
+
+    void Reset() {
+        NumSlots = Slots = 0;
+    }
+
+    bool Get() { return Slots != 0; }
+    slot_t NumActive() { return popcount(Slots); }
 };
+#pragma pack(pop)
 
-struct ImplButtonState : public ImplRawState {
+struct ImplButtonState {
+    ImplBoolOutput Pressed;
     bool State = false;
+
+    void Reset() { Pressed.Reset(); }
 };
+
+template <double Default>
+struct ImplDoubleOutput {
+    double *Slots = nullptr;
+    double Combined = Default;
+    double Get() { return Combined; }
+
+    bool InitIfNeeded(ImplBoolOutput &boolOutput, slot_t slot) {
+        if (slot >= boolOutput.NumSlots) {
+            return false;
+        }
+
+        if (!Slots) {
+            int numDoubles = boolOutput.NumSlots;
+            Slots = new double[numDoubles];
+            for (int i = 0; i < numDoubles; i++) {
+                Slots[i] = Default;
+            }
+        }
+        return true;
+    }
+
+    void Reset() {
+        Combined = Default;
+        delete[] Slots;
+        Slots = nullptr;
+    }
+};
+
+using ImplStrengthOutput = ImplDoubleOutput<0.0>;
+using ImplModifierOutput = ImplDoubleOutput<1.0>;
 
 struct ImplTriggerState : public ImplButtonState {
+    ImplStrengthOutput PressedStrength;
+    ImplBoolOutput Modifier;
+    ImplModifierOutput ModifierStrength;
     double Value = 0; // 0 .. 1
     double Threshold = 0.12;
 
     uint8_t Value8() const { return (uint8_t)nearbyint(Value * 0xff); }
+
+    void Reset() {
+        ImplButtonState::Reset();
+        PressedStrength.Reset();
+        Modifier.Reset();
+        ModifierStrength.Reset();
+    }
+};
+
+struct ImplAxisDirState {
+    ImplBoolOutput Pressed;
+    bool PrevPressedForRotate = false;
+    ImplStrengthOutput PressedStrength;
+
+    void Reset() {
+        Pressed.Reset();
+        PressedStrength.Reset();
+    }
 };
 
 struct ImplAxisState {
-    ImplRawState Pos, Neg; // must be first (see union below)
-    double Value = 0;      // -1 .. 1
-    double Extent = 0;
-    double RotateModifier = 1;
+    ImplAxisDirState Pos, Neg; // must be first (see union below)
+    ImplBoolOutput Modifier;
     bool RotateFakePressed = false;
+    uint8_t Weight = 0;
+    ImplModifierOutput ModifierStrength;
+    double RotateMultiplier = 1;
+    double Value = 0; // -1 .. 1
+    double Extent = 0;
 
     int8_t Value8() const { return (int8_t)nearbyint(Value * 0x7f); }
     int16_t Value16() const { return (int16_t)nearbyint(Value * 0x7fff); }
+
+    void Reset() {
+        Pos.Reset();
+        Neg.Reset();
+        Modifier.Reset();
+        ModifierStrength.Reset();
+    }
+
+    tuple<double, uint8_t> GetStrengthAndWeight() {
+        double strength = Pos.PressedStrength.Get();
+        if (strength) {
+            return make_tuple(strength, Pos.Pressed.NumActive());
+        }
+        strength = Neg.PressedStrength.Get();
+        if (strength) {
+            return make_tuple(-strength, Neg.Pressed.NumActive());
+        }
+        return make_tuple(0.0, 0);
+    }
 };
 
 struct ImplAxesState {
     union {
         struct {
-            ImplRawState R, L;
+            ImplAxisDirState R, L;
         };
         ImplAxisState X = {};
     };
     union {
         struct {
-            ImplRawState U, D;
+            ImplAxisDirState U, D;
         };
         ImplAxisState Y = {};
     };
+    ImplBoolOutput RotateModifier;
+    ImplModifierOutput RotateModifierStrength;
+
+    void Reset() {
+        X.Reset();
+        Y.Reset();
+        RotateModifier.Reset();
+        RotateModifierStrength.Reset();
+    }
 };
 
 struct ImplMotionDimState {
@@ -114,6 +221,29 @@ struct ImplState {
     ImplFeedbackState Feedback;
     DWORD Time = 0;
     int Version = 0;
+
+    void Reset() {
+        A.Reset();
+        B.Reset();
+        X.Reset();
+        Y.Reset();
+        LB.Reset();
+        RB.Reset();
+        L.Reset();
+        R.Reset();
+        DL.Reset();
+        DR.Reset();
+        DU.Reset();
+        DD.Reset();
+        Start.Reset();
+        Back.Reset();
+        Guide.Reset();
+        Extra.Reset();
+        LT.Reset();
+        RT.Reset();
+        LA.Reset();
+        RA.Reset();
+    }
 };
 
 struct DeviceIntf;
@@ -124,13 +254,18 @@ struct ImplUser {
     bool DeviceSpecified = false;
     DeviceIntf *Device = nullptr;
     CallbackList<bool(ImplUser *)> Callbacks;
+
+    void Reset() {
+        Connected = DeviceSpecified = false;
+        State.Reset();
+    }
 };
 
 using ImplUserCb = decltype(ImplUser::Callbacks)::CbIter;
 
 struct ImplCond {
     int Key = 0;
-    int User = 0;
+    user_t User = -1;
     bool State = false;
     bool Toggle = false;
     SharedPtr<ImplCond> Child;
@@ -142,8 +277,9 @@ struct ImplMapping {
     int DestKey = 0;
     MyVkType SrcType = {};
     MyVkType DestType = {};
-    int SrcUser = 0;
-    int DestUser = 0; // -1 to use active
+    user_t SrcUser = -1;
+    user_t DestUser = -1;
+    slot_t DestSlot = 0;
 
     bool Forward : 1 = false;
     bool Turbo : 1 = false;
@@ -176,14 +312,19 @@ struct ImplReset {
 struct ImplInput {
     SharedPtr<ImplMapping> Mappings;
     SharedPtr<ImplReset> Resets;
+    ImplBoolOutput Output;
 
     bool AsyncDown : 1 = false;
     bool AsyncToggle : 1 = false;
-
     bool ObservedPress : 1 = false;
     bool ObservedPressForCheck : 1 = false;
 
-    void Reset() { Mappings = nullptr; }
+    void Reset() {
+        Mappings = nullptr;
+        Resets = nullptr;
+        AsyncToggle = false;
+        Output.Reset();
+    }
 };
 
 struct ImplDeviceBase {
@@ -258,6 +399,7 @@ struct InputValue {
 
 struct ImplCustomKey {
     ImplInput Key;
+    ImplStrengthOutput Strength;
     function<void(const InputValue &)> Callback;
 };
 
@@ -287,15 +429,15 @@ struct ImplG {
 
     void Reset() {
         ResetVars();
-        G.Keyboard.IsMapped = G.Mouse.IsMapped = false;
+        Keyboard.IsMapped = Mouse.IsMapped = false;
 
         for (int i = 0; i < IMPL_MAX_USERS; i++) {
-            G.Users[i].Connected = G.Users[i].DeviceSpecified = false;
+            Users[i].Reset();
         }
 
-        G.Keyboard.Reset();
-        G.Mouse.Reset();
-        G.ActiveUser = 0;
+        Keyboard.Reset();
+        Mouse.Reset();
+        ActiveUser = 0;
 
         for (auto &custom : CustomKeys) {
             custom->Key.Reset();
@@ -306,9 +448,9 @@ struct ImplG {
 
 private:
     void ResetVars() {
-        G.Trace = G.Debug = G.ApiTrace = G.ApiDebug = G.WaitDebugger = G.SpareForDebug = false;
-        G.Forward = G.Always = G.Disable = G.HideCursor = G.RumbleWindow = false;
-        G.InjectChildren = true;
+        Trace = Debug = ApiTrace = ApiDebug = WaitDebugger = SpareForDebug = false;
+        Forward = Always = Disable = HideCursor = RumbleWindow = false;
+        InjectChildren = true;
     }
 } G;
 

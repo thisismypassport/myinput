@@ -5,7 +5,7 @@
 static void ImplSetRumble(ImplUser *user, double lowFreq, double highFreq);
 
 struct NoDeviceIntf : public DeviceIntf {
-    int CopyInputTo(uint8_t *dest) override { return 0; }
+    int CopyInputTo(byte *dest) override { return 0; }
 
     NoDeviceIntf(int userIdx) {
         SerialString = ManufacturerString = ProductString = L"";
@@ -80,7 +80,7 @@ struct XHidPreparsedData {
 struct XDeviceIntf : public DeviceIntf {
     XHidPreparsedData PreparsedData;
 
-    int CopyInputTo(uint8_t *dest) override {
+    int CopyInputTo(byte *dest) override {
         ((XHidReport *)dest)->SetFrom(&G.Users[UserIdx]);
         return sizeof(XHidReport);
     }
@@ -188,12 +188,12 @@ struct DS4HidPreparsedData {
 struct Ds4DeviceIntf : public DeviceIntf {
     DS4HidPreparsedData PreparsedData;
 
-    int CopyInputTo(uint8_t *dest) override {
+    int CopyInputTo(byte *dest) override {
         ((DS4HidReport *)dest)->SetFrom(&G.Users[UserIdx]);
         return sizeof(DS4HidReport);
     }
 
-    bool ProcessOutput(const uint8_t *src, int size, int id) override {
+    bool ProcessOutput(const byte *src, int size, int id) override {
         if (id == 5 && size >= 6) {
             ImplSetRumble(&G.Users[UserIdx], (double)src[5] / 0xff, (double)src[4] / 0xff);
             return true;
@@ -202,7 +202,7 @@ struct Ds4DeviceIntf : public DeviceIntf {
         return DeviceIntf::ProcessOutput(src, size, id);
     }
 
-    int ProcessFeature(const uint8_t *src, uint8_t *dest, int size, int id) override {
+    int ProcessFeature(const byte *src, byte *dest, int size, int id) override {
         if (id == 18 && size >= 0x10) // serial? more?
         {
             if (dest) {

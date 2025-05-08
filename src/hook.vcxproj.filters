@@ -13,27 +13,9 @@
     <ClInclude Include="MiscApi.h" />
     <ClInclude Include="RawInput.h" />
     <ClInclude Include="State.h" />
-    <ClInclude Include="UtilsBase.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
-    <ClInclude Include="UtilsBuffer.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
-    <ClInclude Include="UtilsPath.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
-    <ClInclude Include="UtilsStr.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
     <ClInclude Include="Devices.h" />
     <ClInclude Include="WinHooks.h" />
     <ClInclude Include="ImplFeedback.h" />
-    <ClInclude Include="UtilsUi.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
-    <ClInclude Include="UtilsUiBase.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
     <ClInclude Include="NotifyApi.h" />
     <ClInclude Include="XUsbApi.h" />
     <ClInclude Include="RawRegister.h" />
@@ -43,26 +25,13 @@
     <ClInclude Include="Thunk.h" />
     <ClInclude Include="ImplPad.h" />
     <ClInclude Include="ImplKeyMouse.h" />
-    <ClInclude Include="WinUtils.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
     <ClInclude Include="MyInputHook.h" />
-    <ClInclude Include="LogUtils.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
     <ClInclude Include="Log.h" />
     <ClInclude Include="WinCursor.h" />
     <ClInclude Include="WbemApi.h" />
     <ClInclude Include="ComApi.h" />
     <ClInclude Include="StateUtils.h" />
-    <ClInclude Include="ComUtils.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <Filter Include="Utils">
-      <UniqueIdentifier>{62be0691-0a85-40c3-898b-04b470aa872e}</UniqueIdentifier>
-    </Filter>
+    <ClInclude Include="ConfigRead.h" />
   </ItemGroup>
   <ItemGroup>
     <CopyFileToFolders Include="_default.ini" />

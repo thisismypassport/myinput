@@ -118,6 +118,7 @@ repeat:
             if (!injectSuccess) {
                 LOG << "Injection failed, retrying process creation without injection" << END;
                 TerminateProcess(procInfo->hProcess, -1);
+                WaitForSingleObject(procInfo->hProcess, INFINITE); // incase there's a process quota
                 CloseHandle(procInfo->hProcess);
                 CloseHandle(procInfo->hThread);
 
@@ -130,6 +131,8 @@ repeat:
         if (!(flags & CREATE_SUSPENDED)) {
             ResumeThread(procInfo->hThread);
         }
+    } else if (!inject) {
+        LOG << "Retry without inject failed, error: " << GetLastError() << END;
     }
 
     return success;

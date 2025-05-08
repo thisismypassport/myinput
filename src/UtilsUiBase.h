@@ -4,25 +4,27 @@
 #include <Windows.h>
 #include <stdio.h>
 
-int MsgBox(int opts, const wchar_t *format, ...) {
+int MsgBox(int opts, const wchar_t *title, const wchar_t *format, ...) {
     va_list va;
     va_start(va, format);
 
     wchar_t buffer[1024];
     vswprintf(buffer, sizeof buffer, format, va);
-    int result = MessageBoxW(nullptr, buffer, L"Error", opts);
+    int result = MessageBoxW(GetActiveWindow(), buffer, title, opts);
 
     va_end(va);
     return result;
 }
 
-#define Alert(...) MsgBox(MB_OK | MB_ICONERROR, __VA_ARGS__)
-#define Question(...) (MsgBox(MB_YESNO | MB_ICONQUESTION, __VA_ARGS__) == IDYES)
+#define Alert(...) (MsgBox(MB_OK | MB_ICONERROR, L"Error", __VA_ARGS__), (void)0)
+#define Question(...) (MsgBox(MB_YESNO | MB_ICONQUESTION, L"Question", __VA_ARGS__) == IDYES)
+#define Confirm(...) (MsgBox(MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2, L"Confirmation", __VA_ARGS__) == IDYES)
 
 Path SelectFile(bool isOpen, const wchar_t *filters, const wchar_t *title, bool extraBool) {
     Path result(MAX_PATH);
 
     OPENFILENAMEW open = {};
+    open.hwndOwner = GetActiveWindow();
     open.lStructSize = sizeof(open);
     open.lpstrFilter = filters;
     open.lpstrFile = result;
@@ -49,13 +51,13 @@ Path SelectFileForSave(const wchar_t *filters = nullptr, const wchar_t *title = 
     return SelectFile(false, filters, title, overwritePrompt);
 }
 
-#define DEFINE_ALERT_ON_LOG_COND(min_level, cond)            \
+#define DEFINE_ALERT_ON_ERROR_COND(cond)                     \
     void Log(LogLevel level, const char *str, size_t size) { \
-        if (level >= min_level && (cond))                    \
+        if (level == LogLevel::Error && (cond))              \
             Alert(L"%hs", str);                              \
     }
 
-#define DEFINE_ALERT_ON_LOG(min_level) DEFINE_ALERT_ON_LOG_COND(min_level, true)
+#define DEFINE_ALERT_ON_ERROR() DEFINE_ALERT_ON_ERROR_COND(true)
 
 void TurnOffFeedbackCursor() {
     MSG msg;

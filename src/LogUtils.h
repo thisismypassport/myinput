@@ -4,8 +4,9 @@
 
 enum class LogLevel {
     // Will add more if needed...
-    Default,
-    Error,
+    Default = 'd',
+    Warning = 'w',
+    Error = 'e',
 };
 
 void Log(LogLevel level, const char *str, size_t size);
@@ -24,6 +25,7 @@ void Log(LogLevel level, LogFunc &&func) {
     })
 
 #define LOG LOG_OF(LogLevel::Default)
+#define LOG_W LOG_OF(LogLevel::Warning)
 #define LOG_ERR LOG_OF(LogLevel::Error)
 
 int Fatal(const char *str) {

@@ -2,7 +2,6 @@
 #include "UtilsStr.h"
 #include "UtilsPath.h"
 #include "LogUtils.h"
-#include <Windows.h>
 
 enum class RegMode {
     Read,
@@ -62,16 +61,14 @@ public:
         return RegGetValueW(mKey, nullptr, name, RRF_RT_ANY, nullptr, nullptr, nullptr) == ERROR_SUCCESS;
     }
 
-    bool GetIntValue(const wchar_t *name, int32_t *pIntValue) const {
+    int32_t GetIntValue(const wchar_t *name, int32_t defval = 0) const {
         DWORD value = 0, size = sizeof(DWORD);
         RegGetValueW(mKey, nullptr, name, RRF_RT_DWORD, nullptr, &value, &size);
-        *pIntValue = value;
-        return size == sizeof(DWORD);
+        return size == sizeof(DWORD) ? value : defval;
     }
 
-    bool GetBoolValue(const wchar_t *name) const {
-        int32_t value;
-        return GetIntValue(name, &value) && value;
+    bool GetBoolValue(const wchar_t *name, bool defval = false) const {
+        return (bool)GetIntValue(name, (int32_t)defval);
     }
 
     bool SetIntValue(const wchar_t *name, int32_t intValue) {
@@ -163,6 +160,7 @@ public:
 };
 
 #define IFEO_KEY LR"(SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options)"
+#define IFEO_DISABLED_KEY LR"(SOFTWARE\MyInput\Disabled Image File Execution Options)"
 #define USE_FILTER_VALUE L"UseFilter"
 #define FILTER_PATH_VALUE L"FilterFullPath"
 #define DEBUGGER_VALUE L"Debugger"
@@ -180,11 +178,20 @@ struct RegisteredExe {
     Path FullPath;
     Path Config;
     bool Exact = false;
+    bool Disabled = false;
 };
 
-class RegIfeoKey {
+class RegIfeoKeyMaybeDelegated {
+public:
+    virtual bool RegisterExe(const wchar_t *exeName, const wchar_t *fullPath, const wchar_t *config) = 0;
+    virtual bool UnregisterExe(const wchar_t *exeName, const wchar_t *fullPath) = 0;
+};
+
+class RegIfeoKeyBase : public RegIfeoKeyMaybeDelegated {
+protected:
     RegKey mKey;
     Path mInjectExePath;
+    bool mDisabled = false;
 
     bool GetRegisteredExeFrom(RegKey &targetKey, RegisteredExeInfo *outInfo) const {
         bool isRegistered = false;
@@ -213,9 +220,11 @@ class RegIfeoKey {
     }
 
 public:
-    RegIfeoKey(RegMode mode, HMODULE baseModule = nullptr) : mKey(RegKey(HKEY_LOCAL_MACHINE), IFEO_KEY, mode) {
-        mInjectExePath = PathCombine(PathGetDirName(PathGetModulePath(baseModule)), MYINPUT_INJECT_EXE);
+    RegIfeoKeyBase(HKEY root, const wchar_t *path, RegMode mode, bool disabled) : mKey(RegKey(root), path, mode), mDisabled(disabled) {
+        mInjectExePath = PathCombine(PathGetDirName(PathGetModulePath(nullptr)), MYINPUT_INJECT_EXE);
     }
+
+    const Path &GetInjectExePath() { return mInjectExePath; }
 
     bool GetRegisteredExe(const wchar_t *exeName, const wchar_t *fullPath, RegisteredExeInfo *outInfo, bool exactPath) const {
         bool isRegistered = false;
@@ -246,7 +255,7 @@ public:
         return isRegistered;
     }
 
-    bool RegisterExe(const wchar_t *exeName, const wchar_t *fullPath, const wchar_t *config) {
+    bool RegisterExe(const wchar_t *exeName, const wchar_t *fullPath, const wchar_t *config) override {
         RegKey exeKey(mKey, exeName, RegMode::CreateOrEdit);
         RegKey pathKey;
 
@@ -306,7 +315,7 @@ public:
         return true;
     }
 
-    bool UnregisterExe(const wchar_t *exeName, const wchar_t *fullPath) {
+    bool UnregisterExe(const wchar_t *exeName, const wchar_t *fullPath) override {
         RegKey exeKey(mKey, exeName, RegMode::Edit);
         RegKey pathKey;
         Path pathFilter;
@@ -357,8 +366,7 @@ public:
         return true;
     }
 
-    vector<RegisteredExe> GetRegisteredExes() const {
-        vector<RegisteredExe> exes;
+    void GetRegisteredExesInto(vector<RegisteredExe> &exes) const {
         for (Path &exeName : mKey.GetChildren()) {
             RegKey exeKey(mKey, exeName, RegMode::Read);
             if (exeKey) {
@@ -369,21 +377,39 @@ public:
 
                         RegisteredExeInfo exeInfo;
                         if (childPath && GetRegisteredExeFrom(childKey, &exeInfo)) {
-                            exes.push_back({Path(exeName.Get()), move(childPath), move(exeInfo.Config), exeInfo.Exact});
+                            exes.push_back({exeName.Copy(), move(childPath), move(exeInfo.Config), exeInfo.Exact, mDisabled});
                         }
                     }
                 }
 
                 RegisteredExeInfo exeInfo;
                 if (GetRegisteredExeFrom(exeKey, &exeInfo)) {
-                    exes.push_back({move(exeName), nullptr, move(exeInfo.Config), exeInfo.Exact});
+                    exes.push_back({move(exeName), nullptr, move(exeInfo.Config), exeInfo.Exact, mDisabled});
                 }
             }
         }
+    }
+
+    vector<RegisteredExe> GetRegisteredExes() const {
+        vector<RegisteredExe> exes;
+        GetRegisteredExesInto(exes);
         return exes;
     }
 
     operator bool() const { return (bool)mKey; }
+};
+
+class RegIfeoKey : public RegIfeoKeyBase {
+public:
+    RegIfeoKey(RegMode mode) : RegIfeoKeyBase(HKEY_LOCAL_MACHINE, IFEO_KEY, mode, false) {}
+};
+
+class RegDisabledIfeoKey : public RegIfeoKeyBase {
+public:
+    RegDisabledIfeoKey(RegMode mode) : RegIfeoKeyBase(HKEY_CURRENT_USER, IFEO_DISABLED_KEY, mode, true) {}
+
+    bool GetBoolSetting(const wchar_t *name, bool defval = false) { return mKey.GetBoolValue(name); }
+    void SetBoolSetting(const wchar_t *name, bool value) { mKey.SetBoolValue(name, value); }
 };
 
 class RegIfeoKeyDelegatedBase {
@@ -478,7 +504,7 @@ public:
     }
 };
 
-class RegIfeoKeyDelegated : public RegIfeoKeyDelegatedBase {
+class RegIfeoKeyDelegated : public RegIfeoKeyDelegatedBase, public RegIfeoKeyMaybeDelegated {
     template <class TAction>
     bool Wrap(TAction &&action, bool create = true) {
         while (true) {
@@ -516,7 +542,7 @@ protected:
     virtual ~RegIfeoKeyDelegated() {}
 
 public:
-    bool RegisterExe(const wchar_t *exeName, const wchar_t *fullPath, const wchar_t *config) {
+    bool RegisterExe(const wchar_t *exeName, const wchar_t *fullPath, const wchar_t *config) override {
         return Wrap([&] {
             Package pkg = {PackageHeader, RegisterCmd, WStrSize(exeName), WStrSize(fullPath), WStrSize(config)};
             Write(&pkg, sizeof(pkg));
@@ -527,7 +553,7 @@ public:
         });
     }
 
-    bool UnregisterExe(const wchar_t *exeName, const wchar_t *fullPath) {
+    bool UnregisterExe(const wchar_t *exeName, const wchar_t *fullPath) override {
         return Wrap([&] {
             Package pkg = {PackageHeader, UnregisterCmd, WStrSize(exeName), WStrSize(fullPath)};
             Write(&pkg, sizeof(pkg));
@@ -583,4 +609,73 @@ public:
         }
         return false;
     }
+};
+
+class RegIfeoKeyDelegatedViaNamedPipe : public RegIfeoKeyDelegated {
+    struct CreateDelegationThreadInfo {
+        RegIfeoKeyDelegatedViaNamedPipe *self;
+        HANDLE handle;
+    };
+
+    HANDLE CreateDelegationOnThread() {
+        Path pipeName;
+        HANDLE handle = CreatePipe(&pipeName);
+        if (!handle) {
+            LOG_ERR << "Failed creating pipe" << END;
+            return nullptr;
+        }
+
+        Path regPath = PathCombine(PathGetDirName(PathGetModulePath(nullptr)), L"myinput_register.exe");
+        Path regArgs = PathConcatRaw(L"-pipe ", pipeName);
+
+        SHELLEXECUTEINFOW exec = {};
+        exec.cbSize = sizeof(exec);
+        exec.lpVerb = L"runas";
+        exec.lpFile = regPath;
+        exec.lpParameters = regArgs;
+        exec.nShow = SW_HIDE;
+        if (!ShellExecuteExW(&exec)) {
+            DestroyDelegation(handle);
+            LOG_ERR << "Failed creating an elevated myinput_register.exe" << END;
+            return nullptr;
+        }
+
+        if (!ConnectNamedPipe(handle, nullptr) &&
+            GetLastError() != ERROR_PIPE_CONNECTED) {
+            DestroyDelegation(handle);
+            LOG_ERR << "Failed waiting for connection from myinput_register.exe" << END;
+            return nullptr;
+        }
+
+        return handle;
+    }
+
+    static DWORD WINAPI CreateDelegationThread(LPVOID param) {
+        auto info = (CreateDelegationThreadInfo *)param;
+        info->handle = info->self->CreateDelegationOnThread();
+        return 0;
+    }
+
+protected:
+    HANDLE CreateDelegation() override {
+        // ShellExecuteExW can process events, so make sure it doesn't process ours
+        CreateDelegationThreadInfo info = {this};
+        HANDLE thread = CreateThread(nullptr, 0, CreateDelegationThread, &info, 0, nullptr);
+        WaitForSingleObject(thread, INFINITE);
+        CloseHandle(thread);
+        return info.handle;
+    }
+
+    void DestroyDelegation(HANDLE handle) override {
+        CloseHandle(handle);
+    }
+
+    void ShowDelegationError() override {
+        LOG_ERR << "Failed executing action" << END;
+    }
+
+public:
+    ~RegIfeoKeyDelegatedViaNamedPipe() { End(); }
+
+    using RegIfeoKeyDelegated::SetHandle;
 };

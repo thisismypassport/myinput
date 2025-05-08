@@ -109,7 +109,7 @@ static UINT GetRawCustomDeviceInfo(UINT uiCommand, LPVOID pData, PUINT pcbSize, 
             false);
 
     case RIDI_PREPARSEDDATA:
-        return ProcessRawInputDeviceInfo<uint8_t>(device->PreparsedSize, pData, pcbSize, [device](uint8_t *ptr) {
+        return ProcessRawInputDeviceInfo<byte>(device->PreparsedSize, pData, pcbSize, [device](byte *ptr) {
             CopyMemory(ptr, device->Preparsed, device->PreparsedSize);
         });
 
@@ -176,7 +176,7 @@ UINT WINAPI GetRawInputData_Hook(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pDa
 }
 
 void FixupRawInputBufferData(UINT *pResult, PRAWINPUT pData, UINT *pSize, UINT remaining) {
-#ifndef _WIN64 // look at this mess windows made
+#ifndef _WIN64 // look at this mess windows made (GetRawInputBuffer returns incorrect data in wow64 mode, and apps rely on this)
     if (gWow64) {
         if (*pResult == INVALID_UINT_VALUE || !pData) {
             *pSize += 0x8;
@@ -220,7 +220,7 @@ UINT WINAPI GetRawInputBuffer_Hook(PRAWINPUT pData, PUINT pCbSize, UINT cbSizeHe
                 }
 
                 PRAWINPUT pNext = NEXTRAWINPUTBLOCK(pData);
-                UINT skip = (UINT)((uint8_t *)pNext - (uint8_t *)pData);
+                UINT skip = (UINT)((byte *)pNext - (byte *)pData);
                 pData = pNext;
                 count++;
 

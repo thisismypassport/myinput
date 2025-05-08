@@ -1,5 +1,7 @@
 #pragma once
 #include "UtilsBase.h"
+#include <charconv>
+#include <Windows.h>
 
 // (assumes tchar is a template param)
 #define TSTR(lit) (sizeof(tchar) == sizeof(char) ? (const tchar *)lit : (const tchar *)CONCAT(L, lit))
@@ -68,18 +70,50 @@ std::basic_string<TChar> StrTrimmed(const std::basic_string<TChar> &str) {
     return str.substr(start, end - start);
 }
 
-template <class TChar, class T>
-bool StrToValue(const std::basic_string<TChar> &str, T *pValue) {
-    std::basic_stringstream<TChar> ss(str);
-    ss >> *pValue;
-    return !ss.fail();
+wstring ToStdWStr(std::string_view str) {
+    int size = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), nullptr, 0);
+
+    wstring dest;
+    dest.resize(size); // TODO: resize_and_overwrite in c++23
+    MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), dest.data(), size);
+    return dest;
 }
 
-template <class TChar, class T>
-std::basic_string<TChar> StrFromValue(T value) {
-    std::basic_stringstream<TChar> ss;
-    ss << value;
-    return ss.str();
+string ToStdStr(std::wstring_view str) {
+    int size = WideCharToMultiByte(CP_UTF8, 0, str.data(), (int)str.size(), nullptr, 0, nullptr, nullptr);
+
+    string dest;
+    dest.resize(size); // TODO: resize_and_overwrite in c++23
+    WideCharToMultiByte(CP_UTF8, 0, str.data(), (int)str.size(), dest.data(), size, nullptr, nullptr);
+    return dest;
+}
+
+template <typename T, typename... TArgs>
+bool StrToValue(const std::string_view &str, T *pValue, TArgs... args) {
+    auto end = str.data() + str.size();
+    auto result = std::from_chars(str.data(), end, *pValue, args...);
+    return result.ec == std::errc() && result.ptr == end;
+}
+
+template <typename T, typename... TArgs>
+bool StrToValue(const std::wstring_view &str, T *pValue, TArgs... args) {
+    return StrToValue(ToStdStr(str), pValue, args...);
+}
+
+template <class TChar, class T, typename... TArgs>
+std::basic_string<TChar> StrFromValue(T value, TArgs... args) {
+    char buffer[0x100];
+    char *end = buffer + sizeof(buffer);
+    auto result = std::to_chars(buffer, end, value, args...);
+    if (result.ec != std::errc()) {
+        return {}; // should't happen..
+    }
+
+    if constexpr (std::is_same_v<TChar, char>) {
+        return string(buffer, result.ptr);
+    } else {
+        return ToStdWStr(string_view(buffer, result.ptr));
+    }
 }
 
 template <class TChar>
@@ -97,11 +131,15 @@ std::basic_string<TChar> StrLowerCase(const std::basic_string<TChar> &str) // as
     return dest;
 }
 
+int tstrcmp(const char *str1, const char *str2) { return strcmp(str1, str2); }
+int tstricmp(const char *str1, const char *str2) { return _stricmp(str1, str2); }
 bool tstreq(const char *str1, const char *str2) { return strcmp(str1, str2) == 0; }
 bool tstrieq(const char *str1, const char *str2) { return _stricmp(str1, str2) == 0; }
 bool tstrneq(const char *str1, const char *str2, size_t count) { return strncmp(str1, str2, count) == 0; }
 bool tstrnieq(const char *str1, const char *str2, size_t count) { return _strnicmp(str1, str2, count) == 0; }
 
+int tstrcmp(const wchar_t *str1, const wchar_t *str2) { return wcscmp(str1, str2); }
+int tstricmp(const wchar_t *str1, const wchar_t *str2) { return _wcsicmp(str1, str2); }
 bool tstreq(const wchar_t *str1, const wchar_t *str2) { return wcscmp(str1, str2) == 0; }
 bool tstrieq(const wchar_t *str1, const wchar_t *str2) { return _wcsicmp(str1, str2) == 0; }
 bool tstrneq(const wchar_t *str1, const wchar_t *str2, size_t count) { return wcsncmp(str1, str2, count) == 0; }

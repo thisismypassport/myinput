@@ -133,7 +133,7 @@ protected:
     deque<Buffer> *OldBufDeque = nullptr;
     HWND PrevWindow = nullptr;
 
-    enum { MaxDequeSize = 0x800 }; // just in case?
+    enum { MaxDequeSize = (InputHandleHighCount / 2) - 8 };
     WORD HandleHighBase, HandleHighEnd;
     WORD HandleHighFront, HandleHighBack, OldHandleHighFront = 0;
 
@@ -172,19 +172,37 @@ protected:
             if (!BufDeque) {
                 BufDeque = new deque<Buffer>();
             }
-            if (BufDeque->size() >= MaxDequeSize) {
-                BufDeque->pop_front();
-            }
+
             BufDeque->push_back(move(buffer));
 
             handleHigh = HandleHighBack++;
             if (HandleHighBack == HandleHighEnd) {
                 HandleHighBack = HandleHighBase;
             }
+
+            if (HandleHighBack == OldHandleHighFront && OldBufDeque && !OldBufDeque->empty()) {
+                OldBufDeque->clear();
+            }
+
+            if (BufDeque->size() >= MaxDequeSize) {
+                if (G.ApiTrace) {
+                    LOG << "Too many raw input messages to " << window << END;
+                }
+                BufDeque->pop_front();
+
+                HandleHighFront++;
+                if (HandleHighFront == HandleHighEnd) {
+                    HandleHighFront = HandleHighBase;
+                }
+
+                // we need to keep flooding the window with messages (hopefully it's processing or clearing them - that need not reach Read)
+                // as otherwise it can clear all its messages and we won't know to send it another.
+                // (alternatively - consider hooking message system? will also help any queue status issues)
+            }
         }
 
         if (G.ApiTrace) {
-            LOG << "Pushing Raw input data to " << window << END;
+            LOG << "Pushing Raw input data for " << (HRAWINPUT)MakeOurHandle(handleHigh) << " to " << window << END;
         }
         PostMessageW(window, WM_INPUT, wparam, (LPARAM)MakeOurHandle(handleHigh));
     }
@@ -194,6 +212,16 @@ protected:
             LOG << "Pushing device change notify to " << window << END;
         }
         PostMessageW(window, WM_INPUT_DEVICE_CHANGE, added ? GIDC_ARRIVAL : GIDC_REMOVAL, (LPARAM)handle);
+    }
+
+    int GetHandleHighDelta(WORD left, WORD right) {
+        int delta = (INT16)(left - right);
+        if (delta >= InputHandleHighCount / 2) {
+            delta -= InputHandleHighCount;
+        } else if (delta < -InputHandleHighCount / 2) {
+            delta += InputHandleHighCount;
+        }
+        return delta;
     }
 
 public:
@@ -206,24 +234,19 @@ public:
         deque<Buffer> *bufDeque = BufDeque;
         WORD *handleHighFrontPtr = &HandleHighFront;
 
-        int handleDelta = (INT16)(handleHigh - HandleHighFront);
-        if (handleDelta < -InputHandleHighCount / 2) {
-            handleDelta += InputHandleHighCount;
-        }
-        if (handleDelta < 0) {
-            // try old deque
-            if (OldBufDeque) {
-                handleDelta = (INT16)(handleHigh - OldHandleHighFront);
-                if (handleDelta < -InputHandleHighCount / 2) {
-                    handleDelta += InputHandleHighCount;
-                }
-            }
+        int handleDelta = GetHandleHighDelta(handleHigh, HandleHighFront);
 
+        if (handleDelta < 0 && OldBufDeque && !OldBufDeque->empty()) // try old deque
+        {
+            handleDelta = GetHandleHighDelta(handleHigh, OldHandleHighFront);
             bufDeque = OldBufDeque;
             handleHighFrontPtr = &OldHandleHighFront;
         }
 
         if (handleDelta > 0) {
+            int dequeCount = bufDeque ? (int)bufDeque->size() : 0;
+            handleDelta = min(handleDelta, dequeCount);
+
             for (int i = 0; i < handleDelta && bufDeque && !bufDeque->empty(); i++) {
                 bufDeque->pop_front();
             }
@@ -234,7 +257,7 @@ public:
             }
         }
 
-        if (!bufDeque || bufDeque->empty()) {
+        if (!bufDeque || bufDeque->empty() || handleDelta < 0) {
             if (G.Debug) {
                 LOG << "Read of old or unknown raw input handle" << END;
             }
@@ -627,21 +650,7 @@ bool ProcessRawKeyboardEvent(int msg, int key, int scan, int flags, ULONG extraI
         }
 
         int origKey = key;
-        switch (key) {
-        case VK_LSHIFT:
-        case VK_RSHIFT:
-            key = VK_SHIFT;
-            flags &= ~LLKHF_EXTENDED;
-            break;
-        case VK_LCONTROL:
-        case VK_RCONTROL:
-            key = VK_CONTROL;
-            break;
-        case VK_LMENU:
-        case VK_RMENU:
-            key = VK_MENU;
-            break;
-        }
+        ImplCombineLeftRight(&key, &flags, LLKHF_EXTENDED);
 
         raw.data.keyboard.Flags = (flags & LLKHF_UP) ? RI_KEY_BREAK : RI_KEY_MAKE;
         if (flags & LLKHF_EXTENDED) {

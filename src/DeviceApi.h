@@ -28,7 +28,7 @@ class ImplProcessPipeThread {
 
     Buffer CreateReport() {
         Buffer buffer(ReportBuffers);
-        buffer.SetSize(Device->CopyInputTo((uint8_t *)buffer.Ptr()));
+        buffer.SetSize(Device->CopyInputTo((byte *)buffer.Ptr()));
         return buffer;
     }
 
@@ -81,7 +81,7 @@ class ImplProcessPipeThread {
                 if (truncRead) {
                     LOG << "Received too-large output report" << END;
                 } else {
-                    Device->ProcessOutput((const uint8_t *)readBuffer.Ptr(), numRead);
+                    Device->ProcessOutput((const byte *)readBuffer.Ptr(), numRead);
                 }
                 truncRead = false;
             } else {
@@ -401,8 +401,8 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
             });
 
     case IOCTL_HID_GET_COLLECTION_DESCRIPTOR:
-        return ProcessDeviceIoControlOutput<uint8_t>(
-            lpOutBuffer, nOutBufferSize, lpBytesReturned, [&](uint8_t *dest) {
+        return ProcessDeviceIoControlOutput<byte>(
+            lpOutBuffer, nOutBufferSize, lpBytesReturned, [&](byte *dest) {
                 CopyMemory(dest, device->Preparsed, device->PreparsedSize);
                 return TRUE;
             },
@@ -463,7 +463,7 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
         });
 
     case IOCTL_HID_GET_FEATURE:
-        if (lpOutBuffer && (size = device->ProcessFeature((const uint8_t *)lpOutBuffer, (uint8_t *)lpOutBuffer, nOutBufferSize)) >= 0) {
+        if (lpOutBuffer && (size = device->ProcessFeature((const byte *)lpOutBuffer, (byte *)lpOutBuffer, nOutBufferSize)) >= 0) {
             *lpBytesReturned = size;
             return TRUE;
         }
@@ -472,7 +472,7 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
         return FALSE;
 
     case IOCTL_HID_SET_FEATURE:
-        if (lpInBuffer && (size = device->ProcessFeature((const uint8_t *)lpInBuffer, nullptr, nInBufferSize)) >= 0) {
+        if (lpInBuffer && (size = device->ProcessFeature((const byte *)lpInBuffer, nullptr, nInBufferSize)) >= 0) {
             return TRUE;
         }
 
@@ -480,7 +480,7 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
         return FALSE;
 
     case IOCTL_HID_GET_INPUT_REPORT:
-        if (lpOutBuffer && (size = device->CopyInputTo((uint8_t *)lpOutBuffer, nOutBufferSize)) >= 0) {
+        if (lpOutBuffer && (size = device->CopyInputTo((byte *)lpOutBuffer, nOutBufferSize)) >= 0) {
             *lpBytesReturned = size;
             return TRUE;
         }
@@ -489,7 +489,7 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
         return FALSE;
 
     case IOCTL_HID_SET_OUTPUT_REPORT:
-        if (lpInBuffer && device->ProcessOutput((const uint8_t *)lpInBuffer, nInBufferSize)) {
+        if (lpInBuffer && device->ProcessOutput((const byte *)lpInBuffer, nInBufferSize)) {
             return TRUE;
         }
 

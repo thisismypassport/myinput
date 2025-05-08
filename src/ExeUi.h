@@ -1,43 +1,121 @@
 #pragma once
-#include "ExeConfig.h"
-#include "UtilsUi.h"
+#include "CommonUi.h"
+#include "Registry.h"
+#include "WinUtils.h"
+#include "Link.h"
 
-Path GetPath(const wchar_t *folder, const wchar_t *name, const wchar_t *ext) {
-    Path rootPath = PathGetDirName(PathGetDirName(PathGetModulePath(nullptr)));
-    Path extName = PathCombineExt(PathGetBaseNameWithoutExt(name), ext);
-    return PathCombine(PathCombine(rootPath, folder), extName);
+const wchar_t *gSettingDefaultDisabled = L"Default Disabled";
+
+RegIfeoKeyDelegatedViaNamedPipe *GetDelegatedIfeo() {
+    static RegIfeoKeyDelegatedViaNamedPipe gDelegatedIfeo;
+    return &gDelegatedIfeo;
 }
 
-Path GetDefaultConfigPath() {
-    return GetPath(L"Configs", L"_default", L"ini");
-}
+class ExePanel : public Panel, public ExeUiIntf {
+    class ConfigChoicePopup : public OverlayWindow {
+        ExePanel *mExePanel;
+        int mCurrentIdx = -1;
 
-void OpenInShell(const Path &path, const Path &params = nullptr, const Path &workDir = nullptr) {
-    ShellExecuteW(nullptr, nullptr, path, params, workDir, SW_SHOWNORMAL);
-}
+        RECT GetExpectedRect() {
+            return mExePanel->mRegList->GetRect(mCurrentIdx, ListConfigColumn);
+        }
 
-class ExePanel : public Panel {
+    public:
+        ConfigChoicePopup(HWND parent, intptr_t id, ExePanel *exePanel) : OverlayWindow(parent, id), mExePanel(exePanel) {}
+
+        void Create(int idx) {
+            mCurrentIdx = idx;
+            OverlayWindow::Create(GetExpectedRect());
+        }
+
+        void OnDestroy() {
+            mCurrentIdx = -1;
+        }
+
+        void Update(int idx) {
+            if (idx == mCurrentIdx) {
+                SetRect(GetExpectedRect());
+            } else {
+                Destroy();
+            }
+        }
+
+        Control *OnCreate() override {
+            return mExePanel->CreateConfigChoice(mExePanel, this, true);
+        }
+    };
+
+    BaseUiIntf *mBaseUiIntf;
     UniquePtr<RegIfeoKey> mIfeoKey;
+    UniquePtr<RegDisabledIfeoKey> mDisabledIfeoKey;
+
     Label *mListLbl = nullptr;
-    MultiListBox *mRegList = nullptr;
+    MultiListView *mRegList = nullptr;
     Label *mRegLbl = nullptr;
+    CheckBox *mRegDefaultChk = nullptr;
     Button *mRegBtn = nullptr;
     Button *mUnregBtn = nullptr;
     Button *mReregBtn = nullptr;
-    CheckBox *mCustomCfgChk = nullptr;
-    EditLine *mCustomCfgEdit = nullptr;
-    Button *mCustomCfgBtn = nullptr;
     Button *mEditCfgBtn = nullptr;
-    Button *mEditDefCfgBtn = nullptr;
     Button *mViewLogsBtn = nullptr;
-    Button *mLaunchBtn = nullptr;
-    Button *mLaunchNewBtn = nullptr;
+    Button *mOpenFolderBtn = nullptr;
+    Button *mRunBtn = nullptr;
+    Label *mConfigLabel = nullptr;
+    ConfigChoicePanel *mConfigChoice = nullptr;
+    ConfigChoicePopup *mConfigPopup = nullptr;
+    PopupMenu *mPopupMenu = nullptr;
 
     vector<RegisteredExe> mRegisteredExes;
     bool mHasInexact = false;
 
-    void UpdateList(const wchar_t *initialSel = nullptr) {
-        mRegisteredExes = mIfeoKey->GetRegisteredExes();
+    enum ListColumn {
+        ListNameColumn,
+        ListConfigColumn,
+    };
+
+    RegIfeoKeyMaybeDelegated *GetIfeoKeyForWrite(bool disabled) {
+        if (disabled) {
+            return mDisabledIfeoKey;
+        } else {
+            return GetDelegatedIfeo();
+        }
+    }
+
+    Path CreateLaunchCmd(const Path &path, const Path &config) {
+        wstring cmd;
+        if (config) {
+            cmd += L"-c \"" + wstring(config) + L"\" ";
+        }
+        cmd += L"\"" + wstring(path) + L"\"";
+        return cmd.c_str();
+    }
+
+    Path &ExeIdentifier(RegisteredExe &exe) {
+        return exe.FullPath ? exe.FullPath : exe.Name;
+    }
+
+    void UpdateList(const vector<Path> *initialPaths = nullptr, bool forPopup = false) {
+        vector<Path> prevSelPaths;
+        if (!initialPaths) {
+            for (auto &idx : mRegList->GetSelected()) {
+                prevSelPaths.push_back(move(ExeIdentifier(mRegisteredExes[idx]))); // can move, as we clear below
+            }
+        }
+        if (!initialPaths) {
+            initialPaths = &prevSelPaths;
+        }
+
+        mRegisteredExes.clear();
+        mIfeoKey->GetRegisteredExesInto(mRegisteredExes);
+        mDisabledIfeoKey->GetRegisteredExesInto(mRegisteredExes);
+
+        std::stable_sort(mRegisteredExes.begin(), mRegisteredExes.end(), [](const auto &left, const auto &right) {
+            int cmp = tstricmp(left.Name, right.Name);
+            if (cmp == 0 && left.FullPath && right.FullPath) {
+                cmp = tstricmp(left.FullPath, right.FullPath);
+            }
+            return cmp < 0;
+        });
 
         mRegList->Clear();
 
@@ -55,6 +133,10 @@ class ExePanel : public Panel {
                 label = label + L" (" + PathGetDirName(regExe.FullPath).Get() + L")";
             }
 
+            if (!regExe.FullPath) {
+                label = label + L" (any path)";
+            }
+
             if (!regExe.Exact) {
                 mHasInexact = true;
                 label += L" [#]";
@@ -62,203 +144,377 @@ class ExePanel : public Panel {
 
             mRegList->Add(label.c_str());
 
-            if (initialSel && tstreq(regExe.Name, initialSel)) {
-                selection.push_back(i);
+            mRegList->Set(i, ListConfigColumn,
+                          regExe.Config ? regExe.Config.Get() : ConfigsByName);
+
+            for (auto &initialPath : *initialPaths) {
+                if (tstreq(ExeIdentifier(regExe), initialPath)) {
+                    selection.push_back(i);
+                }
             }
+
+            mRegList->SetChecked(i, !regExe.Disabled, false);
         }
 
         mRegList->SetSelected(selection);
+        if (!selection.empty()) {
+            mRegList->EnsureVisible(selection[0]);
+        }
+
         mRegLbl->Show(mHasInexact);
+
+        if (!forPopup) {
+            mConfigPopup->Destroy();
+        }
     }
 
-    IControl *OnCreate() override {
+    void OnFilesDrop(const vector<Path> &files) override {
+        for (auto &file : files) {
+            RegisterNew(file);
+        }
+
+        UpdateList(&files);
+    }
+
+    void RegisterNew(const Path &path) {
+        Path exeName = PathGetBaseName(path);
+        Path fullPath = PathGetFullPath(path);
+
+        if (fullPath && tstrieq(PathGetExtPtr(fullPath), L"lnk") &&
+            ResolveLink(fullPath, &fullPath)) {
+            exeName = PathGetBaseName(fullPath);
+        }
+
+        if (!IsFileExists(fullPath)) {
+            if (tstreq(PathGetExtPtr(exeName), L"")) {
+                exeName = PathCombineExt(exeName, L"exe");
+            }
+
+            if (!Question(L"Register all executables named %ws?", exeName.Get())) {
+                return;
+            }
+            fullPath = nullptr; // by name only
+        }
+
+        RegisteredExeInfo regInfo;
+        bool registered = mIfeoKey->GetRegisteredExe(exeName, fullPath, &regInfo, true);
+        if (registered) {
+            auto existingName = regInfo.ByPath ? fullPath.Get() : exeName.Get();
+            if (regInfo.Exact) {
+                Alert(L"%ws is already registered.", existingName);
+            } else if (Question(L"%ws is registered to %ws\nRe-register it?", existingName, regInfo.InjectExe.Get())) {
+                registered = false;
+            }
+        }
+
+        if (!registered) {
+            if (!regInfo.Config) {
+                regInfo.Config = ConfigsDefault; // leaving it empty gives legacy/questionable default behaviour
+            }
+
+            bool disabled = !mRegDefaultChk->Get();
+            if (!GetIfeoKeyForWrite(disabled)->RegisterExe(exeName, fullPath, regInfo.Config)) {
+                GetIfeoKeyForWrite(true)->RegisterExe(exeName, fullPath, regInfo.Config);
+            }
+        }
+    }
+
+    static ConfigChoicePanel *CreateConfigChoice(ExePanel *self, PanelBase *parent, bool forPopup) {
+        auto panel = parent->New<ConfigChoicePanel>(CONFIG_CHOICE_ALLOW_NEW | CONFIG_CHOICE_ALLOW_BY_NAME |
+                                                        (forPopup ? CONFIG_CHOICE_ALLOW_RESIZE : 0),
+                                                    [self, forPopup](Path &&config) {
+                                                        bool hasConfig = config && !tstreq(config, ConfigsByName);
+
+                                                        auto indices = self->mRegList->GetSelected();
+                                                        for (int idx : indices) {
+                                                            auto &exe = self->mRegisteredExes[idx];
+                                                            exe.Config = hasConfig ? move(config) : Path();
+                                                            self->GetIfeoKeyForWrite(exe.Disabled)->RegisterExe(exe.Name, exe.FullPath, exe.Config);
+                                                        }
+
+                                                        self->UpdateList(nullptr, forPopup);
+                                                        if (forPopup) {
+                                                            self->mConfigChoice->UpdateIfNeeded();
+                                                        }
+                                                    });
+
+        panel->SetDefaultNewName([self]() -> Path {
+            auto indices = self->mRegList->GetSelected();
+            return indices.empty() ? Path() : PathGetBaseNameWithoutExt(self->mRegisteredExes[indices.front()].Name);
+        });
+
+        if (forPopup) {
+            auto indices = self->mRegList->GetSelected();
+            if (indices.size() == 1) {
+                auto &config = self->mRegisteredExes[indices.front()].Config;
+                panel->SetSelected(config ? config.Get() : ConfigsByName, false);
+            }
+        }
+
+        return panel;
+    }
+
+    Control *OnCreate() override {
         mIfeoKey = UniquePtr<RegIfeoKey>::New(RegMode::Read);
+        mDisabledIfeoKey = UniquePtr<RegDisabledIfeoKey>::New(RegMode::CreateOrEdit);
 
-        mListLbl = Add<Label>(L"Registered Executables:");
+        mListLbl = New<Label>(L"Registered Executables:");
 
-        mRegList = Add<MultiListBox>([this](const vector<int> &indices) {
+        mRegList = New<MultiListView>([this](const vector<int> &indices) {
             bool anyExact = false;
+            bool mixedConfigs = false;
+            const wchar_t *anyConfig = nullptr;
             for (int idx : indices) {
-                if (mRegisteredExes[idx].Exact) {
+                auto &exe = mRegisteredExes[idx];
+                if (exe.Exact) {
                     anyExact = true;
+                }
+
+                const wchar_t *exeConfig = exe.Config ? exe.Config.Get() : ConfigsByName;
+                if (!anyConfig) {
+                    anyConfig = exeConfig;
+                } else if (!mixedConfigs && !tstrieq(anyConfig, exeConfig)) {
+                    mixedConfigs = true;
                 }
             }
 
             bool anySelected = indices.size() > 0;
             mUnregBtn->Enable(anySelected);
-            mReregBtn->Enable(anySelected && !anyExact);
+            mReregBtn->Show(anySelected && !anyExact);
 
             RegisteredExe *oneSelected = indices.size() == 1 ? &mRegisteredExes[indices.front()] : nullptr;
             mEditCfgBtn->Enable(oneSelected);
             mViewLogsBtn->Enable(oneSelected);
-            mLaunchBtn->Enable(oneSelected);
-            mCustomCfgChk->Enable(oneSelected);
+            mOpenFolderBtn->Enable(oneSelected);
+            mRunBtn->Enable(oneSelected);
 
-            bool hasConfig = oneSelected && oneSelected->Config;
-            mCustomCfgChk->Set(hasConfig);
-            mCustomCfgEdit->Enable(hasConfig);
-            mCustomCfgEdit->Set(hasConfig ? oneSelected->Config.Get() : oneSelected ? PathGetBaseNameWithoutExt(oneSelected->Name).Get()
-                                                                                    : L"");
-
-            mCustomCfgBtn->Enable(false);
+            mConfigLabel->Enable(anySelected);
+            mConfigChoice->Enable(anySelected);
+            mConfigChoice->SetSelected(mixedConfigs ? nullptr : anyConfig, false);
         });
 
-        mRegLbl = Add<Label>(L"[#] - Registered to another version of myinput");
+        mRegList->AddColumn(L"Name");
+        mRegList->AddColumn(L"Config", 200);
 
-        mRegBtn = Add<Button>(L"Register New", [this] {
+        mRegList->SetOnClick([this](int idx, int colIdx, bool right, bool dblclk) {
+            mConfigPopup->Destroy();
+
+            if (colIdx == ListNameColumn && right) {
+                mPopupMenu->Create();
+            } else if (colIdx == ListNameColumn && !right && dblclk) {
+                mEditCfgBtn->Click();
+            } else if (colIdx == ListConfigColumn) {
+                mConfigPopup->Create(idx);
+            }
+        });
+
+        mRegList->SetOnKey([this](int key) {
+            if (key == VK_RETURN) {
+                mEditCfgBtn->Click();
+            } else if (key == VK_DELETE) {
+                auto indices = mRegList->GetSelected();
+                if (indices.size() == 1 ? Confirm(L"Are you sure you want to unregister '%ws'?", mRegisteredExes[indices[0]].Name.Get()) : indices.size() > 1 ? Confirm(L"Are you sure you want to unregister these %d executables?", indices.size())
+                                                                                                                                                              : false) {
+                    mUnregBtn->Click();
+                }
+            }
+        });
+
+        mRegList->SetOnRectChanged([this]() {
+            if (mConfigPopup->IsCreated()) {
+                auto selected = mRegList->GetSelected();
+                mConfigPopup->Update(selected.size() == 1 ? selected.front() : -1);
+            }
+        });
+
+        mRegList->SetOnCheck([this](int idx, bool checked) {
+            auto &exe = mRegisteredExes[idx];
+            if (exe.Disabled != !checked &&
+                GetIfeoKeyForWrite(exe.Disabled)->UnregisterExe(exe.Name, exe.FullPath)) {
+                exe.Disabled = !exe.Disabled;
+                if (!GetIfeoKeyForWrite(exe.Disabled)->RegisterExe(exe.Name, exe.FullPath, exe.Config)) {
+                    exe.Disabled = !exe.Disabled;
+                    GetIfeoKeyForWrite(exe.Disabled)->RegisterExe(exe.Name, exe.FullPath, exe.Config);
+                    mRegList->SetChecked(idx, false, false);
+                }
+            }
+        });
+
+        mRegLbl = New<Label>(L"[#] - Registered to another version of myinput");
+
+        mUnregBtn = New<Button>(L"Unregister", &gDelIcon, [this] {
+            auto indices = mRegList->GetSelected();
+            for (int idx : indices) {
+                auto &exe = mRegisteredExes[idx];
+                GetIfeoKeyForWrite(exe.Disabled)->UnregisterExe(exe.Name, exe.FullPath);
+            }
+
+            UpdateList();
+        });
+
+        mReregBtn = New<Button>(L"Reregister to This Version", [this] {
+            auto indices = mRegList->GetSelected();
+            for (int idx : indices) {
+                auto &exe = mRegisteredExes[idx];
+                GetIfeoKeyForWrite(exe.Disabled)->RegisterExe(exe.Name, exe.FullPath, exe.Config);
+            }
+
+            UpdateList();
+        });
+
+        mRegBtn = New<Button>(L"Register New", [this] {
             Path selected = SelectFileForOpen(L"Executables\0*.EXE\0", L"Choose Executable", false);
             if (selected) {
-                Path exeName = PathGetBaseName(selected);
-                Path fullPath = PathGetFullPath(selected);
+                RegisterNew(selected);
 
-                RegisteredExeInfo regInfo;
-                bool registered = mIfeoKey->GetRegisteredExe(exeName, fullPath, &regInfo, true);
-                if (registered) {
-                    auto existingName = regInfo.ByPath ? fullPath.Get() : exeName.Get();
-                    if (regInfo.Exact) {
-                        Alert(L"%ws is already registered.", existingName);
-                    } else if (Question(L"%ws is registered to %ws\nRe-register it?", existingName, regInfo.InjectExe.Get())) {
-                        registered = false;
-                    }
-                }
-
-                if (!registered) {
-                    GetDelegatedIfeo()->RegisterExe(exeName, fullPath, regInfo.Config);
-                }
-
-                UpdateList(exeName);
+                vector<Path> selectedVec;
+                selectedVec.push_back(move(selected));
+                UpdateList(&selectedVec);
             }
         });
 
-        mUnregBtn = Add<Button>(L"Unregister", [this] {
-            auto indices = mRegList->GetSelected();
-            for (int idx : indices) {
-                auto &exe = mRegisteredExes[idx];
-                GetDelegatedIfeo()->UnregisterExe(exe.Name, exe.FullPath);
+        mRegDefaultChk = New<CheckBox>(L"&& Enable", [this](bool value) {
+            mDisabledIfeoKey->SetBoolSetting(gSettingDefaultDisabled, !value);
+        });
+        mRegDefaultChk->Set(!mDisabledIfeoKey->GetBoolSetting(gSettingDefaultDisabled));
+
+        mEditCfgBtn = New<Button>(L"Edit \r\nConfig", [this] {
+            if (!mRegList->GetSelected().empty()) {
+                mBaseUiIntf->SwitchToConfigs();
             }
-
-            UpdateList();
         });
 
-        mReregBtn = Add<Button>(L"Reregister", [this] {
-            auto indices = mRegList->GetSelected();
-            for (int idx : indices) {
-                auto &exe = mRegisteredExes[idx];
-                GetDelegatedIfeo()->RegisterExe(exe.Name, exe.FullPath, exe.Config);
-            }
-
-            UpdateList();
-        });
-
-        mCustomCfgChk = Add<CheckBox>(L"Use Custom Config", [this](bool value) {
-            mCustomCfgEdit->Enable(value);
-            mCustomCfgBtn->Enable(true);
-        });
-
-        mCustomCfgEdit = Add<EditLine>([this](bool done) {
-            mCustomCfgBtn->Enable(true);
-        });
-
-        mCustomCfgBtn = Add<Button>(L"Apply", [this] {
+        mViewLogsBtn = New<Button>(L"View \r\nLogs", [this] {
             auto indices = mRegList->GetSelected();
             if (!indices.empty()) {
-                auto &exe = mRegisteredExes[indices.front()];
-                exe.Config = mCustomCfgChk->Get() ? mCustomCfgEdit->Get() : Path();
-                GetDelegatedIfeo()->RegisterExe(exe.Name, exe.FullPath, exe.Config);
-                mCustomCfgBtn->Enable(false);
-            }
-        });
-
-        mEditCfgBtn = Add<Button>(L"Edit Config", [this] {
-            auto indices = mRegList->GetSelected();
-            if (!indices.empty()) {
-                auto idx = indices.front();
-                const Path &name = mRegisteredExes[idx].Name;
-                const Path &config = mRegisteredExes[idx].Config;
-
-                Path configPath = GetPath(L"Configs", config ? config : name, L"ini");
-                if (GetFileAttributesW(configPath) == INVALID_FILE_ATTRIBUTES) {
-                    if (!config && !Question(L"%ws currently uses the global config file - change it to use its own config file?", name.Get())) {
-                        return;
-                    }
-
-                    CopyFileW(GetDefaultConfigPath(), configPath, false);
-                }
-                OpenInShell(configPath);
-            }
-        });
-
-        mEditDefCfgBtn = Add<Button>(L"Edit Global Config", [this] {
-            OpenInShell(GetDefaultConfigPath());
-        });
-
-        mViewLogsBtn = Add<Button>(L"View Logs", [this] {
-            auto indices = mRegList->GetSelected();
-            if (!indices.empty()) {
-                const Path &name = mRegisteredExes[indices.front()].Name;
-                Path log = GetPath(L"Logs", name, L"log");
-                if (GetFileAttributesW(log) == INVALID_FILE_ATTRIBUTES) {
-                    Alert(L"%ws doesn't have any logs - wasn't run?", name.Get());
+                Path baseName = PathGetBaseNameWithoutExt(mRegisteredExes[indices.front()].Name);
+                Path log = GetPath(LogsPath, baseName, LogsExt);
+                if (!IsFileExists(log)) {
+                    Alert(L"%ws doesn't have any logs - wasn't run?", baseName.Get());
                 } else {
                     OpenInShell(log);
                 }
             }
         });
 
-        mLaunchBtn = Add<Button>(L"Launch", [this] {
+        mRunBtn = New<Button>(L"Run with \r\nMyInput", &gAppIcon, [this] {
             auto indices = mRegList->GetSelected();
             if (!indices.empty()) {
                 auto idx = indices.front();
                 const Path &path = mRegisteredExes[idx].FullPath;
                 if (!path) {
                     Alert(L"%ws has no location defined", mRegisteredExes[idx].Name.Get());
-                } else if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+                } else if (!IsFileExists(path)) {
                     Alert(L"%ws doesn't exist", path.Get());
                 } else {
-                    OpenInShell(path, nullptr, PathGetDirName(path));
+                    OpenInShell(mDisabledIfeoKey->GetInjectExePath(), CreateLaunchCmd(path, mRegisteredExes[idx].Config));
                 }
             }
         });
 
-        mLaunchNewBtn = Add<Button>(L"Launch New (One-Time)", [this] {
-            Path selected = SelectFileForOpen(L"Executables\0*.EXE\0", L"Execute");
-            if (selected) {
-                Path injectPath = PathCombine(PathGetDirName(PathGetModulePath(nullptr)), L"myinput_inject.exe");
-                wstring launchCmd = L"\"" + wstring(selected.Get()) + L"\"";
-                OpenInShell(injectPath, launchCmd.c_str(), PathGetDirName(selected.Get()));
+        mOpenFolderBtn = New<Button>(L"Open \r\nFolder", &gFolderIcon, [this] {
+            auto indices = mRegList->GetSelected();
+            if (!indices.empty()) {
+                auto idx = indices.front();
+                const Path &path = mRegisteredExes[idx].FullPath;
+                Path folderPath = path ? PathGetDirName(path) : nullptr;
+                if (!folderPath) {
+                    Alert(L"%ws has no location defined", mRegisteredExes[idx].Name.Get());
+                } else if (!IsFileExists(folderPath)) {
+                    Alert(L"%ws doesn't exist", folderPath.Get());
+                } else {
+                    OpenInShell(folderPath);
+                }
             }
+        });
+
+        mConfigLabel = New<Label>(L"Use Config:");
+        mConfigChoice = CreateConfigChoice(this, this, false);
+        mConfigPopup = New<ConfigChoicePopup>(this);
+
+        mPopupMenu = New<PopupMenu>([this](PopupMenu *pop) {
+            pop->Add(mEditCfgBtn, true);
+            pop->Add(mViewLogsBtn);
+            pop->AddSep();
+            pop->Add(mRunBtn);
+            pop->Add(mOpenFolderBtn);
+            pop->AddSep();
+            pop->Add(mUnregBtn);
+            pop->Add(mReregBtn);
         });
 
         UpdateList();
 
-        auto layout = Add<Layout>(true);
+        EnableFilesDrop();
 
-        auto cfgLayout = Add<Layout>();
-        layout->OnBottom(cfgLayout);
-        cfgLayout->OnLeft(mEditCfgBtn);
-        cfgLayout->OnLeft(mViewLogsBtn);
-        cfgLayout->OnLeft(mLaunchBtn);
-        cfgLayout->OnRight(mLaunchNewBtn);
-        cfgLayout->OnRight(mEditDefCfgBtn);
+        auto headerLayout = New<Layout>();
+        headerLayout->AddLeft(mListLbl);
+        headerLayout->AddRight(mRegLbl);
 
-        auto custCfgLayout = Add<Layout>();
-        layout->OnBottom(custCfgLayout);
-        custCfgLayout->OnLeft(mCustomCfgChk);
-        custCfgLayout->OnLeft(mCustomCfgEdit, 150);
-        custCfgLayout->OnLeft(mCustomCfgBtn);
+        auto cfgLayout = New<Layout>();
+        cfgLayout->AddLeftMiddle(mConfigLabel);
+        cfgLayout->AddLeftMiddle(mConfigChoice);
 
-        auto regLayout = Add<Layout>();
-        layout->OnBottom(regLayout);
-        regLayout->OnLeft(mUnregBtn);
-        regLayout->OnLeft(mReregBtn);
-        regLayout->OnRight(mRegBtn);
+        auto subLayout = New<Layout>();
+        subLayout->AddLeft(mEditCfgBtn);
+        subLayout->AddLeft(mViewLogsBtn);
+        subLayout->AddLeft(mRunBtn);
+        subLayout->AddLeft(mOpenFolderBtn);
 
-        layout->OnTop(mListLbl);
-        layout->OnBottom(mRegLbl);
-        layout->OnRest(mRegList);
+        auto regLayout = New<Layout>();
+        regLayout->AddLeft(mUnregBtn);
+        regLayout->AddLeft(mReregBtn);
+        regLayout->AddRight(mRegDefaultChk);
+        regLayout->AddRight(mRegBtn);
+
+        auto layout = New<Layout>(true);
+        layout->AddTop(headerLayout);
+        layout->AddBottom(cfgLayout);
+        layout->AddBottom(subLayout);
+        layout->AddBottom(regLayout);
+        layout->AddRemaining(mRegList);
         return layout;
     }
 
+    void OnActivate(bool activate, void *root, void *prev) override {
+        if (!activate && prev != mConfigPopup) {
+            mConfigPopup->Destroy();
+        }
+    }
+
 public:
-    using Panel::Panel;
+    ExePanel(HWND parent, intptr_t id, BaseUiIntf *baseUi) : Panel(parent, id), mBaseUiIntf(baseUi) {}
+
+    Path GetConfig() override {
+        auto indices = mRegList->GetSelected();
+        if (indices.size() == 1) {
+            auto idx = indices.front();
+            const Path &name = mRegisteredExes[idx].Name;
+            const Path &config = mRegisteredExes[idx].Config;
+
+            if (config) {
+                return config.Copy();
+            }
+
+            Path baseName = PathGetBaseNameWithoutExt(name);
+            Path configPath = GetPath(ConfigsPath, baseName, ConfigsExt);
+            if (IsFileExists(configPath)) {
+                return baseName;
+            } else {
+                return ConfigsDefault;
+            }
+        } else {
+            if (indices.size() > 1) {
+                return ConfigsDefault;
+            } else {
+                return nullptr;
+            }
+        }
+    }
+
+    Control *InitialFocus() override { return mRegList; }
+
+    void ResetSelection() override {
+        mRegList->SetSelected({});
+    }
 };

@@ -4,7 +4,13 @@
 #include "LogUtils.h"
 #include <Windows.h>
 
-HANDLE GLogFile;
+HANDLE GLogFile = nullptr;
+
+struct LogCbType {
+    void (*Func)(const char *str, size_t size, char level, void *data) = nullptr;
+    void *Data = nullptr;
+};
+WeakAtomic<LogCbType> GLogCb;
 
 void LogInit(const Path &inputPath) {
     Path fallbackPath;
@@ -33,6 +39,11 @@ void Log(LogLevel level, const char *str, size_t size) {
 
         DWORD count;
         WriteFile(GLogFile, str, (DWORD)size, &count, &overlapped);
+    }
+
+    auto logCb = GLogCb.get();
+    if (logCb.Func) {
+        logCb.Func(str, size, (char)level, logCb.Data);
     }
 
     if (level == LogLevel::Error && IsDebuggerPresent()) {

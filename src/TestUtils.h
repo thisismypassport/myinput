@@ -39,7 +39,7 @@ void AssertTrue(const char *name, bool cond) {
     }
 }
 
-DEFINE_ALERT_ON_LOG(LogLevel::Error)
+DEFINE_ALERT_ON_ERROR()
 
 template <class TFunc>
 DWORD CreateThread(TFunc threadFunc) {

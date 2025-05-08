@@ -20,6 +20,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "myinput_test", "test.vcxpro
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "myinput_ui", "ui.vcxproj", "{62123A4D-259B-4CBC-A5DD-643E20FE7A71}"
 	ProjectSection(ProjectDependencies) = postProject
+		{5D07E490-7002-42C6-BB91-BC892ED3017D} = {5D07E490-7002-42C6-BB91-BC892ED3017D}
 		{62123A4D-259B-4CBC-A5CD-643E20FE7A71} = {62123A4D-259B-4CBC-A5CD-643E20FE7A71}
 	EndProjectSection
 EndProject
@@ -27,6 +28,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "myinput", "myinput.vcxproj"
 	ProjectSection(ProjectDependencies) = postProject
 		{62123A4D-259B-4CBC-A5DD-643E20FE7A71} = {62123A4D-259B-4CBC-A5DD-643E20FE7A71}
 	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "myinput_utils", "utils.vcxitems", "{A929B6A2-C441-45EC-99D7-0916ECACA54B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

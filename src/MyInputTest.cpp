@@ -7,6 +7,7 @@
 #include "Inject.h"
 #include "ComUtils.h"
 #include "TestUtils.h"
+#include "UiTest.h"
 
 #include <Windows.h>
 #include <hidusage.h>
@@ -40,6 +41,8 @@ bool gPrintTime;
 bool gPrintDeviceChange;
 bool gStressDevice;
 bool gStressDeviceCommunicate;
+bool gRemarshalWmi;
+bool gRegRawActive;
 
 WeakAtomic<HWND> gNotifyWin;
 WeakAtomic<HWND> gNotifyWinA;
@@ -88,7 +91,7 @@ class RawDeviceReader {
     vector<Input> mInputs;
 
 public:
-    RawDeviceReader(int idx, uint8_t *preparsed, const char *source) : mIdx(idx), mPreparsed((PHIDP_PREPARSED_DATA)preparsed), mSource(source) {
+    RawDeviceReader(int idx, byte *preparsed, const char *source) : mIdx(idx), mPreparsed((PHIDP_PREPARSED_DATA)preparsed), mSource(source) {
         HIDP_CAPS caps;
         AssertEquals("raw.caps", HidP_GetCaps(mPreparsed, &caps), HIDP_STATUS_SUCCESS);
 
@@ -218,7 +221,7 @@ void StressDevice(const wchar_t *path) {
     }
 }
 
-void ReadDevice(int idx, const wchar_t *path, uint8_t *preparsed, bool immediate) {
+void ReadDevice(int idx, const wchar_t *path, byte *preparsed, bool immediate) {
     if (gStressDevice) {
         StressDevice(path);
     }
@@ -300,7 +303,7 @@ void TestDevice(const char *nameA, const wchar_t *nameW, bool ours, int userIdx,
             AssertNotEquals("dev.open.sync", (intptr_t)syncFile, (intptr_t)INVALID_HANDLE_VALUE);
         }
 
-        uint8_t *desc = nullptr;
+        byte *desc = nullptr;
         if (syncFile != INVALID_HANDLE_VALUE) {
             // collection
             HID_COLLECTION_INFORMATION coll;
@@ -328,7 +331,7 @@ void TestDevice(const char *nameA, const wchar_t *nameW, bool ours, int userIdx,
                 AssertNotEquals("dev.io.desc.has", coll.DescriptorSize, 0);
             }
             if (coll.DescriptorSize) {
-                desc = new uint8_t[coll.DescriptorSize + junk];
+                desc = new byte[coll.DescriptorSize + junk];
                 DWORD descSize = ~0;
                 AssertEquals("dev.io.desc.bad", DeviceIoControl(syncFile, IOCTL_HID_GET_COLLECTION_DESCRIPTOR, nullptr, 0, desc, 1, &descSize, nullptr), FALSE);
                 AssertEquals("dev.io.desc.errno", GetLastError(), ERROR_INVALID_USER_BUFFER);
@@ -356,9 +359,103 @@ void TestDevice(const char *nameA, const wchar_t *nameW, bool ours, int userIdx,
 
 struct RawInputData {
     HANDLE device;
-    uint8_t *preparsed;
+    byte *preparsed;
     RawDeviceReader *reader;
 };
+
+using RawReadCb = function<void(RAWINPUT *)>;
+vector<RawReadCb> gActiveRawReadCbs;
+
+template <class TReadCb>
+void ProcessRawInputMsg(TReadCb readCallback, const MSG &msg, bool readBuffer) {
+    if (msg.message == WM_INPUT_DEVICE_CHANGE) {
+        AssertEquals("ri.chg.w", msg.wParam == GIDC_ARRIVAL || msg.wParam == GIDC_REMOVAL, true);
+
+        if (msg.wParam == GIDC_ARRIVAL) {
+            RID_DEVICE_INFO info;
+            UINT infosize = sizeof(info);
+            AssertEquals("ri.chg.l", GetRawInputDeviceInfoW((HANDLE)msg.lParam, RIDI_DEVICEINFO, &info, &infosize), infosize);
+
+            if (gPrintDeviceChange) {
+                printf("event : raw device add: %p\n", (HANDLE)msg.lParam);
+            }
+        } else {
+            if (gPrintDeviceChange) {
+                printf("event : raw device remove: %p\n", (HANDLE)msg.lParam);
+            }
+        }
+    }
+
+    if (msg.message == WM_INPUT) {
+        UINT size = 0;
+        AssertEquals("ri.d.size", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)), 0);
+
+        const int junk = 10;
+        byte *buffer = new byte[size + junk];
+
+        UINT badSize = 1;
+        AssertEquals("ri.d.bad", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, buffer, &badSize, sizeof(RAWINPUTHEADER)), (UINT)-1);
+        AssertEquals("ri.d.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
+        WOW64_BROKEN(AssertEquals)
+        ("ri.d.bad.size", badSize, size);
+
+        UINT readSize = size + junk;
+        AssertEquals("ri.d", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, buffer, &readSize, sizeof(RAWINPUTHEADER)), size);
+        AssertEquals("ri.d.size", readSize, size + junk);
+
+        if (!readBuffer) {
+            readCallback((RAWINPUT *)buffer);
+        }
+
+        delete[] buffer;
+
+        UINT headSize = 0;
+        AssertEquals("ri.d.head.size", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, nullptr, &headSize, sizeof(RAWINPUTHEADER)), 0);
+        AssertEquals("ri.d.head.eq", headSize, sizeof(RAWINPUTHEADER));
+
+        RAWINPUTHEADER header[2];
+        badSize = 1;
+        WOW64_BROKEN(AssertEquals)
+        ("ri.d.head.bad", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, &header, &badSize, sizeof(RAWINPUTHEADER)), (UINT)-1);
+        AssertEquals("ri.d.head.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
+        AssertEquals("ri.d.bad.size", badSize, headSize);
+
+        readSize = headSize * 2;
+        AssertEquals("ri.d", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, &header, &readSize, sizeof(RAWINPUTHEADER)), headSize);
+        WOW64_BROKEN(AssertEquals)
+        ("ri.d.size", readSize, headSize * 2);
+
+        if (readBuffer) {
+            byte xbuffer[0x4000];
+            RAWINPUT *xinput = (PRAWINPUT)xbuffer;
+            UINT xbufsize = sizeof(xbuffer);
+            UINT count = GetRawInputBuffer(xinput, &xbufsize, sizeof(RAWINPUTHEADER));
+            AssertNotEquals("ri.buf.c", count, (UINT)-1);
+
+            for (UINT i = 0; i < count; i++) {
+#ifndef _WIN64 // look at this mess windows made
+                if (gWow64) {
+                    byte *ptr = (byte *)xinput;
+                    *(UINT *)(ptr + 0xc) = *(UINT *)(ptr + 0x10);
+                    MoveMemory(ptr + 0x10, ptr + 0x18, xinput->header.dwSize - 0x18);
+                }
+#endif
+
+                readCallback(xinput);
+                xinput = NEXTRAWINPUTBLOCK(xinput);
+            }
+        }
+    }
+}
+
+void ProcessRawInputMsgs(MSG &msg) {
+    ProcessRawInputMsg([](RAWINPUT *rawinput) {
+        for (auto &readCb : gActiveRawReadCbs) {
+            readCb(rawinput);
+        }
+    },
+                       msg, false);
+}
 
 template <class TReadCb>
 void ProcessRawInputMsgs(TReadCb readCallback, bool readBuffer, bool readWait) {
@@ -373,84 +470,9 @@ void ProcessRawInputMsgs(TReadCb readCallback, bool readBuffer, bool readWait) {
             }
         }
 
-        if (msg.message == WM_INPUT_DEVICE_CHANGE) {
-            AssertEquals("ri.chg.w", msg.wParam == GIDC_ARRIVAL || msg.wParam == GIDC_REMOVAL, true);
+        ProcessRawInputMsg(readCallback, msg, readBuffer);
 
-            if (msg.wParam == GIDC_ARRIVAL) {
-                RID_DEVICE_INFO info;
-                UINT infosize = sizeof(info);
-                AssertEquals("ri.chg.l", GetRawInputDeviceInfoW((HANDLE)msg.lParam, RIDI_DEVICEINFO, &info, &infosize), infosize);
-
-                if (gPrintDeviceChange) {
-                    printf("event : raw device add: %p\n", (HANDLE)msg.lParam);
-                }
-            } else {
-                if (gPrintDeviceChange) {
-                    printf("event : raw device remove: %p\n", (HANDLE)msg.lParam);
-                }
-            }
-        }
-
-        if (msg.message == WM_INPUT) {
-            UINT size = 0;
-            AssertEquals("ri.d.size", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)), 0);
-
-            const int junk = 10;
-            uint8_t *buffer = new uint8_t[size + junk];
-
-            UINT badSize = 1;
-            AssertEquals("ri.d.bad", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, buffer, &badSize, sizeof(RAWINPUTHEADER)), (UINT)-1);
-            AssertEquals("ri.d.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
-            WOW64_BROKEN(AssertEquals)
-            ("ri.d.bad.size", badSize, size);
-
-            UINT readSize = size + junk;
-            AssertEquals("ri.d", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, buffer, &readSize, sizeof(RAWINPUTHEADER)), size);
-            AssertEquals("ri.d.size", readSize, size + junk);
-
-            if (!readBuffer) {
-                readCallback((RAWINPUT *)buffer);
-            }
-
-            delete[] buffer;
-
-            UINT headSize = 0;
-            AssertEquals("ri.d.head.size", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, nullptr, &headSize, sizeof(RAWINPUTHEADER)), 0);
-            AssertEquals("ri.d.head.eq", headSize, sizeof(RAWINPUTHEADER));
-
-            RAWINPUTHEADER header[2];
-            badSize = 1;
-            WOW64_BROKEN(AssertEquals)
-            ("ri.d.head.bad", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, &header, &badSize, sizeof(RAWINPUTHEADER)), (UINT)-1);
-            AssertEquals("ri.d.head.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
-            AssertEquals("ri.d.bad.size", badSize, headSize);
-
-            readSize = headSize * 2;
-            AssertEquals("ri.d", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, &header, &readSize, sizeof(RAWINPUTHEADER)), headSize);
-            WOW64_BROKEN(AssertEquals)
-            ("ri.d.size", readSize, headSize * 2);
-
-            if (readBuffer) {
-                uint8_t xbuffer[0x4000];
-                RAWINPUT *xinput = (PRAWINPUT)xbuffer;
-                UINT xbufsize = sizeof(xbuffer);
-                UINT count = GetRawInputBuffer(xinput, &xbufsize, sizeof(RAWINPUTHEADER));
-                AssertNotEquals("ri.buf.c", count, (UINT)-1);
-
-                for (UINT i = 0; i < count; i++) {
-#ifndef _WIN64 // look at this mess windows made
-                    if (gWow64) {
-                        byte *ptr = (byte *)xinput;
-                        *(UINT *)(ptr + 0xc) = *(UINT *)(ptr + 0x10);
-                        MoveMemory(ptr + 0x10, ptr + 0x18, xinput->header.dwSize - 0x18);
-                    }
-#endif
-
-                    readCallback(xinput);
-                    xinput = NEXTRAWINPUTBLOCK(xinput);
-                }
-            }
-        } else if (readBuffer) {
+        if (readBuffer && msg.message != WM_INPUT) {
             GetMessageW(&msg, nullptr, 0, 0);
         }
 
@@ -475,18 +497,17 @@ void ReadRawInput(RawInputData *data, int count, bool readBuffer, bool readWait,
                         break;
                     }
                 }
-            } else {
-                printf("non-hid\n");
             }
         };
 
-        HWND window = CreateWindowW(L"STATIC", L"MSG", 0, 0, 0, 0, 0, 0, NULL, NULL, NULL);
+        HWND window = gRegRawActive ? nullptr : CreateWindowW(L"STATIC", L"MSG", 0, 0, 0, 0, 0, 0, NULL, NULL, NULL);
+        int flags = gRegRawActive ? 0 : RIDEV_INPUTSINK;
 
         RAWINPUTDEVICE rid;
         rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
         rid.usUsage = readPage ? 0 : HID_USAGE_GENERIC_GAMEPAD;
         rid.hwndTarget = window;
-        rid.dwFlags = RIDEV_DEVNOTIFY | RIDEV_INPUTSINK | (readPage ? RIDEV_PAGEONLY : 0);
+        rid.dwFlags = RIDEV_DEVNOTIFY | flags | (readPage ? RIDEV_PAGEONLY : 0);
         AssertEquals("ri.reg", RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE)), TRUE);
 
         RAWINPUTDEVICE irid[4];
@@ -498,7 +519,11 @@ void ReadRawInput(RawInputData *data, int count, bool readBuffer, bool readWait,
         AssertEquals("ri.greg.w", (intptr_t)irid[0].hwndTarget, (intptr_t)rid.hwndTarget);
         AssertEquals("ri.greg.f", irid[0].dwFlags & 0xfff, rid.dwFlags & 0xfff); // bug - some flags are lost?
 
-        ProcessRawInputMsgs(readCb, readBuffer, readWait);
+        if (gRegRawActive) {
+            gActiveRawReadCbs.push_back(readCb);
+        } else {
+            ProcessRawInputMsgs(readCb, readBuffer, readWait);
+        }
     });
 }
 
@@ -635,9 +660,9 @@ void TestRawInput(int numOurs, bool read, bool readBuffer, bool readWait, bool r
         if (ours) {
             AssertNotEquals("ri.pp.count.has", ppCount, 0);
         }
-        uint8_t *pp = nullptr;
+        byte *pp = nullptr;
         if (ppCount) {
-            pp = new uint8_t[ppCount + junk];
+            pp = new byte[ppCount + junk];
             UINT ppBadSize = ppCount - 1;
             AssertEquals("ri.pp.bad", GetRawInputDeviceInfoW(device, RIDI_PREPARSEDDATA, pp, &ppBadSize), (UINT)-1);
             AssertEquals("ri.pp.bad.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
@@ -733,7 +758,7 @@ void TestSetupDi(int numOurs, bool readDevice, bool readDeviceImmediate) {
     }
 }
 
-void TestCfgMgrPrintProp(int depth, DEVPROPKEY *key, DEVPROPTYPE type, uint8_t *value, ULONG size) {
+void TestCfgMgrPrintProp(int depth, DEVPROPKEY *key, DEVPROPTYPE type, byte *value, ULONG size) {
     GUID guid = key->fmtid;
     printf("%*s{%08lX-%04hX-%04hX-%02hhX%02hhX-%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX}:%lX = ", depth * 2, "",
            guid.Data1, guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7],
@@ -849,11 +874,14 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
         ULONG depth = 0;
         AssertEquals("cm.depth", CMEX(CM_Get_Depth, &depth, dev, 0), CR_SUCCESS);
 
-        DEVINST mydev;
-        AssertEquals("cm.did.locate", CMEXAW(CM_Locate_DevNode, A, &mydev, did, 0), CR_SUCCESS);
-        AssertEquals("cm.did.locate.me", mydev, dev);
-        AssertEquals("cm.did.locate.nv", CMEXAW(CM_Locate_DevNode, A, &mydev, did, CM_LOCATE_DEVNODE_NOVALIDATION), CR_SUCCESS);
-        AssertEquals("cm.did.locate.nv.me", mydev, dev);
+        if (!tstrnieq(did, "SWD\\PRINTENUM\\", 14)) // invalid unrelated devices
+        {
+            DEVINST mydev;
+            AssertEquals("cm.did.locate", CMEXAW(CM_Locate_DevNode, A, &mydev, did, 0), CR_SUCCESS);
+            AssertEquals("cm.did.locate.me", mydev, dev);
+            AssertEquals("cm.did.locate.nv", CMEXAW(CM_Locate_DevNode, A, &mydev, did, CM_LOCATE_DEVNODE_NOVALIDATION), CR_SUCCESS);
+            AssertEquals("cm.did.locate.nv.me", mydev, dev);
+        }
 
         ULONG status, problem;
         AssertEquals("cm.status", CMEX(CM_Get_DevNode_Status, &status, &problem, dev, 0), CR_SUCCESS);
@@ -904,7 +932,7 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
                         ULONG dpsize = 0;
                         AssertEquals("cm.prop.size", CMEXAW(CM_Get_DevNode_Property, W, dev, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
 
-                        uint8_t *dprop = new uint8_t[dpsize];
+                        byte *dprop = new byte[dpsize];
                         dpbad = dpsize - 1;
                         AssertEquals("cm.prop.bad", CMEXAW(CM_Get_DevNode_Property, W, dev, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
                         AssertEquals("cm.prop.bad.size", dpbad, dpsize);
@@ -932,7 +960,7 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
 
                     AssertEquals("cm.rprop.size", ret, CR_BUFFER_SMALL);
 
-                    uint8_t *prop = new uint8_t[plen];
+                    byte *prop = new byte[plen];
                     ULONG pbad = plen - 1;
                     ULONG regType;
                     AssertEquals("cm.rprop.bad", CMEXAW(CM_Get_DevNode_Registry_Property, W, dev, p, &regType, prop, &pbad, 0), CR_BUFFER_SMALL);
@@ -1030,7 +1058,7 @@ void TestCfgMgrNode(bool printDevices, bool printAll, DEVINST dev, GUID *classes
                             ULONG dpsize = 0;
                             AssertEquals("cm.iprop.size", CMEXAW(CM_Get_Device_Interface_Property, W, diidpw, key, &type, nullptr, &dpsize, 0), CR_BUFFER_SMALL);
 
-                            uint8_t *dprop = new uint8_t[dpsize];
+                            byte *dprop = new byte[dpsize];
                             dpbad = dpsize - 1;
                             AssertEquals("cm.iprop.bad", CMEXAW(CM_Get_Device_Interface_Property, W, diidpw, key, &type, dprop, &dpbad, 0), CR_BUFFER_SMALL);
                             AssertEquals("cm.iprop.bad.size", dpbad, dpsize);
@@ -1347,6 +1375,9 @@ void VisualizeXInput() {
 
         MSG msg;
         while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (gRegRawActive) {
+                ProcessRawInputMsgs(msg);
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -2032,6 +2063,11 @@ DWORD ShowTestWindow(int count, bool resistHideCursor) {
                 }
 
                 TestWindowMsg(msg.message, msg.wParam, msg.lParam, GetMessageTime(), GetCIM(), GetMessageExtraInfo(), "msgloop");
+
+                if (gRegRawActive) {
+                    ProcessRawInputMsgs(msg);
+                }
+
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -2046,8 +2082,7 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
     }
 
     CreateThread([=] {
-        LONG prevX = 0, prevY = 0;
-        auto readCb = [&prevX, &prevY](RAWINPUT *ri) {
+        auto readCb = [prevX = 0, prevY = 0](RAWINPUT *ri) mutable {
             bool injected = ri->header.hDevice == nullptr;
 
             if (ri->header.dwType == RIM_TYPEKEYBOARD) {
@@ -2116,9 +2151,10 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
             }
         };
 
-        HWND window = CreateWindowW(L"STATIC", L"MSG", 0, 0, 0, 0, 0, 0, NULL, NULL, NULL);
+        HWND window = gRegRawActive ? nullptr : CreateWindowW(L"STATIC", L"MSG", 0, 0, 0, 0, 0, 0, NULL, NULL, NULL);
 
         int flags = (noLegacy ? RIDEV_NOLEGACY : 0);
+        flags |= (gRegRawActive ? 0 : RIDEV_INPUTSINK);
 
         RAWINPUTDEVICE rid[2] = {};
         int ridI = 0, kI = -1, mI = -1;
@@ -2127,7 +2163,7 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
             rid[ridI].usUsagePage = HID_USAGE_PAGE_GENERIC;
             rid[ridI].usUsage = HID_USAGE_GENERIC_KEYBOARD;
             rid[ridI].hwndTarget = window;
-            rid[ridI].dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY | flags | (noHotkey ? RIDEV_NOHOTKEYS : 0) | (hotkey ? RIDEV_APPKEYS : 0);
+            rid[ridI].dwFlags = RIDEV_DEVNOTIFY | flags | (noHotkey ? RIDEV_NOHOTKEYS : 0) | (hotkey ? RIDEV_APPKEYS : 0);
             ridI++;
         }
         if (mouse) {
@@ -2135,7 +2171,7 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
             rid[ridI].usUsagePage = HID_USAGE_PAGE_GENERIC;
             rid[ridI].usUsage = HID_USAGE_GENERIC_MOUSE;
             rid[ridI].hwndTarget = window;
-            rid[ridI].dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY | flags | (captureMouse ? RIDEV_CAPTUREMOUSE : 0);
+            rid[ridI].dwFlags = RIDEV_DEVNOTIFY | flags | (captureMouse ? RIDEV_CAPTUREMOUSE : 0);
             ridI++;
         }
 
@@ -2167,7 +2203,11 @@ void RegisterRawInput(bool keyboard, bool mouse, bool noLegacy, bool noHotkey, b
         }
         AssertEquals("ri.greg.count", found, ridI);
 
-        ProcessRawInputMsgs(readCb, readBuffer, readWait);
+        if (gRegRawActive) {
+            gActiveRawReadCbs.push_back(readCb);
+        } else {
+            ProcessRawInputMsgs(readCb, readBuffer, readWait);
+        }
     });
 }
 
@@ -2633,6 +2673,10 @@ public:
 
 template <class TIntf>
 ComRef<TIntf> RemarshalIntf(TIntf *intf, bool check = true) {
+    if (!gRemarshalWmi) {
+        return intf;
+    }
+
     if (check) {
         ComRef<IMarshal> marshal;
         AssertEquals("co.marshal.qry", intf->QueryInterface(&marshal), S_OK);
@@ -2645,7 +2689,6 @@ ComRef<TIntf> RemarshalIntf(TIntf *intf, bool check = true) {
     ComRef<TIntf> outIntf;
     AssertEquals("co.unmarshal.xth", CoGetInterfaceAndReleaseStream(stream, __uuidof(TIntf), (LPVOID *)&outIntf), S_OK);
     return outIntf;
-    return intf;
 }
 
 void ReadWmi(bool print, bool printAll) {
@@ -2899,6 +2942,20 @@ void ReadWmi(bool print, bool printAll) {
     AssertEquals("wb.aquery", svc->ExecQueryAsync(Bstr(L"WQL"), Bstr(L"select * from win32_pnpentity WHERE __path is not null and pnpclass = 'hidclass'"), 0, nullptr, sink), S_OK);
 }
 
+void *gTestKey = nullptr;
+void *gTestVar = nullptr;
+
+void OnTestKey(bool down, double strength, unsigned long time, void *data) {
+    printf("test key %s (%f, %d)\n", down ? "DOWN" : "UP", strength, time);
+
+    // hook the output back into the input, just for testing.
+    MyInputHook_UpdateCustomKey(gTestKey, down, strength, time);
+}
+
+void OnTestVar(const char *value, void *data) {
+    printf("test var = %s\n", value);
+}
+
 class Args {
     struct Arg {
         char mType;
@@ -2924,7 +2981,7 @@ public:
                     break;
 
                 case 'i':
-                    if (i >= argc || !StrToValue(string(argv[i++]), (int *)iter->second.mDest)) {
+                    if (i >= argc || !StrToValue(argv[i++], (int *)iter->second.mDest)) {
                         Alert(L"Invalid int for %hs", opt);
                     }
                     break;
@@ -2965,6 +3022,7 @@ int main(int argc, char **argv) {
     Args args;
     BOOL_ARG(loadHook, "hook");
     STR_ARG(hookConfig, "hook-config");
+    BOOL_ARG(hookTest, "hook-test");
     BOOL_ARG(testWindow, "test-win");
     INT_ARG(testWindowCount, "test-win-count", 1);
     BOOL_ARG(visualizeWindow, "vis-win");
@@ -2989,6 +3047,7 @@ int main(int argc, char **argv) {
     INT_ARG(xinputVersion, "x-version", 4);
 
     BOOL_ARG(registerRaw, "reg-raw");
+    G_BOOL_ARG(gRegRawActive, "reg-raw-active");
     BOOL_ARG(registerRawNoKeyboard, "reg-raw-nokeyboard");
     BOOL_ARG(registerRawNoMouse, "reg-raw-nomouse");
     BOOL_ARG(registerRawNoLegacy, "reg-raw-nolegacy");
@@ -3004,6 +3063,7 @@ int main(int argc, char **argv) {
     BOOL_ARG(registerHotkey, "reg-hotkey");
 
     BOOL_ARG(readWmi, "read-wmi");
+    G_BOOL_ARG(gRemarshalWmi, "remarshal-wmi");
     BOOL_ARG(resistHideCursor, "resist-hide-cursor");
     BOOL_ARG(sendInputs, "send-inputs");
     G_BOOL_ARG(gStressDevice, "stress-device");
@@ -3028,11 +3088,18 @@ int main(int argc, char **argv) {
     STR_ARG(processArgs, "process-args");
     BOOL_ARG(isChild, "child");
     BOOL_ARG(printProcessArgs, "print-process-args");
+    BOOL_ARG(uiTest, "ui-test");
 
     IsWow64Process(GetCurrentProcess(), &gWow64);
 
     if (!args.Process(argc, argv)) {
         testWindow = readDevice = gPrintGamepad = visualizeWindow = true;
+    }
+
+    if (uiTest) {
+        FreeConsole();
+        DoUiTest(); // instead of everything else
+        return 0;
     }
 
     if (printProcessArgs) {
@@ -3054,6 +3121,15 @@ int main(int argc, char **argv) {
         numOurs = MyInputHook_InternalForTest();
     } else if (loadHook) {
         Alert(L"Hook not loaded in child!");
+    }
+
+    if (hookTest) {
+        MyInputHook_PostInDllThread([](void *) {
+            gTestKey = MyInputHook_RegisterCustomKey("Test", OnTestKey, nullptr);
+            gTestVar = MyInputHook_RegisterCustomVar("Test", OnTestVar, nullptr);
+            MyInputHook_LoadConfig(nullptr);
+        },
+                                    nullptr);
     }
 
     CreateNotifyWindow();

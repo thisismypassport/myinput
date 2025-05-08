@@ -201,8 +201,8 @@ struct DeviceIntf : public DeviceNode {
     bool HasHid() { return Types & DEVICE_NODE_TYPE_HID; }
     bool HasXUsb() { return Types & DEVICE_NODE_TYPE_XUSB; }
 
-    virtual int CopyInputTo(uint8_t *dest) = 0;
-    int CopyInputTo(uint8_t *dest, int size) {
+    virtual int CopyInputTo(byte *dest) = 0;
+    int CopyInputTo(byte *dest, int size) {
         if (size < Preparsed->Input.Bytes) {
             LOG << "Requested input report with not enough bytes" << END;
             return -1;
@@ -210,11 +210,11 @@ struct DeviceIntf : public DeviceNode {
         return CopyInputTo(dest);
     }
 
-    virtual bool ProcessOutput(const uint8_t *src, int size, int id) {
+    virtual bool ProcessOutput(const byte *src, int size, int id) {
         LOG << "Received invalid output report: " << id << END;
         return false;
     }
-    bool ProcessOutput(const uint8_t *src, int size) {
+    bool ProcessOutput(const byte *src, int size) {
         int id = size ? src[0] : -1;
         if (G.ApiDebug) {
             LOG << "Received output report: " << id << END;
@@ -222,11 +222,11 @@ struct DeviceIntf : public DeviceNode {
         return ProcessOutput(src, size, id);
     }
 
-    virtual int ProcessFeature(const uint8_t *src, uint8_t *dest, int size, int id) {
+    virtual int ProcessFeature(const byte *src, byte *dest, int size, int id) {
         LOG << "Requested invalid feature report: " << id << END;
         return -1;
     }
-    int ProcessFeature(const uint8_t *src, uint8_t *dest, int size) {
+    int ProcessFeature(const byte *src, byte *dest, int size) {
         int id = size ? src[0] : -1;
         if (G.ApiDebug) {
             LOG << (dest ? "Requested " : "Received ") << " feature report: " << id << END;

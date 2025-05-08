@@ -12,8 +12,21 @@ static void ImplToggleDisable();
 static void ImplToggleAlways();
 static void ImplToggleConnected(void *userId);
 
+static void ImplHandleCustomChange(int index, InputValue &v, slot_t slot) {
+    if ((size_t)index < G.CustomKeys.size()) {
+        auto custKey = G.CustomKeys[index].get();
+        ImplProcessStrengthOutput(custKey->Key.Output, custKey->Strength, v.Down, v.Strength, slot);
+
+        if (custKey->Callback) {
+            InputValue newV(custKey->Key.Output.Get(), custKey->Strength.Get(), v.Time);
+            custKey->Callback(newV);
+        }
+    }
+}
+
 static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *changes) {
-    int key = mapping.DestKey;
+    key_t key = mapping.DestKey;
+    slot_t slot = mapping.DestSlot;
     if (mapping.DestType.OfUser) {
         int userIndex = mapping.DestUser;
         if (userIndex < 0) {
@@ -32,92 +45,84 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
         bool changed = false;
         switch (key) {
         case MY_VK_PAD_A:
-            changed = ImplHandleButtonChange(state.A, v.Down);
+            changed = ImplHandleButtonChange(state.A, v.Down, slot);
             break;
         case MY_VK_PAD_B:
-            changed = ImplHandleButtonChange(state.B, v.Down);
+            changed = ImplHandleButtonChange(state.B, v.Down, slot);
             break;
         case MY_VK_PAD_X:
-            changed = ImplHandleButtonChange(state.X, v.Down);
+            changed = ImplHandleButtonChange(state.X, v.Down, slot);
             break;
         case MY_VK_PAD_Y:
-            changed = ImplHandleButtonChange(state.Y, v.Down);
+            changed = ImplHandleButtonChange(state.Y, v.Down, slot);
             break;
         case MY_VK_PAD_START:
-            changed = ImplHandleButtonChange(state.Start, v.Down);
+            changed = ImplHandleButtonChange(state.Start, v.Down, slot);
             break;
         case MY_VK_PAD_BACK:
-            changed = ImplHandleButtonChange(state.Back, v.Down);
+            changed = ImplHandleButtonChange(state.Back, v.Down, slot);
             break;
         case MY_VK_PAD_DPAD_LEFT:
-            changed = ImplHandleButtonChange(state.DL, v.Down, &state.DR);
+            changed = ImplHandleButtonChange(state.DL, v.Down, slot, &state.DR);
             break;
         case MY_VK_PAD_DPAD_RIGHT:
-            changed = ImplHandleButtonChange(state.DR, v.Down, &state.DL);
+            changed = ImplHandleButtonChange(state.DR, v.Down, slot, &state.DL);
             break;
         case MY_VK_PAD_DPAD_UP:
-            changed = ImplHandleButtonChange(state.DU, v.Down, &state.DD);
+            changed = ImplHandleButtonChange(state.DU, v.Down, slot, &state.DD);
             break;
         case MY_VK_PAD_DPAD_DOWN:
-            changed = ImplHandleButtonChange(state.DD, v.Down, &state.DU);
+            changed = ImplHandleButtonChange(state.DD, v.Down, slot, &state.DU);
             break;
         case MY_VK_PAD_LSHOULDER:
-            changed = ImplHandleButtonChange(state.LB, v.Down);
+            changed = ImplHandleButtonChange(state.LB, v.Down, slot);
             break;
         case MY_VK_PAD_RSHOULDER:
-            changed = ImplHandleButtonChange(state.RB, v.Down);
+            changed = ImplHandleButtonChange(state.RB, v.Down, slot);
             break;
         case MY_VK_PAD_LTHUMB_PRESS:
-            changed = ImplHandleButtonChange(state.L, v.Down);
+            changed = ImplHandleButtonChange(state.L, v.Down, slot);
             break;
         case MY_VK_PAD_RTHUMB_PRESS:
-            changed = ImplHandleButtonChange(state.R, v.Down);
+            changed = ImplHandleButtonChange(state.R, v.Down, slot);
             break;
         case MY_VK_PAD_GUIDE:
-            changed = ImplHandleButtonChange(state.Guide, v.Down);
+            changed = ImplHandleButtonChange(state.Guide, v.Down, slot);
             break;
         case MY_VK_PAD_EXTRA:
-            changed = ImplHandleButtonChange(state.Extra, v.Down);
+            changed = ImplHandleButtonChange(state.Extra, v.Down, slot);
             break;
 
         case MY_VK_PAD_LTRIGGER:
-            changed = ImplHandleTriggerChange(state.LT, v.Down, v.Strength);
+            changed = ImplHandleTriggerChange(state.LT, v.Down, v.Strength, slot);
             break;
         case MY_VK_PAD_RTRIGGER:
-            changed = ImplHandleTriggerChange(state.RT, v.Down, v.Strength);
+            changed = ImplHandleTriggerChange(state.RT, v.Down, v.Strength, slot);
             break;
 
         case MY_VK_PAD_LTHUMB_UP:
-            changed = ImplHandleAxisChange(state.LA.U, state.LA.D, state.LA.Y, state.LA.X, state.LA,
-                                           1.0, false, v.Down, v.Strength, mapping.Add);
+            changed = ImplHandleAxisChange(state.LA.U, state.LA.Y, state.LA.X, v.Down, v.Strength, slot, mapping.Add);
             break;
         case MY_VK_PAD_LTHUMB_DOWN:
-            changed = ImplHandleAxisChange(state.LA.D, state.LA.U, state.LA.Y, state.LA.X, state.LA,
-                                           -1.0, false, v.Down, v.Strength, mapping.Add);
+            changed = ImplHandleAxisChange(state.LA.D, state.LA.Y, state.LA.X, v.Down, v.Strength, slot, mapping.Add);
             break;
         case MY_VK_PAD_LTHUMB_RIGHT:
-            changed = ImplHandleAxisChange(state.LA.R, state.LA.L, state.LA.X, state.LA.Y, state.LA,
-                                           1.0, false, v.Down, v.Strength, mapping.Add);
+            changed = ImplHandleAxisChange(state.LA.R, state.LA.X, state.LA.Y, v.Down, v.Strength, slot, mapping.Add);
             break;
         case MY_VK_PAD_LTHUMB_LEFT:
-            changed = ImplHandleAxisChange(state.LA.L, state.LA.R, state.LA.X, state.LA.Y, state.LA,
-                                           -1.0, false, v.Down, v.Strength, mapping.Add);
+            changed = ImplHandleAxisChange(state.LA.L, state.LA.X, state.LA.Y, v.Down, v.Strength, slot, mapping.Add);
             break;
         case MY_VK_PAD_RTHUMB_UP:
-            changed = ImplHandleAxisChange(state.RA.U, state.RA.D, state.RA.Y, state.RA.X, state.RA,
-                                           1.0, true, v.Down, v.Strength, mapping.Add);
+            changed = ImplHandleAxisChange(state.RA.U, state.RA.Y, state.RA.X, v.Down, v.Strength, slot, mapping.Add);
             break;
         case MY_VK_PAD_RTHUMB_DOWN:
-            changed = ImplHandleAxisChange(state.RA.D, state.RA.U, state.RA.Y, state.RA.X, state.RA,
-                                           -1.0, true, v.Down, v.Strength, mapping.Add);
+            changed = ImplHandleAxisChange(state.RA.D, state.RA.Y, state.RA.X, v.Down, v.Strength, slot, mapping.Add);
             break;
         case MY_VK_PAD_RTHUMB_RIGHT:
-            changed = ImplHandleAxisChange(state.RA.R, state.RA.L, state.RA.X, state.RA.Y, state.RA,
-                                           1.0, true, v.Down, v.Strength, mapping.Add);
+            changed = ImplHandleAxisChange(state.RA.R, state.RA.X, state.RA.Y, v.Down, v.Strength, slot, mapping.Add);
             break;
         case MY_VK_PAD_RTHUMB_LEFT:
-            changed = ImplHandleAxisChange(state.RA.L, state.RA.R, state.RA.X, state.RA.Y, state.RA,
-                                           -1.0, true, v.Down, v.Strength, mapping.Add);
+            changed = ImplHandleAxisChange(state.RA.L, state.RA.X, state.RA.Y, v.Down, v.Strength, slot, mapping.Add);
             break;
 
         case MY_VK_PAD_MOTION_UP:
@@ -164,75 +169,94 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
             break;
 
         case MY_VK_PAD_LTHUMB_HORZ_MODIFIER:
+            changed = ImplHandleAxisModifierChange(state.LA.X, state.LA.Y, v.Down, v.Strength, slot, changes);
+            break;
         case MY_VK_PAD_LTHUMB_VERT_MODIFIER:
-        case MY_VK_PAD_LTHUMB_MODIFIER:
-            if (key != MY_VK_PAD_LTHUMB_VERT_MODIFIER) {
-                changed = ImplHandleAxisModifierChange(state.LA.X, state.LA.Y, state.LA, false, v.Down, v.Strength, changes);
-            }
-            if (key != MY_VK_PAD_LTHUMB_HORZ_MODIFIER) {
-                changed = ImplHandleAxisModifierChange(state.LA.Y, state.LA.X, state.LA, false, v.Down, v.Strength, changes);
-            }
+            changed = ImplHandleAxisModifierChange(state.LA.Y, state.LA.X, v.Down, v.Strength, slot, changes);
             break;
         case MY_VK_PAD_RTHUMB_HORZ_MODIFIER:
-        case MY_VK_PAD_RTHUMB_VERT_MODIFIER:
-        case MY_VK_PAD_RTHUMB_MODIFIER:
-            if (key != MY_VK_PAD_RTHUMB_VERT_MODIFIER) {
-                changed = ImplHandleAxisModifierChange(state.RA.X, state.RA.Y, state.RA, true, v.Down, v.Strength, changes);
-            }
-            if (key != MY_VK_PAD_RTHUMB_HORZ_MODIFIER) {
-                changed = ImplHandleAxisModifierChange(state.RA.Y, state.RA.X, state.RA, true, v.Down, v.Strength, changes);
-            }
+            changed = ImplHandleAxisModifierChange(state.RA.X, state.RA.Y, v.Down, v.Strength, slot, changes);
             break;
-        case MY_VK_PAD_TRIGGER_MODIFIER:
+        case MY_VK_PAD_RTHUMB_VERT_MODIFIER:
+            changed = ImplHandleAxisModifierChange(state.RA.Y, state.RA.X, v.Down, v.Strength, slot, changes);
+            break;
         case MY_VK_PAD_LTRIGGER_MODIFIER:
+            changed = ImplHandleTriggerModifierChange(state.LT, v.Down, v.Strength, slot, changes);
+            break;
         case MY_VK_PAD_RTRIGGER_MODIFIER:
-            if (key != MY_VK_PAD_RTRIGGER_MODIFIER) {
-                changed = ImplHandleTriggerModifierChange(state.LT, v.Down, v.Strength, changes);
-            }
-            if (key != MY_VK_PAD_LTRIGGER_MODIFIER) {
-                changed = ImplHandleTriggerModifierChange(state.RT, v.Down, v.Strength, changes);
-            }
+            changed = ImplHandleTriggerModifierChange(state.RT, v.Down, v.Strength, slot, changes);
             break;
 
         case MY_VK_PAD_LTHUMB_UP_ROTATOR:
-            changed = ImplHandleAxisRotatorChange(state.LA.U, state.LA.Y, state.LA.X, state.LA,
-                                                  false, false, true, true,
-                                                  false, mapping, v.Down, v.Strength, changes);
+            changed = ImplHandleAxisRotatorChange(state.LA.Y, state.LA.X, state.LA, mapping, v.Down, v.Strength, changes,
+                                                  false, false, false, false, true, true, true, true, 0, 1);
             break;
         case MY_VK_PAD_LTHUMB_DOWN_ROTATOR:
-            changed = ImplHandleAxisRotatorChange(state.LA.D, state.LA.Y, state.LA.X, state.LA,
-                                                  true, true, false, false,
-                                                  false, mapping, v.Down, v.Strength, changes);
+            changed = ImplHandleAxisRotatorChange(state.LA.Y, state.LA.X, state.LA, mapping, v.Down, v.Strength, changes,
+                                                  true, true, true, true, false, false, false, false, 0, -1);
             break;
         case MY_VK_PAD_LTHUMB_RIGHT_ROTATOR:
-            changed = ImplHandleAxisRotatorChange(state.LA.R, state.LA.X, state.LA.Y, state.LA,
-                                                  true, false, false, true,
-                                                  false, mapping, v.Down, v.Strength, changes);
+            changed = ImplHandleAxisRotatorChange(state.LA.X, state.LA.Y, state.LA, mapping, v.Down, v.Strength, changes,
+                                                  true, true, false, false, false, false, true, true, 1, 0);
             break;
         case MY_VK_PAD_LTHUMB_LEFT_ROTATOR:
-            changed = ImplHandleAxisRotatorChange(state.LA.L, state.LA.X, state.LA.Y, state.LA,
-                                                  false, true, true, false,
-                                                  false, mapping, v.Down, v.Strength, changes);
+            changed = ImplHandleAxisRotatorChange(state.LA.X, state.LA.Y, state.LA, mapping, v.Down, v.Strength, changes,
+                                                  false, false, true, true, true, true, false, false, -1, 0);
+            break;
+        case MY_VK_PAD_LTHUMB_UP_LEFT_ROTATOR:
+            changed = ImplHandleAxisRotatorChange(state.LA.Y, state.LA.X, state.LA, mapping, v.Down, v.Strength, changes,
+                                                  false, false, false, true, true, true, true, false, -1, 1);
+            break;
+        case MY_VK_PAD_LTHUMB_DOWN_LEFT_ROTATOR:
+            changed = ImplHandleAxisRotatorChange(state.LA.Y, state.LA.X, state.LA, mapping, v.Down, v.Strength, changes,
+                                                  false, true, true, true, true, false, false, false, -1, -1);
+            break;
+        case MY_VK_PAD_LTHUMB_UP_RIGHT_ROTATOR:
+            changed = ImplHandleAxisRotatorChange(state.LA.X, state.LA.Y, state.LA, mapping, v.Down, v.Strength, changes,
+                                                  true, false, false, false, false, true, true, true, 1, 1);
+            break;
+        case MY_VK_PAD_LTHUMB_DOWN_RIGHT_ROTATOR:
+            changed = ImplHandleAxisRotatorChange(state.LA.X, state.LA.Y, state.LA, mapping, v.Down, v.Strength, changes,
+                                                  true, true, true, false, false, false, false, true, 1, -1);
             break;
         case MY_VK_PAD_RTHUMB_UP_ROTATOR:
-            changed = ImplHandleAxisRotatorChange(state.RA.U, state.RA.Y, state.RA.X, state.RA,
-                                                  false, false, true, true,
-                                                  true, mapping, v.Down, v.Strength, changes);
+            changed = ImplHandleAxisRotatorChange(state.RA.Y, state.RA.X, state.RA, mapping, v.Down, v.Strength, changes,
+                                                  false, false, false, false, true, true, true, true, 0, 1);
             break;
         case MY_VK_PAD_RTHUMB_DOWN_ROTATOR:
-            changed = ImplHandleAxisRotatorChange(state.RA.D, state.RA.Y, state.RA.X, state.RA,
-                                                  true, true, false, false,
-                                                  true, mapping, v.Down, v.Strength, changes);
+            changed = ImplHandleAxisRotatorChange(state.RA.Y, state.RA.X, state.RA, mapping, v.Down, v.Strength, changes,
+                                                  true, true, true, true, false, false, false, false, 0, -1);
             break;
         case MY_VK_PAD_RTHUMB_RIGHT_ROTATOR:
-            changed = ImplHandleAxisRotatorChange(state.RA.R, state.RA.X, state.RA.Y, state.RA,
-                                                  true, false, false, true,
-                                                  true, mapping, v.Down, v.Strength, changes);
+            changed = ImplHandleAxisRotatorChange(state.RA.X, state.RA.Y, state.RA, mapping, v.Down, v.Strength, changes,
+                                                  true, true, false, false, false, false, true, true, 1, 0);
             break;
         case MY_VK_PAD_RTHUMB_LEFT_ROTATOR:
-            changed = ImplHandleAxisRotatorChange(state.RA.L, state.RA.X, state.RA.Y, state.RA,
-                                                  false, true, true, false,
-                                                  true, mapping, v.Down, v.Strength, changes);
+            changed = ImplHandleAxisRotatorChange(state.RA.X, state.RA.Y, state.RA, mapping, v.Down, v.Strength, changes,
+                                                  false, false, true, true, true, true, false, false, -1, 0);
+            break;
+        case MY_VK_PAD_RTHUMB_UP_LEFT_ROTATOR:
+            changed = ImplHandleAxisRotatorChange(state.RA.Y, state.RA.X, state.RA, mapping, v.Down, v.Strength, changes,
+                                                  false, false, false, true, true, true, true, false, -1, 1);
+            break;
+        case MY_VK_PAD_RTHUMB_DOWN_LEFT_ROTATOR:
+            changed = ImplHandleAxisRotatorChange(state.RA.Y, state.RA.X, state.RA, mapping, v.Down, v.Strength, changes,
+                                                  false, true, true, true, true, false, false, false, -1, -1);
+            break;
+        case MY_VK_PAD_RTHUMB_UP_RIGHT_ROTATOR:
+            changed = ImplHandleAxisRotatorChange(state.RA.X, state.RA.Y, state.RA, mapping, v.Down, v.Strength, changes,
+                                                  true, false, false, false, false, true, true, true, 1, 1);
+            break;
+        case MY_VK_PAD_RTHUMB_DOWN_RIGHT_ROTATOR:
+            changed = ImplHandleAxisRotatorChange(state.RA.X, state.RA.Y, state.RA, mapping, v.Down, v.Strength, changes,
+                                                  true, true, true, false, false, false, false, true, 1, -1);
+            break;
+
+        case MY_VK_PAD_LTHUMB_ROTATOR_MODIFIER:
+            changed = ImplHandleAxisRotatorModifierChange(state.LA, v.Down, v.Strength, slot, changes);
+            break;
+        case MY_VK_PAD_RTHUMB_ROTATOR_MODIFIER:
+            changed = ImplHandleAxisRotatorModifierChange(state.RA, v.Down, v.Strength, slot, changes);
             break;
 
         case MY_VK_SET_ACTIVE_USER:
@@ -298,15 +322,6 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
             }
             break;
 
-        case MY_VK_CUSTOM:
-            if ((size_t)mapping.DestUser < G.CustomKeys.size()) {
-                auto custKey = G.CustomKeys[mapping.DestUser].get();
-                if (custKey->Callback) {
-                    custKey->Callback(v);
-                }
-            }
-            break;
-
         case MY_VK_NONE:
             break;
 
@@ -338,7 +353,9 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
 
         default:
             if (key > 0 && key < MY_VK_LAST_REAL) {
-                ImplGenerateKey(key, v.Down, v.Time);
+                ImplHandleKeyChange(key, v.Down, v.Time, slot);
+            } else if (key >= MY_VK_CUSTOM_START) {
+                ImplHandleCustomChange(key - MY_VK_CUSTOM_START, v, slot);
             } else {
                 Fatal("Invalid input action?!");
             }
@@ -472,6 +489,13 @@ static bool ImplCanProcess(ImplMapping *mapping, bool down, bool oldDown, bool c
 }
 
 static bool ImplPreProcess(ImplMapping *mapping, InputValue &v, bool &oldDown, bool reset) {
+    /*if (mapping->Release) - could add, but would probably want to activate immediately?
+    {
+        oldDown = !oldDown;
+        v.Down = !v.Down;
+        v.Strength = v.Down ? mapping->Strength : 0;
+    }*/
+
     if (mapping->DestType.Relative && !v.Down) {
         return false;
     }
@@ -565,7 +589,7 @@ static bool ImplProcessMapping(ImplMapping *mapping, const InputValue &v, Change
 
 static void ImplProcessReset(ImplReset *reset, DWORD time, ChangedMask *changes) {
     ImplMapping *mapping = reset->Mapping;
-    if ((mapping->PassedCond || mapping->SrcType.Relative) && !ImplCheckCondsAnd(mapping->Conds)) {
+    if ((mapping->PassedCond || mapping->Add || mapping->SrcType.Relative) && !ImplCheckCondsAnd(mapping->Conds)) {
         InputValue value(false, mapping->Strength, time);
         ImplProcessMapping(mapping, value, changes, true, true); // passing oldDown=true here seems bad...
     }

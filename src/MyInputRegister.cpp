@@ -5,7 +5,7 @@
 #include "Link.h"
 #include <Windows.h>
 
-DEFINE_ALERT_ON_LOG(LogLevel::Error)
+DEFINE_ALERT_ON_ERROR()
 
 int CmdLineRegisterUnregister(RegIfeoKey &ifeoKey, int numArgs, LPWSTR *args) {
     bool reg = false, unreg = false, byName = false;

@@ -102,10 +102,13 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;gdiplus.lib;comctl32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>myinput_hook.dll</DelayLoadDLLs>
       <AdditionalLibraryDirectories>$(OutDir)</AdditionalLibraryDirectories>
     </Link>
+    <Manifest>
+      <EnableDpiAwareness>true</EnableDpiAwareness>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -119,10 +122,13 @@
       <OmitFramePointers>false</OmitFramePointers>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;gdiplus.lib;comctl32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>myinput_hook.dll</DelayLoadDLLs>
       <AdditionalLibraryDirectories>$(OutDir)</AdditionalLibraryDirectories>
     </Link>
+    <Manifest>
+      <EnableDpiAwareness>true</EnableDpiAwareness>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -135,10 +141,13 @@
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;gdiplus.lib;comctl32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>myinput_hook.dll</DelayLoadDLLs>
       <AdditionalLibraryDirectories>$(OutDir)</AdditionalLibraryDirectories>
     </Link>
+    <Manifest>
+      <EnableDpiAwareness>true</EnableDpiAwareness>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -157,10 +166,13 @@
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;gdiplus.lib;comctl32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>myinput_hook.dll</DelayLoadDLLs>
       <AdditionalLibraryDirectories>$(OutDir)</AdditionalLibraryDirectories>
     </Link>
+    <Manifest>
+      <EnableDpiAwareness>true</EnableDpiAwareness>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="MyInputTest.cpp" />
@@ -179,6 +191,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TestUtils.h" />
+    <ClInclude Include="UiTest.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -2,6 +2,8 @@
 #include "StateUtils.h"
 #include "Header.h"
 #include "ImplFeedback.h"
+#define MYINPUT_HOOK_DLL_DECLSPEC __declspec(dllexport)
+#include "MyInputHook.h"
 
 static void CALLBACK ImplRepeatTimerProc(HWND window, UINT msg, UINT_PTR id, DWORD time);
 static void ImplGenerateMouseMotionFinish();
@@ -48,23 +50,20 @@ public:
     }
 };
 
-static void ImplHandleInputChange(ImplRawState &state, bool down, double strength) {
-    state.Pressed = down;
-
+static void ImplProcessBoolOutput(ImplBoolOutput &output, bool down, slot_t slot) {
     if (down) {
-        state.Strength = strength;
+        output.Slots |= 1 << slot;
     } else {
-        state.Strength = 0;
+        output.Slots &= ~(1 << slot);
     }
 }
 
-static bool ImplHandleButtonChange(ImplButtonState &state, bool down, ImplButtonState *exclusiveState = nullptr) {
-    ImplHandleInputChange(state, down, 1);
-
+static bool ImplHandleButtonChangeGlobal(ImplButtonState &state, ImplButtonState *exclusiveState = nullptr) {
+    bool down = state.Pressed.Get();
     if (exclusiveState) {
         if (exclusiveState->State && down) {
             exclusiveState->State = false;
-        } else if (!down && exclusiveState->Pressed) {
+        } else if (!down && exclusiveState->Pressed.Get()) {
             exclusiveState->State = true;
         }
     }
@@ -74,30 +73,111 @@ static bool ImplHandleButtonChange(ImplButtonState &state, bool down, ImplButton
     return down != oldDown;
 }
 
-static bool ImplHandleTriggerChange(ImplTriggerState &state, bool down, double strength) {
-    ImplHandleInputChange(state, down, strength);
+static bool ImplHandleButtonChange(ImplButtonState &state, bool down, slot_t slot, ImplButtonState *exclusiveState = nullptr) {
+    ImplProcessBoolOutput(state.Pressed, down, slot);
+    return ImplHandleButtonChangeGlobal(state, exclusiveState);
+}
 
+static void ImplProcessStrengthOutput(ImplBoolOutput &boolOutput, ImplStrengthOutput &output, bool down, double strength, slot_t slot) {
+    if (!output.InitIfNeeded(boolOutput, slot)) {
+        return;
+    }
+
+    bool prevDown = (boolOutput.Slots & (1 << slot)) != 0;
+    if (down && !prevDown) {
+        output.Slots[slot] = strength;
+        output.Combined = max(output.Combined, strength);
+    } else if (!down && prevDown) {
+        output.Slots[slot] = 0.0;
+        output.Combined = 0.0;
+        for (int i = 0; i < boolOutput.NumSlots; i++) {
+            output.Combined = max(output.Combined, output.Slots[i]);
+        }
+    }
+
+    ImplProcessBoolOutput(boolOutput, down, slot);
+}
+
+static bool ImplHandleTriggerChangeGlobal(ImplTriggerState &state) {
     double oldValue = state.Value;
-    double value = Clamp(down ? state.Strength * state.Modifier : 0, 0.0, 1.0);
+    double value = Clamp(state.PressedStrength.Get() * state.ModifierStrength.Get(), 0.0, 1.0);
     state.Value = value;
     state.State = value > state.Threshold;
 
     return value != oldValue;
 }
 
-static bool ImplHandleTriggerModifierChange(ImplTriggerState &state, bool down, double strength, ChangedMask *changes) {
-    bool changed = false;
-    bool oldDown = state.ModifierPressed;
-    state.ModifierPressed = down;
+static bool ImplHandleTriggerChange(ImplTriggerState &state, bool down, double strength, slot_t slot) {
+    ImplProcessStrengthOutput(state.Pressed, state.PressedStrength, down, strength, slot);
+    return ImplHandleTriggerChangeGlobal(state);
+}
 
-    if (oldDown != down) {
-        state.Modifier = down ? strength : 1.0;
+static double ImplProcessModifierOutput(ImplBoolOutput &boolOutput, ImplModifierOutput &output, bool down, double strength, slot_t slot) {
+    if (!output.InitIfNeeded(boolOutput, slot)) {
+        return output.Combined;
+    }
 
-        if (state.Pressed) {
-            changed = ImplHandleTriggerChange(state, state.Pressed, state.Strength);
+    bool prevDown = (boolOutput.Slots & (1 << slot)) != 0;
+    if (down && !prevDown) {
+        output.Slots[slot] = strength;
+        output.Combined *= strength;
+    } else if (!down && prevDown) {
+        output.Slots[slot] = 1.0;
+        output.Combined = 1.0;
+        for (int i = 0; i < boolOutput.NumSlots; i++) {
+            output.Combined *= output.Slots[i];
         }
     }
+
+    ImplProcessBoolOutput(boolOutput, down, slot);
+    return output.Combined;
+}
+
+static bool ImplHandleTriggerModifierChange(ImplTriggerState &state, bool down, double strength, slot_t slot, ChangedMask *changes) {
+    double oldStrength = state.ModifierStrength.Get();
+    strength = ImplProcessModifierOutput(state.Modifier, state.ModifierStrength, down, strength, slot);
+
+    bool changed = false;
+    if (oldStrength != strength && state.Pressed.Get()) {
+        changed = ImplHandleTriggerChangeGlobal(state);
+    }
     return changed;
+}
+
+static bool ImplHandleAxesChangeGlobal(ImplAxisState &axisState, ImplAxisState &otherAxisState) {
+    double extent = Clamp(axisState.Extent, -1.0, 1.0);
+    double otherExtent = Clamp(otherAxisState.Extent, -1.0, 1.0);
+    constexpr double epsilon = 0.000001;
+
+    // renormalize (in square)
+    if ((axisState.Weight > 1 || otherAxisState.Weight > 1) &&
+        axisState.Weight != otherAxisState.Weight &&
+        (abs(extent) > epsilon || abs(otherExtent) > epsilon)) {
+        double targetInfNorm = max(abs(extent), abs(otherExtent));
+        extent *= axisState.Weight;
+        otherExtent *= otherAxisState.Weight;
+        double invInfNorm = targetInfNorm / max(abs(extent), abs(otherExtent));
+        extent *= invInfNorm;
+        otherExtent *= invInfNorm;
+    }
+
+    extent = Clamp(extent * axisState.RotateMultiplier * axisState.ModifierStrength.Get(), -1.0, 1.0);
+    otherExtent = Clamp(otherExtent * otherAxisState.RotateMultiplier * otherAxisState.ModifierStrength.Get(), -1.0, 1.0);
+
+    // convert square coords -> circle coords (not a great way of doing it, but others are bad too...)
+    if (abs(extent) > epsilon && abs(otherExtent) > epsilon) {
+        double norm = max(abs(extent), abs(otherExtent)) / sqrt(extent * extent + otherExtent * otherExtent);
+        extent *= norm;
+        otherExtent *= norm;
+    }
+
+    double oldValue = axisState.Value;
+    double oldOtherValue = otherAxisState.Value;
+
+    axisState.Value = extent;
+    otherAxisState.Value = otherExtent;
+
+    return extent != oldValue || otherExtent != oldOtherValue;
 }
 
 static void ImplResetRotate(ImplAxisState &axisState) {
@@ -105,97 +185,93 @@ static void ImplResetRotate(ImplAxisState &axisState) {
         axisState.RotateFakePressed = false;
         axisState.Extent = 0;
     }
-    axisState.RotateModifier = 1.0;
+    axisState.RotateMultiplier = 1.0;
 
-    axisState.Pos.PrevPressedForRotate = axisState.Pos.Pressed;
-    axisState.Neg.PrevPressedForRotate = axisState.Neg.Pressed;
+    axisState.Pos.PrevPressedForRotate = axisState.Pos.Pressed.Get();
+    axisState.Neg.PrevPressedForRotate = axisState.Neg.Pressed.Get();
 }
 
-static bool ImplHandleAxisChange(ImplRawState &state, ImplRawState &otherState, ImplAxisState &axisState, ImplAxisState &otherAxisState,
-                                 ImplAxesState &axesState, double sign, bool isRight, bool down, double strength, bool add = false) {
-    ImplHandleInputChange(state, down, strength);
-
-    if (axisState.Pos.Pressed != axisState.Pos.PrevPressedForRotate || axisState.Neg.Pressed != axisState.Neg.PrevPressedForRotate ||
-        otherAxisState.Pos.Pressed != otherAxisState.Pos.PrevPressedForRotate || otherAxisState.Neg.Pressed != otherAxisState.Neg.PrevPressedForRotate) {
+static bool ImplHandleAxisChangeGlobal(ImplAxisState &axisState, ImplAxisState &otherAxisState, bool add = false) {
+    if (axisState.Pos.Pressed.Get() != axisState.Pos.PrevPressedForRotate ||
+        axisState.Neg.Pressed.Get() != axisState.Neg.PrevPressedForRotate ||
+        otherAxisState.Pos.Pressed.Get() != otherAxisState.Pos.PrevPressedForRotate ||
+        otherAxisState.Neg.Pressed.Get() != otherAxisState.Neg.PrevPressedForRotate) {
         ImplResetRotate(axisState);
         ImplResetRotate(otherAxisState);
     }
 
-    double extent = down ? state.Strength * state.Modifier * sign : otherState.Pressed ? otherState.Strength * otherState.Modifier * -sign
-                                                                                       : 0;
-    extent = Clamp(extent, -1.0, 1.0);
+    tie(axisState.Extent, axisState.Weight) = axisState.GetStrengthAndWeight();
 
-    if (add && down) {
-        double sum = extent + axisState.Extent;
-        extent = Clamp(sum, -1.0, 1.0);
-        if (sum != extent) {
-            otherAxisState.Extent /= abs(sum);
+    return ImplHandleAxesChangeGlobal(axisState, otherAxisState);
+}
+
+static bool ImplHandleAxisChangeAdd(ImplAxisDirState &state, ImplAxisState &axisState, ImplAxisState &otherAxisState, bool down, double strength) {
+    if (down) {
+        if (&state == &axisState.Neg) {
+            strength = -strength;
         }
+
+        double sum = axisState.Extent + strength;
+        axisState.Extent = Clamp(sum, -1.0, 1.0);
+        if (sum != axisState.Extent) {
+            otherAxisState.Extent = otherAxisState.Extent / abs(sum);
+        }
+
+        ImplHandleAxesChangeGlobal(axisState, otherAxisState);
+    } else // reset
+    {
+        axisState.Extent = 0;
+        ImplHandleAxesChangeGlobal(axisState, otherAxisState);
     }
-
-    axisState.Extent = extent;
-
-    double value = axisState.Extent * axisState.RotateModifier;
-    double otherValue = otherAxisState.Extent * otherAxisState.RotateModifier;
-
-    double epsilon = 0.000001;
-    if (abs(value) > epsilon && abs(otherValue) > epsilon) {
-        double norm = max(abs(value), abs(otherValue)) / sqrt(value * value + otherValue * otherValue);
-        value *= norm;
-        otherValue *= norm;
-    }
-
-    double oldValue = axisState.Value;
-    double oldOtherValue = otherAxisState.Value;
-
-    axisState.Value = value;
-    otherAxisState.Value = otherValue;
-
-    return value != oldValue || otherValue != oldOtherValue;
+    return down;
 }
 
-static bool ImplUpdateAxisOnModifierChange(ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplAxesState &axesState,
-                                           bool isRight) {
-    bool changed = false;
-    if (axisState.Pos.Pressed) {
-        changed |= ImplHandleAxisChange(axisState.Pos, axisState.Neg, axisState, otherAxisState, axesState,
-                                        1.0, isRight, axisState.Pos.Pressed, axisState.Pos.Strength);
+static bool ImplHandleAxisChange(ImplAxisDirState &state, ImplAxisState &axisState, ImplAxisState &otherAxisState,
+                                 bool down, double strength, slot_t slot, bool isAddMapping = false) {
+    if (isAddMapping) {
+        return ImplHandleAxisChangeAdd(state, axisState, otherAxisState, down, strength);
+    } else {
+        ImplProcessStrengthOutput(state.Pressed, state.PressedStrength, down, strength, slot);
+        return ImplHandleAxisChangeGlobal(axisState, otherAxisState);
     }
-    if (axisState.Neg.Pressed) {
-        changed |= ImplHandleAxisChange(axisState.Neg, axisState.Pos, axisState, otherAxisState, axesState,
-                                        -1.0, isRight, axisState.Neg.Pressed, axisState.Neg.Strength);
+}
+
+static bool ImplHandleAxisModifierChange(ImplAxisState &axisState, ImplAxisState &otherAxisState,
+                                         bool down, double strength, slot_t slot, ChangedMask *changes) {
+    double oldStrength = axisState.ModifierStrength.Get();
+    strength = ImplProcessModifierOutput(axisState.Modifier, axisState.ModifierStrength, down, strength, slot);
+
+    bool changed = false;
+    if (oldStrength != strength) {
+        changed = ImplHandleAxisChangeGlobal(axisState, otherAxisState);
     }
     return changed;
 }
 
-static bool ImplHandleAxisModifierChange(ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplAxesState &axesState,
-                                         bool isRight, bool down, double strength, ChangedMask *changes) {
+static bool ImplHandleAxisRotatorChange(ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplAxesState &axesState,
+                                        ImplMapping &mapping, bool down, double delta, ChangedMask *changes,
+                                        bool c1, bool c2, bool c3, bool c4, bool c5, bool c6, bool c7, bool c8,
+                                        double initX, double initY) {
     bool changed = false;
-    bool oldDown = axisState.Pos.ModifierPressed || axisState.Neg.ModifierPressed;
-    axisState.Pos.ModifierPressed = axisState.Neg.ModifierPressed = down;
-
-    if (oldDown != down) {
-        axisState.Pos.Modifier = axisState.Neg.Modifier = down ? strength : 1;
-
-        changed = ImplUpdateAxisOnModifierChange(axisState, otherAxisState, axesState, isRight);
-    }
-    return changed;
-}
-
-static bool ImplHandleAxisRotatorChange(ImplRawState &state, ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplAxesState &axesState,
-                                        bool y1, bool y2, bool y3, bool y4, bool isRight,
-                                        ImplMapping &mapping, bool down, double delta, ChangedMask *changes) {
-    bool changed = false;
-    if (down && (otherAxisState.Pos.Pressed || otherAxisState.Neg.Pressed)) {
+    if (down) {
         if (!mapping.HasTimer()) {
             mapping.StartTimerS(mapping.Rate, ImplRepeatTimerProc);
         }
 
-        if (!axisState.Pos.Pressed && !axisState.Neg.Pressed && !axisState.RotateFakePressed) {
-            // gotta choose something!
+        if (!otherAxisState.Pos.Pressed.Get() && !otherAxisState.Neg.Pressed.Get() && !otherAxisState.RotateFakePressed) {
+            otherAxisState.RotateFakePressed = true;
+            otherAxisState.RotateMultiplier = 0;
+            otherAxisState.Extent = otherAxisState.ModifierStrength.Get();
+        }
+        if (!axisState.Pos.Pressed.Get() && !axisState.Neg.Pressed.Get() && !axisState.RotateFakePressed) {
             axisState.RotateFakePressed = true;
-            axisState.RotateModifier = 0;
-            axisState.Extent = state.Modifier;
+            axisState.RotateMultiplier = 0;
+            axisState.Extent = axisState.ModifierStrength.Get();
+        }
+        if (!axisState.RotateMultiplier && !otherAxisState.RotateMultiplier) // when nothing was pressed
+        {
+            axesState.X.RotateMultiplier = initX;
+            axesState.Y.RotateMultiplier = initY;
         }
 
         auto adjustModifierByDelta = [&delta](double &modifier, double sign) {
@@ -220,37 +296,77 @@ static bool ImplHandleAxisRotatorChange(ImplRawState &state, ImplAxisState &axis
             }
         };
 
+        auto getCornerChoice = [](bool cpre, bool cpost, double sign) {
+            if (cpre == cpost) {
+                return cpost ? 1 : -1;
+            } else if (!cpre && cpost) {
+                return sign > 0 ? 1 : -1;
+            } else {
+                return 0;
+            }
+        };
+
+        delta *= axesState.RotateModifierStrength.Get();
+
         while (delta > 0) {
             double xSign = axesState.X.Extent > 0 ? 1.0 : -1.0;
             double ySign = axesState.Y.Extent > 0 ? 1.0 : -1.0;
-            double xExtent = xSign * axesState.X.RotateModifier;
-            double yExtent = ySign * axesState.Y.RotateModifier;
+            double xExtent = xSign * axesState.X.RotateMultiplier;
+            double yExtent = ySign * axesState.Y.RotateMultiplier;
 
-            if (xExtent == 1 && (yExtent < 1 || (yExtent == 1 && y1)) && (yExtent > 0 || (yExtent == 0 && (!y4 && !y1 && ySign > 0)))) {
-                adjustModifierByDelta(axesState.Y.RotateModifier, ySign * (y1 ? -1.0 : 1.0));
-            } else if (yExtent == 1 && (xExtent < 1 || (xExtent == 1 && !y1)) && (xExtent > 0 || (xExtent == 0 && ((y1 && y2 && xSign > 0) || y1 != y2)))) {
-                adjustModifierByDelta(axesState.X.RotateModifier, xSign * (y1 ? 1.0 : -1.0));
-            } else if (yExtent == 1 && (xExtent > -1 || (xExtent == -1 && !y2)) && (xExtent < 0 || (xExtent == 0 && (y1 && y2 && xSign < 0)))) {
-                adjustModifierByDelta(axesState.X.RotateModifier, xSign * (y2 ? -1.0 : 1.0));
-            } else if (xExtent == -1 && (yExtent < 1 || (yExtent == 1 && y2)) && (yExtent > 0 || (yExtent == 0 && ((!y2 && !y3 && ySign > 0) || y2 != y3)))) {
-                adjustModifierByDelta(axesState.Y.RotateModifier, ySign * (y2 ? -1.0 : 1.0));
-            } else if (xExtent == -1 && (yExtent > -1 || (yExtent == -1 && y3)) && (yExtent < 0 || (yExtent == 0 && (!y2 && !y3 && ySign < 0)))) {
-                adjustModifierByDelta(axesState.Y.RotateModifier, ySign * (y3 ? 1.0 : -1.0));
-            } else if (yExtent == -1 && (xExtent > -1 || (xExtent == -1 && !y3)) && (xExtent < 0 || (xExtent == 0 && ((y3 && y4 && xSign < 0) || y3 != y4)))) {
-                adjustModifierByDelta(axesState.X.RotateModifier, xSign * (y3 ? -1.0 : 1.0));
-            } else if (yExtent == -1 && (xExtent < 1 || (xExtent == 1 && !y4)) && (xExtent > 0 || (xExtent == 0 && (y3 && y4 && xSign > 0)))) {
-                adjustModifierByDelta(axesState.X.RotateModifier, xSign * (y4 ? 1.0 : -1.0));
-            } else if (xExtent == 1 && (yExtent > -1 || (yExtent == -1 && y4)) && (yExtent < 0 || (yExtent == 0 && ((!y4 && !y1 && ySign < 0) || y4 != y1)))) {
-                adjustModifierByDelta(axesState.Y.RotateModifier, ySign * (y4 ? 1.0 : -1.0));
+            // c1..c8 correspond to dividing the unit circle into 8 sections, going clockwise from the top.
+            // their value specifies whether to rotate clockwise in this section
+            if (yExtent == 1 &&
+                (xExtent < 1 || (xExtent == 1 && getCornerChoice(c1, c2, xSign) < 0)) &&
+                (xExtent > 0 || (xExtent == 0 && getCornerChoice(c8, c1, xSign) > 0))) {
+                adjustModifierByDelta(axesState.X.RotateMultiplier, xSign * (c1 ? 1.0 : -1.0));
+            } else if (xExtent == 1 &&
+                       (yExtent < 1 || (yExtent == 1 && getCornerChoice(c1, c2, xSign) > 0)) &&
+                       (yExtent > 0 || (yExtent == 0 && getCornerChoice(c2, c3, ySign) < 0))) {
+                adjustModifierByDelta(axesState.Y.RotateMultiplier, ySign * (c2 ? -1.0 : 1.0));
+            } else if (xExtent == 1 &&
+                       (yExtent > -1 || (yExtent == -1 && getCornerChoice(c3, c4, -ySign) < 0)) &&
+                       (yExtent < 0 || (yExtent == 0 && getCornerChoice(c2, c3, ySign) > 0))) {
+                adjustModifierByDelta(axesState.Y.RotateMultiplier, ySign * (c3 ? -1.0 : 1.0));
+            } else if (yExtent == -1 &&
+                       (xExtent < 1 || (xExtent == 1 && getCornerChoice(c3, c4, -ySign) > 0)) &&
+                       (xExtent > 0 || (xExtent == 0 && getCornerChoice(c4, c5, -xSign) < 0))) {
+                adjustModifierByDelta(axesState.X.RotateMultiplier, xSign * (c4 ? -1.0 : 1.0));
+            } else if (yExtent == -1 &&
+                       (xExtent > -1 || (xExtent == -1 && getCornerChoice(c5, c6, ySign) < 0)) &&
+                       (xExtent < 0 || (xExtent == 0 && getCornerChoice(c4, c5, -xSign) > 0))) {
+                adjustModifierByDelta(axesState.X.RotateMultiplier, xSign * (c5 ? -1.0 : 1.0));
+            } else if (xExtent == -1 &&
+                       (yExtent > -1 || (yExtent == -1 && getCornerChoice(c5, c6, ySign) > 0)) &&
+                       (yExtent < 0 || (yExtent == 0 && getCornerChoice(c6, c7, -ySign) < 0))) {
+                adjustModifierByDelta(axesState.Y.RotateMultiplier, ySign * (c6 ? 1.0 : -1.0));
+            } else if (xExtent == -1 &&
+                       (yExtent < 1 || (yExtent == 1 && getCornerChoice(c7, c8, -xSign) < 0)) &&
+                       (yExtent > 0 || (yExtent == 0 && getCornerChoice(c6, c7, -ySign) > 0))) {
+                adjustModifierByDelta(axesState.Y.RotateMultiplier, ySign * (c7 ? 1.0 : -1.0));
+            } else if (yExtent == 1 &&
+                       (xExtent > -1 || (xExtent == -1 && getCornerChoice(c7, c8, -xSign) > 0)) &&
+                       (xExtent < 0 || (xExtent == 0 && getCornerChoice(c8, c1, xSign) < 0))) {
+                adjustModifierByDelta(axesState.X.RotateMultiplier, xSign * (c8 ? 1.0 : -1.0));
             } else {
                 delta = 0;
             }
         }
 
-        changed |= ImplUpdateAxisOnModifierChange(axisState, otherAxisState, axesState, isRight);
-        changed |= ImplUpdateAxisOnModifierChange(otherAxisState, axisState, axesState, isRight);
+        changed |= ImplHandleAxesChangeGlobal(axisState, otherAxisState);
     } else if (!down && mapping.HasTimer()) {
         mapping.EndTimer();
+    }
+    return changed;
+}
+
+static bool ImplHandleAxisRotatorModifierChange(ImplAxesState &axesState, bool down, double strength, slot_t slot, ChangedMask *changes) {
+    double oldStrength = axesState.RotateModifierStrength.Get();
+    strength = ImplProcessModifierOutput(axesState.RotateModifier, axesState.RotateModifierStrength, down, strength, slot);
+
+    bool changed = false;
+    if (oldStrength != strength) {
+        changed = ImplHandleAxesChangeGlobal(axesState.X, axesState.Y);
     }
     return changed;
 }
@@ -321,237 +437,77 @@ static void ImplHandleMotionRelDimChange(ImplMotionState &state, ImplUser *user,
     ImplHandleMotionDimChange(state.Z, user, scale * axis.Z, v, rate, add);
 }
 
-static bool ImplPadGetState(ImplUser *user, int key, int type, void *dest) {
-    auto &state = user->State;
+static bool ImplPadGetInState(ImplUser *user, int type, void *state, int size) {
+    auto &in = user->State;
     switch (type) {
-    case 'b': {
-        bool &out = *(bool *)dest;
-        switch (key) {
-        case MY_VK_PAD_A:
-            out = state.A.State;
-            break;
-        case MY_VK_PAD_B:
-            out = state.B.State;
-            break;
-        case MY_VK_PAD_X:
-            out = state.X.State;
-            break;
-        case MY_VK_PAD_Y:
-            out = state.Y.State;
-            break;
-        case MY_VK_PAD_START:
-            out = state.Start.State;
-            break;
-        case MY_VK_PAD_BACK:
-            out = state.Back.State;
-            break;
-        case MY_VK_PAD_DPAD_LEFT:
-            out = state.DL.State;
-            break;
-        case MY_VK_PAD_DPAD_RIGHT:
-            out = state.DR.State;
-            break;
-        case MY_VK_PAD_DPAD_UP:
-            out = state.DU.State;
-            break;
-        case MY_VK_PAD_DPAD_DOWN:
-            out = state.DD.State;
-            break;
-        case MY_VK_PAD_LSHOULDER:
-            out = state.LB.State;
-            break;
-        case MY_VK_PAD_RSHOULDER:
-            out = state.RB.State;
-            break;
-        case MY_VK_PAD_LTHUMB_PRESS:
-            out = state.L.State;
-            break;
-        case MY_VK_PAD_RTHUMB_PRESS:
-            out = state.R.State;
-            break;
-        case MY_VK_PAD_GUIDE:
-            out = state.Guide.State;
-            break;
-        case MY_VK_PAD_EXTRA:
-            out = state.Extra.State;
-            break;
-        case MY_VK_PAD_LTRIGGER:
-            out = state.LT.State;
-            break;
-        case MY_VK_PAD_RTRIGGER:
-            out = state.RT.State;
-            break;
-        default:
+    case MyInputHook_InState_Basic_Type: {
+        auto out = (MyInputHook_InState_Basic *)state;
+        if (size < sizeof(*out)) {
             return false;
         }
-    } break;
 
-    case 'd': {
-        double &out = *(double *)dest;
-        switch (key) {
-        case MY_VK_PAD_LTRIGGER:
-            out = state.LT.Value;
-            break;
-        case MY_VK_PAD_RTRIGGER:
-            out = state.RT.Value;
-            break;
-        case MY_VK_PAD_LTHUMB_UP:
-            out = state.LA.Y.Value;
-            break;
-        case MY_VK_PAD_LTHUMB_DOWN:
-            out = -state.LA.Y.Value;
-            break;
-        case MY_VK_PAD_LTHUMB_LEFT:
-            out = -state.LA.X.Value;
-            break;
-        case MY_VK_PAD_LTHUMB_RIGHT:
-            out = state.LA.X.Value;
-            break;
-        case MY_VK_PAD_RTHUMB_UP:
-            out = state.RA.Y.Value;
-            break;
-        case MY_VK_PAD_RTHUMB_DOWN:
-            out = -state.RA.Y.Value;
-            break;
-        case MY_VK_PAD_RTHUMB_LEFT:
-            out = -state.RA.X.Value;
-            break;
-        case MY_VK_PAD_RTHUMB_RIGHT:
-            out = state.RA.X.Value;
-            break;
-        case MY_VK_PAD_MOTION_UP:
-            out = state.Motion.Y.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_DOWN:
-            out = -state.Motion.Y.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_RIGHT:
-            out = state.Motion.X.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_LEFT:
-            out = -state.Motion.X.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_NEAR:
-            out = state.Motion.Z.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_FAR:
-            out = -state.Motion.Z.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_ROT_UP:
-            out = -state.Motion.RX.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_ROT_DOWN:
-            out = state.Motion.RX.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_ROT_RIGHT:
-            out = state.Motion.RY.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_ROT_LEFT:
-            out = -state.Motion.RY.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_ROT_CW:
-            out = -state.Motion.RZ.NewValue;
-            break;
-        case MY_VK_PAD_MOTION_ROT_CCW:
-            out = state.Motion.RZ.NewValue;
-            break;
-        default:
-            return false;
-        }
-    } break;
+        out->A = in.A.State;
+        out->B = in.B.State;
+        out->X = in.X.State;
+        out->Y = in.Y.State;
+        out->DL = in.DL.State;
+        out->DR = in.DR.State;
+        out->DU = in.DU.State;
+        out->DD = in.DD.State;
+        out->LB = in.LB.State;
+        out->RB = in.RB.State;
+        out->L = in.L.State;
+        out->R = in.R.State;
+        out->Start = in.Start.State;
+        out->Back = in.Back.State;
+        out->Guide = in.Guide.State;
+        out->Extra = in.Extra.State;
+        out->LT = in.LT.State;
+        out->RT = in.RT.State;
+        out->LTStr = in.LT.Value;
+        out->RTStr = in.RT.Value;
+        out->LY = in.LA.Y.Value;
+        out->LX = in.LA.X.Value;
+        out->RY = in.RA.Y.Value;
+        out->RX = in.RA.X.Value;
 
-    case 'V': {
-        double &out = *(double *)dest;
-        switch (key) {
-        case MY_VK_PAD_MOTION_UP:
-            out = state.Motion.Y.Speed;
-            break;
-        case MY_VK_PAD_MOTION_DOWN:
-            out = -state.Motion.Y.Speed;
-            break;
-        case MY_VK_PAD_MOTION_RIGHT:
-            out = state.Motion.X.Speed;
-            break;
-        case MY_VK_PAD_MOTION_LEFT:
-            out = -state.Motion.X.Speed;
-            break;
-        case MY_VK_PAD_MOTION_NEAR:
-            out = state.Motion.Z.Speed;
-            break;
-        case MY_VK_PAD_MOTION_FAR:
-            out = -state.Motion.Z.Speed;
-            break;
-        case MY_VK_PAD_MOTION_ROT_UP:
-            out = -state.Motion.RX.Speed;
-            break;
-        case MY_VK_PAD_MOTION_ROT_DOWN:
-            out = state.Motion.RX.Speed;
-            break;
-        case MY_VK_PAD_MOTION_ROT_RIGHT:
-            out = state.Motion.RY.Speed;
-            break;
-        case MY_VK_PAD_MOTION_ROT_LEFT:
-            out = -state.Motion.RY.Speed;
-            break;
-        case MY_VK_PAD_MOTION_ROT_CW:
-            out = -state.Motion.RZ.Speed;
-            break;
-        case MY_VK_PAD_MOTION_ROT_CCW:
-            out = state.Motion.RZ.Speed;
-            break;
-        default:
-            return false;
-        }
-    } break;
+        memset(out->Reserved, 0, sizeof(out->Reserved));
+        memset(out->Reserved2, 0, sizeof(out->Reserved2));
 
-    case 'A': {
-        double &out = *(double *)dest;
-        switch (key) {
-        case MY_VK_PAD_MOTION_UP:
-            out = state.Motion.Y.Accel;
-            break;
-        case MY_VK_PAD_MOTION_DOWN:
-            out = -state.Motion.Y.Accel;
-            break;
-        case MY_VK_PAD_MOTION_RIGHT:
-            out = state.Motion.X.Accel;
-            break;
-        case MY_VK_PAD_MOTION_LEFT:
-            out = -state.Motion.X.Accel;
-            break;
-        case MY_VK_PAD_MOTION_NEAR:
-            out = state.Motion.Z.Accel;
-            break;
-        case MY_VK_PAD_MOTION_FAR:
-            out = -state.Motion.Z.Accel;
-            break;
-        case MY_VK_PAD_MOTION_ROT_UP:
-            out = -state.Motion.RX.Accel;
-            break;
-        case MY_VK_PAD_MOTION_ROT_DOWN:
-            out = state.Motion.RX.Accel;
-            break;
-        case MY_VK_PAD_MOTION_ROT_RIGHT:
-            out = state.Motion.RY.Accel;
-            break;
-        case MY_VK_PAD_MOTION_ROT_LEFT:
-            out = -state.Motion.RY.Accel;
-            break;
-        case MY_VK_PAD_MOTION_ROT_CW:
-            out = -state.Motion.RZ.Accel;
-            break;
-        case MY_VK_PAD_MOTION_ROT_CCW:
-            out = state.Motion.RZ.Accel;
-            break;
-        default:
+        if (size > sizeof(*out)) {
+            memset(out + 1, 0, size - sizeof(*out));
+        }
+    }
+        return true;
+
+    case MyInputHook_InState_Motion_Type: {
+        auto out = (MyInputHook_InState_Motion *)state;
+        if (size < sizeof(*out)) {
             return false;
         }
-    } break;
+
+        auto copy = [&](MyInputHook_InState_Motion::Axis *out, ImplMotionDimState *in) {
+            out->Pos = in->NewValue;
+            out->Speed = in->Speed;
+            out->Accel = in->Accel;
+        };
+
+        copy(&out->X, &in.Motion.X);
+        copy(&out->Y, &in.Motion.Y);
+        copy(&out->Z, &in.Motion.Z);
+        copy(&out->RX, &in.Motion.RX);
+        copy(&out->RY, &in.Motion.RY);
+        copy(&out->RZ, &in.Motion.RZ);
+
+        if (size > sizeof(*out)) {
+            memset(out + 1, 0, size - sizeof(*out));
+        }
+    }
+        return true;
 
     default:
         return false;
     }
-    return true;
 }
 
 static void ImplSetRumble(ImplUser *user, double lowFreq, double highFreq) {
@@ -567,24 +523,15 @@ static void ImplSetRumble(ImplUser *user, double lowFreq, double highFreq) {
     }
 }
 
-static bool ImplPadSetState(ImplUser *user, int key, int type, const void *src) {
+static bool ImplPadSetOutState(ImplUser *user, int type, const void *state, int size) {
     switch (type) {
-    case 'd': {
-        double val = *(const double *)src;
-        switch (key) {
-        case MY_VK_PAD_RUMBLE_LOW:
-            ImplSetRumble(user, val, user->State.Feedback.HighRumble);
-            break;
-        case MY_VK_PAD_RUMBLE_HIGH:
-            ImplSetRumble(user, user->State.Feedback.LowRumble, val);
-            break;
-        default:
-            return false;
-        }
-    } break;
+    case MyInputHook_OutState_Rumble_Type: {
+        auto out = (const MyInputHook_OutState_Rumble *)state;
+        ImplSetRumble(user, out->Low, out->High);
+    }
+        return true;
 
     default:
         return false;
     }
-    return true;
 }

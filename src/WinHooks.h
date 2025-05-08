@@ -377,7 +377,8 @@ BOOL WINAPI UnhookWindowsHookEx_Hook(HHOOK hhk) {
 }
 
 void WinHooksInitOnThread() {
-    SetWinEventHook(EVENT_MIN, EVENT_MAX, nullptr, ObjectFocusHook, 0, 0, WINEVENT_OUTOFCONTEXT);
+    SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                    nullptr, ObjectFocusHook, 0, 0, WINEVENT_OUTOFCONTEXT);
     UpdateInForeground(false);
 }
 

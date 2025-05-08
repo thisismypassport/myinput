@@ -50,6 +50,8 @@ public:
     const tchar *Get() const { return Buffer; }
     tchar *Get() { return Buffer; }
 
+    BasicPath<tchar> Copy() const { return BasicPath<tchar>(Get()); }
+
     tchar *Take() {
         tchar *taken = Buffer;
         Buffer = nullptr;
@@ -58,6 +60,8 @@ public:
 
     operator const tchar *() const { return Buffer; }
     operator tchar *() { return Buffer; }
+
+    operator std::basic_string_view<tchar>() const { return std::basic_string_view<tchar>(Buffer); }
 };
 
 using PathA = BasicPath<char>;

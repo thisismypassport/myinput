@@ -6,7 +6,7 @@
 #include <Windows.h>
 
 static bool gIsProgrammatic;
-DEFINE_ALERT_ON_LOG_COND(LogLevel::Error, !gIsProgrammatic)
+DEFINE_ALERT_ON_ERROR_COND(!gIsProgrammatic)
 
 wchar_t *SkipCommandLineArgs(wchar_t *cmdLine, int count) {
     bool inQuotes = false;
@@ -62,6 +62,12 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
                 Alert(L"Unrecognized option: %ws", args[argI]);
             }
         }
+
+        if (argI >= numArgs) {
+            Alert(L"Nothing to inject into.\r\n"
+                  L"Usage: myinput_inject [-c config] executable [args...]");
+            return -1;
+        }
     } else {
         Path userArg = SelectFileForOpen(L"Executables\0*.EXE\0", L"Execute");
         if (!userArg) {
@@ -90,7 +96,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         // (As of this writing, injecting into an already running process is NOT properly supported)
 
         uint64_t value;
-        if (!StrToValue(wstring(args[argI]), &value)) {
+        if (!StrToValue(args[argI], &value)) {
             Alert(L"Invalid number argument %ws.", args[argI]);
             return -1;
         }
@@ -142,7 +148,6 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
             exec.lpVerb = L"runas";
             exec.lpFile = ownPath;
             exec.lpParameters = SkipCommandLineArgs(cmdLine, 1);
-            exec.nShow = SW_SHOWNORMAL;
             if (ShellExecuteExW(&exec) && exec.hProcess) {
                 redirected = true;
                 pi.hProcess = exec.hProcess;

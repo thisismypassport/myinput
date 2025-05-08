@@ -232,8 +232,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ComApi.h" />
-    <ClInclude Include="ComUtils.h" />
     <ClInclude Include="Config.h" />
+    <ClInclude Include="ConfigRead.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="DeviceApi.h" />
     <ClInclude Include="Devices.h" />
@@ -243,29 +243,21 @@
     <ClInclude Include="CfgMgr.h" />
     <ClInclude Include="ImplKeyMouse.h" />
     <ClInclude Include="ImplPad.h" />
-    <ClInclude Include="LogUtils.h" />
     <ClInclude Include="MiscApi.h" />
     <ClInclude Include="MyInputHook.h" />
     <ClInclude Include="NotifyApi.h" />
     <ClInclude Include="RawRegister.h" />
     <ClInclude Include="StateUtils.h" />
     <ClInclude Include="Thunk.h" />
-    <ClInclude Include="UtilsBase.h" />
     <ClInclude Include="Log.h" />
     <ClInclude Include="RawInput.h" />
     <ClInclude Include="State.h" />
-    <ClInclude Include="UtilsBuffer.h" />
-    <ClInclude Include="UtilsPath.h" />
-    <ClInclude Include="UtilsStr.h" />
-    <ClInclude Include="UtilsUi.h" />
-    <ClInclude Include="UtilsUiBase.h" />
     <ClInclude Include="Keys.h" />
     <ClInclude Include="ImplFeedback.h" />
     <ClInclude Include="WbemApi.h" />
     <ClInclude Include="WinCursor.h" />
     <ClInclude Include="WinHooks.h" />
     <ClInclude Include="WinInput.h" />
-    <ClInclude Include="WinUtils.h" />
     <ClInclude Include="XUsbApi.h" />
   </ItemGroup>
   <ItemGroup>

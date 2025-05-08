@@ -220,3 +220,17 @@ ostream &operator<<(ostream &o, const GUID &guid) {
     FormatGuid(buffer, guid);
     return o << buffer;
 }
+
+bool IsFileExists(const wchar_t *path) {
+    return GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+uint64_t GetFileLastWriteTime(const wchar_t *path) {
+    WIN32_FILE_ATTRIBUTE_DATA attrs;
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &attrs)) {
+        return 0;
+    }
+
+    return ((uint64_t)attrs.ftLastWriteTime.dwHighDateTime << 32) |
+           attrs.ftLastWriteTime.dwLowDateTime;
+}

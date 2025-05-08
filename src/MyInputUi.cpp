@@ -2,26 +2,44 @@
 #include "Registry.h"
 #include "ExeUi.h"
 #include "ConfigUi.h"
-#include "LogUi.h"
+#include "ConfigTestUi.h"
 #include <Windows.h>
 
-DEFINE_ALERT_ON_LOG(LogLevel::Error)
+DEFINE_ALERT_ON_ERROR()
 
-class MyInputWindow : public MainWindow {
-    const wchar_t *InitialTitle() override { return L"MyInput"; }
-    SIZE InitialSize() override { return SIZE{1000, 600}; }
+class MyInputWindow : public ModalWindow, public BaseUiIntf {
+    ExePanel *mExePanel = nullptr;
+    ConfigPanel *mConfigPanel = nullptr;
+    ConfigTestPanel *mTestPanel = nullptr;
+    UnionTab *mTab = nullptr;
 
-    IControl *OnCreate() override {
-        auto exes = Add<ExePanel>();
-        auto configs = Add<ConfigPanel>();
-        auto logs = Add<LogPanel>();
+    Control *OnCreate() override {
+        mExePanel = New<ExePanel>(this);
+        mConfigPanel = New<ConfigPanel>(mExePanel);
+        mTestPanel = New<ConfigTestPanel>(mConfigPanel);
 
-        return exes;
+        mTab = New<UnionTab>();
+        mTab->Add(L"Executables", mExePanel);
+        mTab->Add(L"Configs", mConfigPanel);
+        mTab->Add(L"Test", mTestPanel);
+        return mTab;
+    }
+
+    Control *InitialFocus() override { return mTab->InitialFocus(); }
+
+public:
+    void Create() {
+        ModalWindow::Create(L"MyInput", SIZE{900, 600});
+    }
+
+    void SwitchToConfigs() override {
+        mTab->SetSelected(mConfigPanel);
     }
 };
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
+    UiInit();
     MyInputWindow window;
     window.Create();
-    ProcessWindows();
+    return 0;
 }

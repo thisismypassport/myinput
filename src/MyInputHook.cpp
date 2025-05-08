@@ -62,46 +62,52 @@ static DWORD WINAPI DllThread(LPVOID param) {
     return 0;
 }
 
-extern "C" {
-DLLEXPORT void MyInputHook_Log(const char *data, intptr_t size) {
-    Log(LogLevel::Default, data, size >= 0 ? size : strlen(data));
+void MyInputHook_Log(const char *data, intptr_t size, char level) {
+    Log((LogLevel)level, data, size >= 0 ? size : strlen(data));
 }
 
-DLLEXPORT int MyInputHook_InternalForTest() {
+void MyInputHook_SetLogCallback(void (*cb)(const char *str, size_t size, char level, void *data), void *data) {
+    GLogCb = LogCbType{cb, data};
+}
+
+int MyInputHook_InternalForTest() {
     UINT mask;
     return ImplGetUsers(&mask, DEVICE_NODE_TYPE_HID);
 }
 
-DLLEXPORT void MyInputHook_PostInDllThread(AppCallback cb, void *data) {
+void MyInputHook_PostInDllThread(AppCallback cb, void *data) {
     PostAppCallback(cb, data);
 }
 
-DLLEXPORT void MyInputHook_AssertInDllThread() {
+void MyInputHook_AssertInDllThread() {
     CUSTOM_ASSERT_DLL_THREAD(ASSERT);
 }
 
-DLLEXPORT void *MyInputHook_RegisterCustomKey(const char *name, void (*cb)(bool, double, unsigned long, void *), void *data) {
+void *MyInputHook_RegisterCustomKey(const char *name, void (*cb)(bool, double, unsigned long, void *), void *data) {
+    DBG_ASSERT_DLL_THREAD();
     int index = ConfigRegisterCustomKey(name, cb ? [=](auto &info) { cb(info.Down, info.Strength, info.Time, data); } : function<void(const InputValue &)>());
     return (void *)(uintptr_t)(index + 1);
 }
 
-DLLEXPORT void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double strength, unsigned long time) {
+void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double strength, unsigned long time) {
     DBG_ASSERT_DLL_THREAD();
     int index = (int)(uintptr_t)customKeyObj - 1;
     ImplOnCustomKey(index, InputValue{down, strength, time});
 }
 
-DLLEXPORT void *MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const char *, void *), void *data) {
+void *MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const char *, void *), void *data) {
+    DBG_ASSERT_DLL_THREAD();
     int index = ConfigRegisterCustomVar(name, [=](const auto &str) { cb(str.c_str(), data); });
     return (void *)(uintptr_t)(index + 1);
 }
 
-DLLEXPORT void *MyInputHook_RegisterCustomDevice(const char *name, void (*cb)(int, bool, void *), void *data) {
+void *MyInputHook_RegisterCustomDevice(const char *name, void (*cb)(int, bool, void *), void *data) {
+    DBG_ASSERT_DLL_THREAD();
     int index = ConfigRegisterCustomDevice(name, [=](int idx, bool add) { cb(idx, add, data); });
     return (void *)(uintptr_t)(index + 1);
 }
 
-DLLEXPORT void *MyInputHook_RegisterCallback(int userIdx, void (*cb)(int, void *), void *data) {
+void *MyInputHook_RegisterCallback(int userIdx, void (*cb)(int, void *), void *data) {
     DBG_ASSERT_DLL_THREAD();
     auto user = ImplGetUser(userIdx);
     if (!user) {
@@ -114,7 +120,7 @@ DLLEXPORT void *MyInputHook_RegisterCallback(int userIdx, void (*cb)(int, void *
     }));
 }
 
-DLLEXPORT void MyInputHook_UnregisterCallback(int userIdx, void *cbObj) {
+void *MyInputHook_UnregisterCallback(int userIdx, void *cbObj) {
     DBG_ASSERT_DLL_THREAD();
     auto user = ImplGetUser(userIdx);
     ImplUserCb *cb = (ImplUserCb *)cbObj;
@@ -122,23 +128,35 @@ DLLEXPORT void MyInputHook_UnregisterCallback(int userIdx, void *cbObj) {
         user->Callbacks.Remove(*cb);
         delete cb;
     }
+    return nullptr;
 }
 
-DLLEXPORT bool MyInputHook_GetState(int userIdx, int key, char type, void *dest) {
+void MyInputHook_GetInState(int userIdx, int type, void *state, int size) {
     DBG_ASSERT_DLL_THREAD();
     auto user = ImplGetUser(userIdx);
-    return user ? ImplPadGetState(user, key, type, dest) : false;
+    if (!user || !ImplPadGetInState(user, type, state, size)) {
+        memset(state, 0, size);
+    }
 }
 
-DLLEXPORT bool MyInputHook_SetState(int userIdx, int key, char type, const void *src) {
+void MyInputHook_SetOutState(int userIdx, int type, const void *state, int size) {
     DBG_ASSERT_DLL_THREAD();
     auto user = ImplGetUser(userIdx);
-    return user ? ImplPadSetState(user, key, type, src) : false;
+    if (user) {
+        ImplPadSetOutState(user, type, state, size);
+    }
 }
 
-DLLEXPORT void MyInputHookInternal_WaitInit() {
+void MyInputHook_LoadConfig(const wchar_t *name) {
+    DBG_ASSERT_DLL_THREAD();
+    if (name) {
+        GConfig.MainFile = PathCombineExt(name, L"ini");
+    }
+    ConfigReload();
+}
+
+void MyInputHook_WaitInit() {
     WaitForSingleObject(G.InitEvent, INFINITE);
-}
 }
 
 BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD ul_reason_for_call, LPVOID lpReserved) {

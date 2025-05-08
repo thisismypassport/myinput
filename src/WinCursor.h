@@ -85,12 +85,14 @@ static void MouseCaptureStop(const MouseCapture::ThreadHook &info) {
     }
 }
 
-static void MouseCaptureUpdate(HWND activeWindow) {
+static void MouseCaptureUpdate(HWND activeWindow, bool updateClip) {
     RECT r = {};
-    GetWindowRect(activeWindow, &r);
-    ClipCursor_Real(&r);
-    if (G.Debug) {
-        LOG << "set cursor rect to " << r.left << ".." << r.right << ", " << r.top << ".." << r.bottom << END;
+    if (updateClip) {
+        GetWindowRect(activeWindow, &r);
+        ClipCursor_Real(&r);
+        if (G.Debug) {
+            LOG << "set cursor rect to " << r.left << ".." << r.right << ", " << r.top << ".." << r.bottom << END;
+        }
     }
     GetClipCursor_Real(&r);
 
@@ -136,8 +138,9 @@ static LRESULT CALLBACK MouseCaptureHook(int nCode, WPARAM wParam, LPARAM lParam
 
             if (start || changed ||
                 (activeWindow && msg->hwnd == activeWindow &&
-                 (msg->message == WM_SIZE || msg->message == WM_MOVE || msg->message == WM_MOUSEMOVE))) {
-                MouseCaptureUpdate(activeWindow);
+                 (msg->message == WM_SIZE || msg->message == WM_MOVE || msg->message == WM_MOUSEMOVE ||
+                  (msg->message == WM_NULL && msg->lParam == (LPARAM)MouseCaptureHook)))) {
+                MouseCaptureUpdate(activeWindow, start || changed || msg->message != WM_MOUSEMOVE);
             }
         }
     }
@@ -184,6 +187,7 @@ static void UpdateHideCursor() {
         if (captureThread) {
             lock_guard<mutex> lock(GCapture.HooksMutex);
             HHOOK hook = SetWindowsHookExW_Real(WH_GETMESSAGE, MouseCaptureHook, nullptr, captureThread);
+            PostThreadMessageW(captureThread, WM_NULL, 0, (LPARAM)MouseCaptureHook); // hide immediately
             GCapture.Hooks.push_back({captureThread, hook});
         }
     }
