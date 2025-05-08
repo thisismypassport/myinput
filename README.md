@@ -52,8 +52,9 @@ For example:
 * It maps the "F12" key to reload mappings from the config file.
 * It maps the "Pause" key to disable all other mappings until pressed again.
 
-Additionally, it contains a few sections disabled by default - you can enable them by clicking the checkbox next to them:
-* A "move right stick while right control is held" section - it uses the "Add strength" feature to allow fine-grained control of an analog stick via the keyboard.
+Additionally, it contains a few more example sections disabled by default - you can enable them by clicking the checkbox next to them:
+* A "fluidly move right stick while right control is held" section - it uses the "Add strength" feature to allow fine-grained control of an analog stick via the keyboard.
+* A "move left-stick in up to 16 directions" section.
 * A "switch between multiple gamepads" section - one approach to handle multiple gamepads, see below for others
 
 ### Supported Mapping Options
