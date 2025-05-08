@@ -223,7 +223,7 @@ static bool ImplHandleAxisChangeAdd(ImplAxisDirState &state, ImplAxisState &axis
         axisState.Extent = 0;
         ImplHandleAxesChangeGlobal(axisState, otherAxisState);
     }
-    return down;
+    return true;
 }
 
 static bool ImplHandleAxisChange(ImplAxisDirState &state, ImplAxisState &axisState, ImplAxisState &otherAxisState,

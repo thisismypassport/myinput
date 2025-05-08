@@ -374,14 +374,14 @@ int operator-(ConfigVar l, ConfigVar r) { return (int)l - (int)r; }
 // (in ui order, vars with same CONFIG_VAR_GROUP_* must be consecutive)
 #define ENUMERATE_CONFIG_VARS(e)                                                           \
     /* Normal group */                                                                     \
-    e(ConfigVar::Include, "Include", L"Include another config",                            \
-      "include", CONFIG_VAR_STR_CFG, nullptr);                                             \
-    e(ConfigVar::Device, "Device", L"Configure a virtual gamepad's type",                  \
-      "device", CONFIG_VAR_SPECIAL, nullptr);                                              \
     e(ConfigVar::RumbleWindow, "RumbleWindow", L"Shake the window on gamepad vibration",   \
       "rumblewindow", CONFIG_VAR_BOOL, &G.RumbleWindow);                                   \
+    e(ConfigVar::Device, "Device", L"Configure a virtual gamepad's type",                  \
+      "device", CONFIG_VAR_SPECIAL, nullptr);                                              \
     e(ConfigVar::HideCursor, "HideCursor", L"Hide the cursor while in focus",              \
       "hidecursor", CONFIG_VAR_BOOL, &G.HideCursor);                                       \
+    e(ConfigVar::Include, "Include", L"Include another config",                            \
+      "include", CONFIG_VAR_STR_CFG, nullptr);                                             \
     e(ConfigVar::Always, "Always", L"Always process mappings, even in background",         \
       "always", CONFIG_VAR_BOOL, &G.Always);                                               \
     e(ConfigVar::Forward, "Forward", L"Forward all inputs, even if mapped to outputs",     \

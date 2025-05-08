@@ -500,8 +500,14 @@ static bool ImplPreProcess(ImplMapping *mapping, InputValue &v, bool &oldDown, b
         return false;
     }
 
-    if (mapping->Add && !v.Down && !reset) {
-        return false;
+    if (mapping->Add && !v.Down) {
+        if (!mapping->Conds) {
+            reset = true;
+        }
+
+        if (!reset) {
+            return false;
+        }
     }
 
     if (mapping->Toggle) {

@@ -437,12 +437,12 @@ enum class MyVkGroup {
     e(VK_VOLUME_MUTE, "Volume.Mute", L"Volume Mute", KeyboardMedia, "volumemute");                                                                        \
     /* Command group */                                                                                                                                   \
     e(MY_VK_NONE, "None", L"No Effect", Command, "none");                                                                                                 \
+    e(MY_VK_RELOAD, "Reload", L"Reload Config", Command, "reload");                                                                                       \
     e(MY_VK_TOGGLE_DISABLE, "ToggleDisable", L"Toggle Disable Mappings", Command, "toggledisable");                                                       \
     e(MY_VK_SET_ACTIVE_USER, "SetActive", L"Set Active Gamepad", Command, "setactive");                                                                   \
     e(MY_VK_HOLD_ACTIVE_USER, "HoldActive", L"Set Active Gamepad while Held", Command, "holdactive");                                                     \
     e(MY_VK_TOGGLE_CONNECTED, "ToggleConnected", L"Toggle Gamepad Connected", Command, "toggleconnected");                                                \
-    e(MY_VK_RELOAD, "Reload", L"Reload Config", Command, "reload");                                                                                       \
-    e(MY_VK_TOGGLE_ALWAYS, "ToggleAlways", L"Toggle Process in Background", Command, "togglealways");                                                     \
+    e(MY_VK_TOGGLE_ALWAYS, "ToggleAlways", L"Toggle Mapping in Background", Command, "togglealways");                                                     \
     e(MY_VK_TOGGLE_HIDE_CURSOR, "ToggleHideCursor", L"Toggle Hide Cursor", Command, "togglehidecursor");                                                  \
     /* Command Debug group */                                                                                                                             \
     e(MY_VK_TOGGLE_SPARE_FOR_DEBUG, "ToggleSpareForDebug", L"(Debug) No Effect Toggle", CommandDebug, "togglesparefordebug");                             \

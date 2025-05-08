@@ -1,9 +1,7 @@
-# myinput
-Allows mapping Keyboard/Mouse keys to a Virtual Controller on a per-app basis, without having to install any drivers.
+# MyInput
+Allows mapping Keyboard/Mouse keys to a Virtual Controller (Gamepad) on a per-game basis, without having to install any drivers.
 
 Can also remap Keyboard/Mouse keys to other Keyboard/Mouse keys.
-
-Currently not user-friendly, but functional.
 
 [You can find the latest release (MyInput_Windows.zip) here.](https://github.com/thisismypassport/myinput/releases/) 
 
@@ -11,60 +9,89 @@ If you find this useful, and have any requests or suggestions, let me know via o
 
 # Usage
 
-You can run myinput.exe to open a window, from which you can:
+Run myinput.exe - this will open a window, allowing you to run games under MyInput and editing the configuring for each game.
 
-## One-time Run
+## Run on Demand
 
-To run an executable under myinput just once, click on "Launch New (One-Time)" on the bottom right of the myinput window.
+To run a game under MyInput, first add it to the list by clicking on "Add without Registering" in the bottom right of the MyInput window, and selecting the game's executable.
+
+Now that it's on the list, you can right-click on it and select "Run with MyInput" whenever you want to run it with MyInput's virtual controller.
 
 Alternatively, in Windows Explorer, just drag the executable you want to run to x64\myinput_inject.exe
 
 ## Register to Always Run
 
-To register an executable so that - whenever you launch it - it is launched through my input, click on "Register New" (near the bottom right of the myinput window).
-
-Alternatively, in Windows Explorer, just drag the executable you want to register to x64\myinput_register.exe (you can drag it again to unregister it)
+To register a game's executable so that - whenever you launch it - it is launched with MyInput, click on "Register New" in the bottom right of the myinput window, and select the executable.
 
 Note: Registering an executable requires admin permissions (as it uses Image File Execution Options to change how the executable runs).
 
-## Mapping Configuration
+Once added to the list, you can unregister or re-register a game by simply clicking the checkbox next to it.
 
-The configuration file specify which keys map to which keys/buttons.
+Alternatively, in Windows Explorer, just drag the executable you want to register to x64\myinput_register.exe (you can drag it again to unregister it)
 
-You can open the global configuration file by clicking "Edit Global Config" (or opening Configs\_default.ini directly).
+## Edit Configuration
 
-### Default Configuration File
+You can edit the configuration a game uses by double clicking on it in the list - allowing you to specify what inputs map to what, etc.
+
+You can test the configuration without launching the game by switching to the "Test" tab.
+
+Note that by default, newly added games use the same default configuration (called "_default") - so modifying it will affect all games.
+
+To have a game use a different configuration, select the game in the list and use the "Use Config:" drop down at the bottom of the window (clicking "New" to use a new configuration)
+
+### Default Configuration File ("_default")
 
 By default, it maps keyboard keys to a XBox360 controller.
 
-The lines at the top of the file (that start with a '#') are comments that describe the configuration format, whereas the lines below map keys to various buttons.
+You can switch to the "Configs" tab in MyInput to see exactly what keys it maps to what gamepad buttons - clicking on a mapping will show you more info on it (including a user-friendly description of the button).
 
-For example: (these are all parts of the default configuration)
-* It maps the "C" key to the "A" button (written as "%A").
-* It maps the "Up" key to the left analog stick up direction (written as "%L.Up")
-* It maps the left shift ("LShift") to modify the range of the left analog stick movement ("%Mod.L") by a half ("~ 0.5")
-* It maps the "Pause" key to disable all other key mappings until pressed again.
-* It maps the "F12" key to reload key mappings from the config file.
+For example:
+* It maps the "C" key to the "A" button. (And so on for other buttons)
+* It maps the "Up" key to the left analog stick up direction. (And so on for other directions)
+* It maps the left shift to modify the range of the left analog stick movement by half.
+* It maps the "F12" key to reload mappings from the config file.
+* It maps the "Pause" key to disable all other mappings until pressed again.
 
-Note that lines that start with "#" are ignored.
+Additionally, it contains a few sections disabled by default - you can enable them by clicking the checkbox next to them:
+* A "move right stick while right control is held" section - it uses the "Add strength" feature to allow fine-grained control of an analog stick via the keyboard.
+* A "switch between multiple gamepads" section - one approach to handle multiple gamepads, see below for others
 
-### Advanced Configuration Examples
+### Supported Mapping Options
 
-You can see more advanced examples in Config\myinput_test.ini
+All keyboard keys & mouse buttons can be mapped to any keyboard key, mouse button, or virtual gamepad button.
 
-(Do not copy the \#\[ and \#\] line - they cause the whole block to be ignored)
+By default, the virtual gamepad is a XBox360 one (supported by the most games), but it can be changed via the "Configure a virual gamepad's type" global option.
 
-For example: (these are NOT parts of the default configuration, just examples of what you can do)
-* It maps the "Numpad1" key to rotate the left analog stick up ("%Rot.L.Up")
-* It contains lines mapping keys & mouse buttons to other keys & mouse buttons, such as mapping "MButton" (middle mouse button) to "XButton1" (first extra mouse button)
-* It contains lines (below "MISC KEY FEATURES") that maps "Q" to turbo-press "Z", maps "A" to toggle "Z", and maps "1" to toggle turbo of "Z". (and below, you can see toggle & turbo also works on controller buttons)
-* At the bottom, it defines 2 controllers ("!Device1 = X360" and "!Device2 = PS4"). Much above, it maps "F2" to "SetActive @2" which switches all mappings to use the 2nd controller.
+The "Options..." section allows you to configure various options for each mapping:
+* Turbo-pressing a key/button (see first drop-down inside Options) - optionally with a custom rate.
+* Toggling a key/button (see same drop-down)
+* A custom press strength for analog buttons and sticks.
+* Adding press strength while the input is pressed, allowing fine-grainer control over an analog stick.
+* Optionally forwaring the input key, so that the game sees both the input key and the output button.
 
-### Per-Executable Configuration
+The "Conditions..." section allows you to configure under which conditions a mapping will be active.
+* You can enable a mapping when some key is pressed, released, toggled, etc.
+* You can create a complex condition, to combine (via and/or/not) multiple sub-conditions.
 
-You can specify a configuration for each executable, by either:
-* Clicking "Edit Config" and answering "Yes" to create a configuration for that executable.
-* Toggling "Use Config", writing the name of the config in the edit box, and clicking "Apply". (This allows you to have multiple executables using the same custom config file)
+In addition, you can map keys to one of several actions (in the "Actions" section of the Output drop-down), such as toggling the hiding of the mouse cursor.
+
+### Multiple Gamepads
+
+There are several ways to configure multiple gamepads (controllers):
+* Mapping a key to "Actions" -> "Set Active Gamepad" : allows you to change the active gamepad by pressing a key
+* Mapping a key to "Actions" -> "Set Active Gamepad while Held" : allows you to change the active gamepad while a key is held
+* Specifying exactly which gamepad each mapping is for - by changing "Active Gamepad" to "Gamepad #..." and selecting the gamepad number to use.
+
+### Supported Global Options
+
+These are accessible via adding a "New Option" - see the arrow next to "New Mapping":
+* You can shake the window when a gamepad's rumble occurs.
+* You can hide the cursor while the window is in focus. (Also toggle-able via "Actions")
+* You can control whether the mapping continues to work while the game is in the background. (Also toggle-able via "Actions")
+* You can include one config inside another.
+* (And more...)
+
+(Don't forget to toggle the option after selecting it - it starts in its default state)
 
 # Troubleshooting
 

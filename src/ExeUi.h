@@ -4,8 +4,6 @@
 #include "WinUtils.h"
 #include "Link.h"
 
-const wchar_t *gSettingDefaultDisabled = L"Default Disabled";
-
 RegIfeoKeyDelegatedViaNamedPipe *GetDelegatedIfeo() {
     static RegIfeoKeyDelegatedViaNamedPipe gDelegatedIfeo;
     return &gDelegatedIfeo;
@@ -52,8 +50,8 @@ class ExePanel : public Panel, public ExeUiIntf {
     Label *mListLbl = nullptr;
     MultiListView *mRegList = nullptr;
     Label *mRegLbl = nullptr;
-    CheckBox *mRegDefaultChk = nullptr;
     Button *mRegBtn = nullptr;
+    Button *mRegDisabledBtn = nullptr;
     Button *mUnregBtn = nullptr;
     Button *mReregBtn = nullptr;
     Button *mEditCfgBtn = nullptr;
@@ -168,6 +166,12 @@ class ExePanel : public Panel, public ExeUiIntf {
         }
     }
 
+    void UpdateList(Path &&initialPath) {
+        vector<Path> selectedVec;
+        selectedVec.push_back(move(initialPath));
+        UpdateList(&selectedVec);
+    }
+
     void OnFilesDrop(const vector<Path> &files) override {
         for (auto &file : files) {
             RegisterNew(file);
@@ -176,7 +180,7 @@ class ExePanel : public Panel, public ExeUiIntf {
         UpdateList(&files);
     }
 
-    void RegisterNew(const Path &path) {
+    void RegisterNew(const Path &path, bool disabled = false) {
         Path exeName = PathGetBaseName(path);
         Path fullPath = PathGetFullPath(path);
 
@@ -198,24 +202,24 @@ class ExePanel : public Panel, public ExeUiIntf {
 
         RegisteredExeInfo regInfo;
         bool registered = mIfeoKey->GetRegisteredExe(exeName, fullPath, &regInfo, true);
-        if (registered) {
+        bool registeredDisabled = mDisabledIfeoKey->GetRegisteredExe(exeName, fullPath, &regInfo, true);
+        if (disabled ? registeredDisabled : registered) {
             auto existingName = regInfo.ByPath ? fullPath.Get() : exeName.Get();
             if (regInfo.Exact) {
-                Alert(L"%ws is already registered.", existingName);
-            } else if (Question(L"%ws is registered to %ws\nRe-register it?", existingName, regInfo.InjectExe.Get())) {
-                registered = false;
+                return Alert(L"%ws is already in the list.", existingName);
+            } else if (!Question(L"%ws is registered to %ws\nRe-register it?", existingName, regInfo.InjectExe.Get())) {
+                return;
             }
+        } else if (registeredDisabled || registered) {
+            GetIfeoKeyForWrite(!disabled)->UnregisterExe(exeName, fullPath);
         }
 
-        if (!registered) {
-            if (!regInfo.Config) {
-                regInfo.Config = ConfigsDefault; // leaving it empty gives legacy/questionable default behaviour
-            }
+        if (!regInfo.Config) {
+            regInfo.Config = ConfigsDefault; // leaving it empty gives legacy/questionable default behaviour
+        }
 
-            bool disabled = !mRegDefaultChk->Get();
-            if (!GetIfeoKeyForWrite(disabled)->RegisterExe(exeName, fullPath, regInfo.Config)) {
-                GetIfeoKeyForWrite(true)->RegisterExe(exeName, fullPath, regInfo.Config);
-            }
+        if (!GetIfeoKeyForWrite(disabled)->RegisterExe(exeName, fullPath, regInfo.Config)) {
+            GetIfeoKeyForWrite(true)->RegisterExe(exeName, fullPath, regInfo.Config);
         }
     }
 
@@ -363,20 +367,20 @@ class ExePanel : public Panel, public ExeUiIntf {
         });
 
         mRegBtn = New<Button>(L"Register New", [this] {
-            Path selected = SelectFileForOpen(L"Executables\0*.EXE\0", L"Choose Executable", false);
+            Path selected = SelectFileForOpen(L"Executables\0*.EXE\0", L"Register Executable", false);
             if (selected) {
                 RegisterNew(selected);
-
-                vector<Path> selectedVec;
-                selectedVec.push_back(move(selected));
-                UpdateList(&selectedVec);
+                UpdateList(move(selected));
             }
         });
 
-        mRegDefaultChk = New<CheckBox>(L"&& Enable", [this](bool value) {
-            mDisabledIfeoKey->SetBoolSetting(gSettingDefaultDisabled, !value);
+        mRegDisabledBtn = New<Button>(L"Add without Registering", [this] {
+            Path selected = SelectFileForOpen(L"Executables\0*.EXE\0", L"Add Executable (without Registering)", false);
+            if (selected) {
+                RegisterNew(selected, true);
+                UpdateList(move(selected));
+            }
         });
-        mRegDefaultChk->Set(!mDisabledIfeoKey->GetBoolSetting(gSettingDefaultDisabled));
 
         mEditCfgBtn = New<Button>(L"Edit \r\nConfig", [this] {
             if (!mRegList->GetSelected().empty()) {
@@ -456,16 +460,16 @@ class ExePanel : public Panel, public ExeUiIntf {
         cfgLayout->AddLeftMiddle(mConfigChoice);
 
         auto subLayout = New<Layout>();
-        subLayout->AddLeft(mEditCfgBtn);
-        subLayout->AddLeft(mViewLogsBtn);
-        subLayout->AddLeft(mRunBtn);
-        subLayout->AddLeft(mOpenFolderBtn);
+        subLayout->AddLeftMiddle(mEditCfgBtn);
+        subLayout->AddLeftMiddle(mViewLogsBtn);
+        subLayout->AddLeftMiddle(mRunBtn);
+        subLayout->AddLeftMiddle(mOpenFolderBtn);
+        subLayout->AddRightMiddle(mRegDisabledBtn);
 
         auto regLayout = New<Layout>();
-        regLayout->AddLeft(mUnregBtn);
-        regLayout->AddLeft(mReregBtn);
-        regLayout->AddRight(mRegDefaultChk);
-        regLayout->AddRight(mRegBtn);
+        regLayout->AddLeftMiddle(mUnregBtn);
+        regLayout->AddLeftMiddle(mReregBtn);
+        regLayout->AddRightMiddle(mRegBtn);
 
         auto layout = New<Layout>(true);
         layout->AddTop(headerLayout);

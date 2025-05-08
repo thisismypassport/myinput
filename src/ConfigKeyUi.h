@@ -583,6 +583,7 @@ class ConfigMappingUiPanel : public Panel {
         mOptStrengthChk = New<CheckBox>(L"Custom Press Strength:", [this](bool value) {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Info.HasStrength = value; });
             UpdateExpandUi(GetConfigEntry(mConfig));
+            mOptStrengthEdit->Enable(value);
         });
         mOptStrengthEdit = New<EditFloat<double>>([this](double value) {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Mapping->Strength = value; });
@@ -593,6 +594,7 @@ class ConfigMappingUiPanel : public Panel {
         mRateChk = New<CheckBox>(L"Custom Press Rate:", [this](bool value) {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Info.HasRate = value; });
             UpdateExpandUi(GetConfigEntry(mConfig));
+            mRateEdit->Enable(value);
         });
         mRateEdit = New<EditFloat<double>>([this](double value) {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Mapping->Rate = value; });
@@ -609,7 +611,7 @@ class ConfigMappingUiPanel : public Panel {
         });
         mAxisActionDrop->Add(L"Set strength to output. (Default)");
         mAxisActionDrop->Add(L"Add strength to output.");
-        mAxisActionDrop->Add(L"Add strength to output; reset on release.");
+        mAxisActionDrop->Add(L"Add strength to output; reset on full release.");
 
         mForwardChk = New<CheckBox>(L"Forward input in addition to output", [this](bool value) {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Mapping->Forward = value; });
