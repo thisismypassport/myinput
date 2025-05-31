@@ -9,7 +9,8 @@ struct ConfigState {
     unordered_set<wstring_view> LoadedFilesSet;
     Path MainFile;
     Path Directory;
-    ConfigCustomMap CustomMap;
+    ConfigCustom Custom;
+    ConfigPlugin *CurrPlugin = nullptr;
     vector<function<void(const string &)>> CustomVarCbs;
     vector<function<void(int, bool)>> CustomDeviceCbs;
 } GConfig;
@@ -35,7 +36,7 @@ void ConfigCreateResets(const SharedPtr<ImplMapping> &mapping, ImplCond *cond) {
 }
 
 bool ConfigLoadInputLine(const string &line) {
-    auto cfg = ConfigReadInputLine(GConfig.CustomMap, line);
+    auto cfg = ConfigReadInputLine(GConfig.Custom, line);
     if (!cfg) {
         return false;
     }
@@ -117,9 +118,7 @@ bool ConfigLoadInputLine(const string &line) {
     return true;
 }
 
-void ConfigLoadDevice(const ConfigCustomMap &custom, const string &idxStr, const string &type) {
-    int userIdx = ConfigReadDeviceIdx(idxStr);
-
+void ConfigLoadDevice(ConfigCustom &custom, user_t userIdx, const string &type) {
     ImplUser *user = ImplGetUser(userIdx, true);
     if (user) {
         ConfigDevice typeId = ConfigReadDeviceName(custom, type);
@@ -149,7 +148,19 @@ void ConfigLoadDevice(const ConfigCustomMap &custom, const string &idxStr, const
         }
         user->Connected = true;
     } else {
-        LOG_W << "ERROR: Invalid user number following Device: " << userIdx << END;
+        LOG_W << "ERROR: User must be specified for Device" << END;
+    }
+}
+
+void ConfigSetDeviceStickShape(user_t userIdx, const string &value) // TODO - generalize this all..
+{
+    auto shape = ConfigReadStickShape(value);
+
+    ImplUser *user = ImplGetUser(userIdx, true);
+    if (user) {
+        user->StickShape = shape;
+    } else {
+        LOG_W << "ERROR: User must be specified for Device info" << END;
     }
 }
 
@@ -157,13 +168,17 @@ void ConfigLoadInclude(const string &val) {
     ConfigLoadFrom(ConfigReadInclude(val));
 }
 
-void ConfigLoadPlugin(const string &val) {
-    Path path;
-    string name = ConfigReadPlugin(val, GConfig.Directory, &path);
+bool ConfigLoadPlugin(ConfigPlugin *plugin, const string &name) {
+    Path path = ConfigReadPlugin(name, GConfig.Directory);
+    if (!path) {
+        return false;
+    }
 
     path = PathCombine(path, PathGetBaseNamePtr(PathGetDirName(PathGetModulePath(G.HInstance))));
 
     path = PathCombine(path, PathFromStr((name + "_hook.dll").c_str()));
+
+    GConfig.CurrPlugin = plugin;
 
     if (G.Debug) {
         LOG << "Loading plugin: " << path << END;
@@ -172,26 +187,33 @@ void ConfigLoadPlugin(const string &val) {
     // Load it immediately, to allow registering config extensions
     // (note: this means calling dll load from dllmain, which is not legal but seems-ok)
     // (only alternative I see is a complicated second injection, to avoid config loading from dllmain)
-    if (!LoadLibraryExW(path, nullptr, 0)) {
+    bool ok = LoadLibraryExW(path, nullptr, 0);
+    if (!ok) {
         LOG_W << "ERROR: Failed loading plugin: " << path << " due to: " << GetLastError() << END;
     }
+
+    GConfig.CurrPlugin = nullptr;
+    return ok;
 }
 
 void ConfigLoadVarLine(const string &line, intptr_t idx) {
     ConfigReadVarLine(
-        GConfig.CustomMap, line, idx, [](auto, bool value, bool *ptr) { *ptr = value; }, [&line](ConfigVar var, const string &rest, const string &idxStr) {
+        GConfig.Custom, line, idx, [](auto, bool value, bool *ptr) { *ptr = value; }, [&line](ConfigVar var, const string &rest, user_t user) {
         switch (var)
         {
         case ConfigVar::Include:
             ConfigLoadInclude (rest);
             break;
 
-        case ConfigVar::Plugin:
-            ConfigLoadPlugin (rest);
+        case ConfigVar::Device:
+            ConfigLoadDevice (GConfig.Custom, user, rest);
             break;
 
-        case ConfigVar::Device:
-            ConfigLoadDevice (GConfig.CustomMap, idxStr, rest);
+        case ConfigVar::StickShape:
+            ConfigSetDeviceStickShape (user, rest);
+            break;
+
+        case ConfigVar::Comment:
             break;
 
         default:
@@ -274,6 +296,18 @@ static void ConfigSendGlobalEvents(bool added, bool onInit = false) {
 constexpr const wchar_t *ConfigEmpty = L"<empty>.ini";
 constexpr const wchar_t *ConfigDefault = L"_default.ini";
 
+static void ConfigFinalizeUser(int idx, ImplUser *user) {
+    if (user->Connected) {
+        if (!user->DeviceSpecified) {
+            user->Device = new XDeviceIntf(idx);
+        }
+
+        if (user->StickShape == ImplStickShape::Default && user->Device) {
+            user->StickShape = user->Device->DefaultStickShape();
+        }
+    }
+}
+
 static void ConfigReloadNoUpdate() {
     ConfigReset();
 
@@ -286,9 +320,7 @@ static void ConfigReloadNoUpdate() {
     // for now, we leak any old Device (this is relied upon by e.g. ThreadPoolNotificationRegister, could refcount?)
     // (note: the device is accessed from other threads for short durations as well...)
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
-        if (G.Users[i].Connected && !G.Users[i].DeviceSpecified) {
-            G.Users[i].Device = new XDeviceIntf(i);
-        }
+        ConfigFinalizeUser(i, &G.Users[i]);
     }
 }
 
@@ -307,47 +339,63 @@ void ConfigReload() {
     UpdateAll();
 }
 
-void ConfigRegisterCustomKey(ConfigCustomMap &custom, const string &name, int index) {
-    string nameLow = ConfigNormStr(name);
-    custom.Keys[nameLow] = index;
+void ConfigLoad(const wchar_t *name) {
+    GConfig.MainFile = PathCombineExt(name, L"ini");
+    ConfigReload();
 }
 
-int ConfigRegisterCustomKey(const char *name, function<void(const InputValue &)> &&cb) {
+bool ConfigCheckCurrPlugin() {
+    if (GConfig.CurrPlugin) {
+        return true;
+    }
+
+    Fatal("can only be called in plugin dllmain");
+    return false;
+}
+
+int ConfigRegisterCustomKey(const char *name, function<void(const InputValue &, const ImplMapping *)> &&cb) {
+    if (!ConfigCheckCurrPlugin()) {
+        return -1;
+    }
+
     int index = (int)G.CustomKeys.size();
 
     auto custKey = UniquePtr<ImplCustomKey>::New();
     custKey->Callback = move(cb);
     G.CustomKeys.push_back(move(custKey));
 
-    ConfigRegisterCustomKey(GConfig.CustomMap, name, index);
-    return index;
-}
+    string nameLow = ConfigNormStr(name);
+    GConfig.CurrPlugin->Keys[nameLow] = index;
 
-void ConfigRegisterCustomVar(ConfigCustomMap &custom, const char *name, int index) {
-    string nameLow = name;
-    StrToLowerCase(nameLow);
-    custom.Vars[nameLow] = index;
+    return index;
 }
 
 int ConfigRegisterCustomVar(const char *name, function<void(const string &)> &&cb) {
+    if (!ConfigCheckCurrPlugin()) {
+        return -1;
+    }
+
     int index = (int)GConfig.CustomVarCbs.size();
     GConfig.CustomVarCbs.push_back(move(cb));
 
-    ConfigRegisterCustomVar(GConfig.CustomMap, name, index);
+    string nameLow = name;
+    StrToLowerCase(nameLow);
+    GConfig.CurrPlugin->Vars[nameLow] = index;
+
     return index;
 }
 
-void ConfigRegisterCustomDevice(ConfigCustomMap &custom, const char *name, int index) {
-    string nameLow = name;
-    StrToLowerCase(nameLow);
-    custom.Devices[nameLow] = index;
-}
-
 int ConfigRegisterCustomDevice(const char *name, function<void(int, bool)> &&cb) {
+    if (!ConfigCheckCurrPlugin()) {
+        return -1;
+    }
+
     int index = (int)GConfig.CustomDeviceCbs.size();
     GConfig.CustomDeviceCbs.push_back(move(cb));
 
-    ConfigRegisterCustomDevice(GConfig.CustomMap, name, index);
+    string nameLow = name;
+    StrToLowerCase(nameLow);
+    GConfig.CurrPlugin->Devices[nameLow] = index;
 
     if (index == 0) // first time
     {

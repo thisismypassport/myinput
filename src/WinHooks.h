@@ -360,7 +360,14 @@ HHOOK WINAPI SetWindowsHookEx_Hook(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DW
         }
         return handle;
     }
-    return SetWindowsHookEx_Real(idHook, lpfn, hmod, dwThreadId);
+
+    HHOOK hook = SetWindowsHookEx_Real(idHook, lpfn, hmod, dwThreadId);
+
+    if (hook && idHook == WH_GETMESSAGE) {
+        RehookHideCursor(); // make sure we're called first!
+    }
+
+    return hook;
 }
 
 HHOOK WINAPI SetWindowsHookExA_Hook(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DWORD dwThreadId) {

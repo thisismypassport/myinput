@@ -17,6 +17,7 @@ int MsgBox(int opts, const wchar_t *title, const wchar_t *format, ...) {
 }
 
 #define Alert(...) (MsgBox(MB_OK | MB_ICONERROR, L"Error", __VA_ARGS__), (void)0)
+#define Info(...) (MsgBox(MB_OK | MB_ICONINFORMATION, L"Information", __VA_ARGS__), (void)0)
 #define Question(...) (MsgBox(MB_YESNO | MB_ICONQUESTION, L"Question", __VA_ARGS__) == IDYES)
 #define Confirm(...) (MsgBox(MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2, L"Confirmation", __VA_ARGS__) == IDYES)
 

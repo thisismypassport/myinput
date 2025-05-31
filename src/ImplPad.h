@@ -144,7 +144,7 @@ static bool ImplHandleTriggerModifierChange(ImplTriggerState &state, bool down, 
     return changed;
 }
 
-static bool ImplHandleAxesChangeGlobal(ImplAxisState &axisState, ImplAxisState &otherAxisState) {
+static bool ImplHandleAxesChangeGlobal(ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplUser *user) {
     double extent = Clamp(axisState.Extent, -1.0, 1.0);
     double otherExtent = Clamp(otherAxisState.Extent, -1.0, 1.0);
     constexpr double epsilon = 0.000001;
@@ -164,11 +164,15 @@ static bool ImplHandleAxesChangeGlobal(ImplAxisState &axisState, ImplAxisState &
     extent = Clamp(extent * axisState.RotateMultiplier * axisState.ModifierStrength.Get(), -1.0, 1.0);
     otherExtent = Clamp(otherExtent * otherAxisState.RotateMultiplier * otherAxisState.ModifierStrength.Get(), -1.0, 1.0);
 
-    // convert square coords -> circle coords (not a great way of doing it, but others are bad too...)
-    if (abs(extent) > epsilon && abs(otherExtent) > epsilon) {
-        double norm = max(abs(extent), abs(otherExtent)) / sqrt(extent * extent + otherExtent * otherExtent);
-        extent *= norm;
-        otherExtent *= norm;
+    switch (user->StickShape) {
+    case ImplStickShape::Circle:
+        // convert square coords -> circle coords (not a great way of doing it, but others are bad too...)
+        if (abs(extent) > epsilon && abs(otherExtent) > epsilon) {
+            double norm = max(abs(extent), abs(otherExtent)) / sqrt(extent * extent + otherExtent * otherExtent);
+            extent *= norm;
+            otherExtent *= norm;
+        }
+        break;
     }
 
     double oldValue = axisState.Value;
@@ -191,7 +195,7 @@ static void ImplResetRotate(ImplAxisState &axisState) {
     axisState.Neg.PrevPressedForRotate = axisState.Neg.Pressed.Get();
 }
 
-static bool ImplHandleAxisChangeGlobal(ImplAxisState &axisState, ImplAxisState &otherAxisState, bool add = false) {
+static bool ImplHandleAxisChangeGlobal(ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplUser *user) {
     if (axisState.Pos.Pressed.Get() != axisState.Pos.PrevPressedForRotate ||
         axisState.Neg.Pressed.Get() != axisState.Neg.PrevPressedForRotate ||
         otherAxisState.Pos.Pressed.Get() != otherAxisState.Pos.PrevPressedForRotate ||
@@ -202,10 +206,11 @@ static bool ImplHandleAxisChangeGlobal(ImplAxisState &axisState, ImplAxisState &
 
     tie(axisState.Extent, axisState.Weight) = axisState.GetStrengthAndWeight();
 
-    return ImplHandleAxesChangeGlobal(axisState, otherAxisState);
+    return ImplHandleAxesChangeGlobal(axisState, otherAxisState, user);
 }
 
-static bool ImplHandleAxisChangeAdd(ImplAxisDirState &state, ImplAxisState &axisState, ImplAxisState &otherAxisState, bool down, double strength) {
+static bool ImplHandleAxisChangeAdd(ImplAxisDirState &state, ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplUser *user,
+                                    bool down, double strength) {
     if (down) {
         if (&state == &axisState.Neg) {
             strength = -strength;
@@ -217,39 +222,39 @@ static bool ImplHandleAxisChangeAdd(ImplAxisDirState &state, ImplAxisState &axis
             otherAxisState.Extent = otherAxisState.Extent / abs(sum);
         }
 
-        ImplHandleAxesChangeGlobal(axisState, otherAxisState);
+        ImplHandleAxesChangeGlobal(axisState, otherAxisState, user);
     } else // reset
     {
         axisState.Extent = 0;
-        ImplHandleAxesChangeGlobal(axisState, otherAxisState);
+        ImplHandleAxesChangeGlobal(axisState, otherAxisState, user);
     }
     return true;
 }
 
-static bool ImplHandleAxisChange(ImplAxisDirState &state, ImplAxisState &axisState, ImplAxisState &otherAxisState,
+static bool ImplHandleAxisChange(ImplAxisDirState &state, ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplUser *user,
                                  bool down, double strength, slot_t slot, bool isAddMapping = false) {
     if (isAddMapping) {
-        return ImplHandleAxisChangeAdd(state, axisState, otherAxisState, down, strength);
+        return ImplHandleAxisChangeAdd(state, axisState, otherAxisState, user, down, strength);
     } else {
         ImplProcessStrengthOutput(state.Pressed, state.PressedStrength, down, strength, slot);
-        return ImplHandleAxisChangeGlobal(axisState, otherAxisState);
+        return ImplHandleAxisChangeGlobal(axisState, otherAxisState, user);
     }
 }
 
-static bool ImplHandleAxisModifierChange(ImplAxisState &axisState, ImplAxisState &otherAxisState,
+static bool ImplHandleAxisModifierChange(ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplUser *user,
                                          bool down, double strength, slot_t slot, ChangedMask *changes) {
     double oldStrength = axisState.ModifierStrength.Get();
     strength = ImplProcessModifierOutput(axisState.Modifier, axisState.ModifierStrength, down, strength, slot);
 
     bool changed = false;
     if (oldStrength != strength) {
-        changed = ImplHandleAxisChangeGlobal(axisState, otherAxisState);
+        changed = ImplHandleAxisChangeGlobal(axisState, otherAxisState, user);
     }
     return changed;
 }
 
 static bool ImplHandleAxisRotatorChange(ImplAxisState &axisState, ImplAxisState &otherAxisState, ImplAxesState &axesState,
-                                        ImplMapping &mapping, bool down, double delta, ChangedMask *changes,
+                                        ImplUser *user, ImplMapping &mapping, bool down, double delta, ChangedMask *changes,
                                         bool c1, bool c2, bool c3, bool c4, bool c5, bool c6, bool c7, bool c8,
                                         double initX, double initY) {
     bool changed = false;
@@ -353,20 +358,20 @@ static bool ImplHandleAxisRotatorChange(ImplAxisState &axisState, ImplAxisState 
             }
         }
 
-        changed |= ImplHandleAxesChangeGlobal(axisState, otherAxisState);
+        changed |= ImplHandleAxesChangeGlobal(axisState, otherAxisState, user);
     } else if (!down && mapping.HasTimer()) {
         mapping.EndTimer();
     }
     return changed;
 }
 
-static bool ImplHandleAxisRotatorModifierChange(ImplAxesState &axesState, bool down, double strength, slot_t slot, ChangedMask *changes) {
+static bool ImplHandleAxisRotatorModifierChange(ImplAxesState &axesState, ImplUser *user, bool down, double strength, slot_t slot, ChangedMask *changes) {
     double oldStrength = axesState.RotateModifierStrength.Get();
     strength = ImplProcessModifierOutput(axesState.RotateModifier, axesState.RotateModifierStrength, down, strength, slot);
 
     bool changed = false;
     if (oldStrength != strength) {
-        changed = ImplHandleAxesChangeGlobal(axesState.X, axesState.Y);
+        changed = ImplHandleAxesChangeGlobal(axesState.X, axesState.Y, user);
     }
     return changed;
 }
@@ -379,7 +384,7 @@ static bool ImplUpdateMotion(ImplMotionState &motion, DWORD time) {
         auto newSpeed = (dim->NewValue - dim->OldValue) / deltaTime;
         auto newAccel = (newSpeed - dim->Speed) / deltaTime;
 
-        if (dim->NewValue != dim->OldValue || newSpeed != dim->Speed || newAccel != dim->Accel) {
+        if (dim->NewValue != dim->OldValue || newSpeed != dim->Speed || newAccel != dim->Accel || newSpeed || newAccel) {
             changed = true;
         }
 
@@ -393,6 +398,12 @@ static bool ImplUpdateMotion(ImplMotionState &motion, DWORD time) {
     motion.X.GAccel -= yaxis.X;
     motion.Y.GAccel -= yaxis.Y;
     motion.Z.GAccel -= yaxis.Z;
+
+    if (changed) {
+        motion.IdleTime = time;
+    } else if (time - motion.IdleTime < 1000) { // just one idle event isn't enough (how many? forever?)
+        changed = true;
+    }
 
     motion.PrevTime = time;
     return changed;

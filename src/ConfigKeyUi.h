@@ -22,15 +22,21 @@ class ConfigKeyPanel : public Panel {
         }
 
         void AddPlugins() {
-            for (auto &plugin : GPlugins.Plugins) {
-                auto node = mTree->Add(nullptr, PathFromStr(("Plugin '" + plugin.Name + "'").c_str()));
-                plugin.TempUserData = node;
-            }
+            AddPluginNodesToTree(mTree);
 
             int keyIdx = 0;
-            for (auto &key : GPlugins.Keys) {
-                auto node = (TreeNode)GPlugins.Plugins[key.PluginIdx].TempUserData;
-                Add(node, MY_VK_CUSTOM_START + (keyIdx++));
+            for (auto &keyData : GPlugins.Keys) {
+                key_t key = MY_VK_CUSTOM_START + (keyIdx++);
+
+                if ((mParent->mFlags & CONFIG_KEY_UI_INPUT) && !keyData.IsInput) {
+                    continue;
+                }
+                if ((mParent->mFlags & CONFIG_KEY_UI_OUTPUT) && !keyData.IsOutput) {
+                    continue;
+                }
+
+                auto node = (TreeNode)GPlugins.Plugins[keyData.PluginIdx].TempUserData;
+                Add(node, key);
             }
         }
 
@@ -105,17 +111,21 @@ class ConfigKeyPanel : public Panel {
         }
     };
 
-    function<void(key_t, MyVkType, user_t)> mChanged;
+    function<void(key_t, MyVkType, user_t, SharedPtr<string>)> mChanged;
 
     int mFlags = 0;
     key_t mCurrKey = 0;
     MyVkType mCurrKeyType = {};
     user_t mCurrUser = -1;
+    SharedPtr<string> mCurrData;
     EditKey *mKeyEdit = nullptr;
     DropDownPopup *mKeyDropDown = nullptr;
     KeyPopupWindow *mKeyPopup = nullptr;
+    Dynamic *mDataDynamic = nullptr;
+    Layout *mUserLayout = nullptr;
     DropDownList *mUserDropDown = nullptr;
     EditInt<user_t> *mUserEdit = nullptr;
+    DropDownEditLine *mConfigEdit = nullptr;
 
     const wchar_t *GetKeyDesc(key_t key) {
         switch (key) {
@@ -138,31 +148,60 @@ class ConfigKeyPanel : public Panel {
         }
     }
 
-    void OnChange() {
-        mChanged(mCurrKey, mCurrKeyType, mCurrKeyType.OfUser ? mCurrUser : -1);
+    Control *GetCurrKeyDataUi() {
+        if (mCurrKeyType.OfUser) {
+            return mUserLayout;
+        } else if (mCurrKey == MY_VK_LOAD_CONFIG) {
+            return mConfigEdit;
+        }
+
+        if (mCurrKey >= MY_VK_CUSTOM_START && mCurrKey < MY_VK_CUSTOM_START + (int)GPlugins.Keys.size()) {
+            auto &pluginKey = GPlugins.Keys[mCurrKey - MY_VK_CUSTOM_START];
+            if (pluginKey.HasData) {
+                return mConfigEdit;
+            }
+        }
+
+        return nullptr;
     }
 
-    void UpdateKey(key_t key) { Set(key, mCurrUser); }
-    void UpdateUser(user_t user) { Set(mCurrKey, user); }
+    void OnChange() {
+        Control *dataUi = GetCurrKeyDataUi();
+        mChanged(mCurrKey, mCurrKeyType,
+                 dataUi == mUserLayout ? mCurrUser : -1,
+                 dataUi == mConfigEdit ? mCurrData : nullptr);
+    }
+
+    void UpdateKey(key_t key) { Set(key, mCurrUser, mCurrData); }
+    void UpdateUser(user_t user) { Set(mCurrKey, user, mCurrData); }
 
 public:
-    ConfigKeyPanel(HWND p, intptr_t id, int flags, function<void(key_t key, MyVkType type, user_t user)> &&changed) : Panel(p, id), mChanged(move(changed)), mFlags(flags) {}
+    ConfigKeyPanel(HWND p, intptr_t id, int flags, function<void(key_t key, MyVkType type, user_t user, SharedPtr<string> data)> &&changed) : Panel(p, id), mChanged(move(changed)), mFlags(flags) {}
 
-    void Set(key_t key, user_t user) {
+    void Set(key_t key, user_t user, SharedPtr<string> data) {
         mCurrKey = key;
+        mCurrKeyType = GetKeyType(key);
         mCurrUser = user;
+        mCurrData = data;
 
         mKeyEdit->Set(GetKeyDesc(key));
 
-        mCurrKeyType = GetKeyType(key);
-        mUserDropDown->Show(mCurrKeyType.OfUser);
-        mUserEdit->Show(mCurrKeyType.OfUser && user >= 0);
+        Control *dataUi = GetCurrKeyDataUi();
+        mDataDynamic->SetChild(dataUi);
 
-        if (mCurrKeyType.OfUser) {
+        if (dataUi == mUserLayout) {
+            mUserEdit->Show(user >= 0);
             mUserDropDown->SetSelected(user >= 0, false);
             if (user >= 0) {
                 mUserEdit->Set(user + 1);
             }
+        } else if (dataUi == mConfigEdit) {
+            mConfigEdit->Clear();
+            for (auto &config : ConfigNames.GetNames()) {
+                mConfigEdit->Add(config);
+            }
+
+            mConfigEdit->Set(data ? PathFromStr(data->c_str()) : Path(L""));
         }
     }
 
@@ -199,9 +238,20 @@ public:
         });
         mUserEdit->SetRange(1, IMPL_MAX_USERS);
 
+        mUserLayout = New<Layout>();
+        mUserLayout->AddLeftMiddle(mUserDropDown, -1, 0, 0);
+        mUserLayout->AddLeftMiddle(mUserEdit, 25);
+
+        mConfigEdit = New<DropDownEditLine>([this] {
+            mCurrData = SharedPtr<string>::New(ToStdStr(mConfigEdit->Get()));
+            OnChange();
+        });
+
         auto layout = New<Layout>();
         layout->AddLeftMiddle(mKeyEdit, 150, 0, 0);
         layout->AddLeftMiddle(mKeyDropDown, 15);
+
+        mDataDynamic = New<Dynamic>();
 
         if (mFlags & CONFIG_KEY_UI_VERTICAL) {
             auto vertLayout = New<Layout>();
@@ -209,8 +259,7 @@ public:
             layout = vertLayout;
         }
 
-        layout->AddLeftMiddle(mUserDropDown, -1, 0, 0);
-        layout->AddLeftMiddle(mUserEdit, 25);
+        layout->AddLeftMiddle(mDataDynamic);
         return layout;
     }
 };
@@ -252,7 +301,7 @@ class ConfigCondsPanel : public Panel {
 
                 mCondComplexDrop->SetSelected(state, false);
             } else {
-                mCondKey->Set(cond->Key, cond->User);
+                mCondKey->Set(cond->Key, cond->User, nullptr);
 
                 int state = (cond->State ? 0 : 1) |
                             (cond->Toggle ? 2 : 0);
@@ -347,7 +396,10 @@ public:
         mCondTree->SetOnKey([this](int key) {
             if (key == VK_DELETE) {
                 mDeleteBtn->Click();
+            } else {
+                return false;
             }
+            return true;
         });
 
         mNewKeyBtn = New<SplitButton>(L"New Key", [this] {
@@ -412,7 +464,7 @@ public:
         mCondDynamic = New<Dynamic>();
 
         mCondKey = New<ConfigKeyPanel>(CONFIG_KEY_UI_INPUT | CONFIG_KEY_UI_VERTICAL,
-                                       [this](key_t key, MyVkType type, user_t user) {
+                                       [this](key_t key, MyVkType type, user_t user, SharedPtr<string>) {
                                            ChangeConfigEntry(mConfig, [&](auto) {
                                                mCurrCond->Key = key;
                                                mCurrCond->User = user;
@@ -528,7 +580,7 @@ class ConfigMappingUiPanel : public Panel {
 
     void UpdateEntryOnDestKeyChange(ConfigEditEntry *entry) {
         auto uiInfo = GetUiInfo(entry);
-        if (uiInfo.IsModifier || uiInfo.IsValue) {
+        if (uiInfo.HasTopStrength) {
             entry->Info.HasStrength = true;
             entry->Mapping->Strength = mTopStrengthEdit->Get();
         } else {
@@ -538,7 +590,7 @@ class ConfigMappingUiPanel : public Panel {
     }
 
     Control *OnCreate() {
-        mSrcKey = New<ConfigKeyPanel>(CONFIG_KEY_UI_INPUT, [this](key_t key, MyVkType type, user_t user) {
+        mSrcKey = New<ConfigKeyPanel>(CONFIG_KEY_UI_INPUT, [this](key_t key, MyVkType type, user_t user, SharedPtr<string>) {
             ChangeConfigEntry(mConfig, [&](auto entry) {
                 entry->Mapping->SrcKey = key;
                 entry->Mapping->SrcType = type;
@@ -547,11 +599,12 @@ class ConfigMappingUiPanel : public Panel {
             UpdateKeyDepUi(GetConfigEntry(mConfig));
         });
 
-        mDestKey = New<ConfigKeyPanel>(CONFIG_KEY_UI_OUTPUT, [this](key_t key, MyVkType type, user_t user) {
+        mDestKey = New<ConfigKeyPanel>(CONFIG_KEY_UI_OUTPUT, [this](key_t key, MyVkType type, user_t user, SharedPtr<string> data) {
             ChangeConfigEntry(mConfig, [&](auto entry) {
                 entry->Mapping->DestKey = key;
                 entry->Mapping->DestType = type;
                 entry->Mapping->DestUser = user;
+                entry->Mapping->Data = data;
                 UpdateEntryOnDestKeyChange(entry);
             });
             UpdateKeyDepUi(GetConfigEntry(mConfig));
@@ -611,7 +664,7 @@ class ConfigMappingUiPanel : public Panel {
         });
         mAxisActionDrop->Add(L"Set strength to output. (Default)");
         mAxisActionDrop->Add(L"Add strength to output.");
-        mAxisActionDrop->Add(L"Add strength to output; reset on full release.");
+        mAxisActionDrop->Add(L"Add strength to output; reset on condition end.");
 
         mForwardChk = New<CheckBox>(L"Forward input in addition to output", [this](bool value) {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Mapping->Forward = value; });
@@ -732,8 +785,8 @@ public:
     ConfigMappingUiPanel(HWND parent, intptr_t id, ConfigPanel *panel) : Panel(parent, id), mConfig(panel) {}
 
     void Update(ConfigEditEntry *entry) {
-        mSrcKey->Set(entry->Mapping->SrcKey, entry->Mapping->SrcUser);
-        mDestKey->Set(entry->Mapping->DestKey, entry->Mapping->DestUser);
+        mSrcKey->Set(entry->Mapping->SrcKey, entry->Mapping->SrcUser, nullptr);
+        mDestKey->Set(entry->Mapping->DestKey, entry->Mapping->DestUser, entry->Mapping->Data);
         UpdateKeyDepUi(entry, true);
         mCondPanel->Update(entry);
     }

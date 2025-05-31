@@ -172,7 +172,7 @@ static int ImplKeyboardRepeatTime() {
 }
 
 static BufferListOfSize<sizeof(INPUT)> GImplInputBuffers;
-static ReusableThread GImplInputThread; // separate from dll thread to avoid recursive hook calls
+static ReusableThread GImplInputThread{InputThreadPriority}; // separate from dll thread to avoid recursive hook calls
 
 static DWORD WINAPI ImplSendInputDelayed(void *param) {
     SendInput_Real(1, (INPUT *)param, sizeof(INPUT));

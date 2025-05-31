@@ -178,6 +178,7 @@ struct ImplMotionState {
     ImplMotionDimState RX, RY, RZ; // value is radians
     UserTimer Timer;
     DWORD PrevTime = 0;
+    DWORD IdleTime = 0;
 
     Vector3 XAxis() {
         auto [sy, cy] = SinCos(RY.NewValue);
@@ -248,15 +249,23 @@ struct ImplState {
 
 struct DeviceIntf;
 
+enum class ImplStickShape : uint8_t {
+    Default = 0,
+    Circle,
+    Square,
+};
+
 struct ImplUser {
     ImplState State;
     bool Connected = false;
     bool DeviceSpecified = false;
+    ImplStickShape StickShape = ImplStickShape::Default;
     DeviceIntf *Device = nullptr;
     CallbackList<bool(ImplUser *)> Callbacks;
 
     void Reset() {
         Connected = DeviceSpecified = false;
+        StickShape = ImplStickShape::Default;
         State.Reset();
     }
 };
@@ -264,7 +273,7 @@ struct ImplUser {
 using ImplUserCb = decltype(ImplUser::Callbacks)::CbIter;
 
 struct ImplCond {
-    int Key = 0;
+    key_t Key = 0;
     user_t User = -1;
     bool State = false;
     bool Toggle = false;
@@ -273,8 +282,8 @@ struct ImplCond {
 };
 
 struct ImplMapping {
-    int SrcKey = 0;
-    int DestKey = 0;
+    key_t SrcKey = 0;
+    key_t DestKey = 0;
     MyVkType SrcType = {};
     MyVkType DestType = {};
     user_t SrcUser = -1;
@@ -295,6 +304,7 @@ struct ImplMapping {
     double Strength = 0;
     SharedPtr<ImplMapping> Next;
     SharedPtr<ImplCond> Conds;
+    SharedPtr<string> Data;
     UserTimer Timer;
 
     bool HasTimer() const { return Timer.IsSet(); }
@@ -400,7 +410,7 @@ struct InputValue {
 struct ImplCustomKey {
     ImplInput Key;
     ImplStrengthOutput Strength;
-    function<void(const InputValue &)> Callback;
+    function<void(const InputValue &, const ImplMapping *)> Callback;
 };
 
 struct ImplG {

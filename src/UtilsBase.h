@@ -14,6 +14,7 @@
 #include <new>
 #include <bit>
 #include <ranges>
+#include <array>
 
 #pragma warning(disable : 4995)
 
@@ -24,6 +25,7 @@
 
 using std::mutex;
 using recmutex = std::recursive_mutex;
+using std::array;
 using std::atomic;
 using std::call_once;
 using std::deque;

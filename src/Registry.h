@@ -628,6 +628,10 @@ class RegIfeoKeyDelegatedViaNamedPipe : public RegIfeoKeyDelegated {
         Path regPath = PathCombine(PathGetDirName(PathGetModulePath(nullptr)), L"myinput_register.exe");
         Path regArgs = PathConcatRaw(L"-pipe ", pipeName);
 
+        // since runas checks the zone identifier
+        Path regZoneId = PathConcatRaw(regPath, L":Zone.Identifier");
+        DeleteFileW(regZoneId);
+
         SHELLEXECUTEINFOW exec = {};
         exec.cbSize = sizeof(exec);
         exec.lpVerb = L"runas";

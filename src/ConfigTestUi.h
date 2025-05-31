@@ -35,6 +35,7 @@ struct TestKey {
         Strength,
         Stick,
         Count,
+        Number,
     };
 
     TestSource Src;
@@ -198,7 +199,7 @@ public:
         ((StickDrawing *)ctrlRef)->Set(x, y);
     }
 
-    void AddCount(TestSource src, int vk, const wchar_t *text = NULL) {
+    void AddCount(TestSource src, int vk) {
         TestKey key(src, vk, TestKey::Count);
         auto &ctrlRef = mControls[key];
 
@@ -207,11 +208,28 @@ public:
             auto ctrlLay = New<Layout>(SIZE{});
             ctrlRef = New<EditInt<int>>(0);
             ctrlLay->AddLeftMiddle(ctrlRef, 40);
-            ctrlLay->AddLeftMiddle(New<Label>(text ? text : key.GetText()));
+            ctrlLay->AddLeftMiddle(New<Label>(key.GetText()));
             layout->Add(ctrlLay);
         }
 
         ((EditInt<int> *)ctrlRef)->Add(1);
+    }
+
+    void AddNumber(TestSource src, int vk, const wchar_t *text, double value) {
+        TestKey key(src, vk, TestKey::Number);
+        auto &ctrlRef = mControls[key];
+
+        if (!ctrlRef) {
+            auto layout = GetOrAddLayout(src);
+            auto ctrlLay = New<Layout>(SIZE{});
+            ctrlRef = New<EditFloat<double>>(0);
+            ((EditFloat<double> *)ctrlRef)->SetPrecision(2);
+            ctrlLay->AddLeftMiddle(ctrlRef, 50);
+            ctrlLay->AddLeftMiddle(New<Label>(text));
+            layout->Add(ctrlLay);
+        }
+
+        ((EditFloat<double> *)ctrlRef)->Set(value);
     }
 };
 
@@ -489,9 +507,23 @@ class ConfigTestPanel : public Panel {
             mInputs->AddStick(src, MY_VK_PAD_RTHUMB_UP, L"Gamepad Right Stick", state.RX, state.RY);
         }
 
-        if (motion.X.Pos != user.Motion.X.Pos || motion.Y.Pos != user.Motion.Y.Pos || motion.Z.Pos != user.Motion.Z.Pos ||
-            motion.RX.Pos != user.Motion.RX.Pos || motion.RY.Pos != user.Motion.RY.Pos || motion.RZ.Pos != user.Motion.RZ.Pos) {
-            mInputs->AddCount(src, MY_VK_PAD_MOTION_FAR, L"Gamepad Motion...");
+        if (motion.X.Pos != user.Motion.X.Pos) {
+            mInputs->AddNumber(src, MY_VK_PAD_MOTION_LEFT, L"Gamepad Motion X", motion.X.Pos);
+        }
+        if (motion.Y.Pos != user.Motion.Y.Pos) {
+            mInputs->AddNumber(src, MY_VK_PAD_MOTION_UP, L"Gamepad Motion Y", motion.Y.Pos);
+        }
+        if (motion.Z.Pos != user.Motion.Z.Pos) {
+            mInputs->AddNumber(src, MY_VK_PAD_MOTION_FAR, L"Gamepad Motion Z", motion.Z.Pos);
+        }
+        if (motion.RX.Pos != user.Motion.RX.Pos) {
+            mInputs->AddNumber(src, MY_VK_PAD_MOTION_ROT_LEFT, L"Gamepad Motion Rotate X", motion.RX.Pos);
+        }
+        if (motion.RY.Pos != user.Motion.RY.Pos) {
+            mInputs->AddNumber(src, MY_VK_PAD_MOTION_ROT_UP, L"Gamepad Motion Rotate Y", motion.RY.Pos);
+        }
+        if (motion.RZ.Pos != user.Motion.RZ.Pos) {
+            mInputs->AddNumber(src, MY_VK_PAD_MOTION_ROT_CW, L"Gamepad Motion Rotate Z", motion.RZ.Pos);
         }
 
         user.State = state;

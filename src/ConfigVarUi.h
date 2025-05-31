@@ -56,10 +56,7 @@ class ConfigVariableUiPanel : public Panel {
         }
 
         TreeNode AddPluginsAndDebug() {
-            for (auto &plugin : GPlugins.Plugins) {
-                auto node = mTree->Add(nullptr, PathFromStr(("Plugin '" + plugin.Name + "'").c_str()));
-                plugin.TempUserData = node;
-            }
+            AddPluginNodesToTree(mTree);
 
             int varIdx = 0;
             for (auto &var : GPlugins.Vars) {
@@ -94,7 +91,7 @@ class ConfigVariableUiPanel : public Panel {
             TreeNode dbgParent = nullptr;
 
 #define CONFIG_ON_VAR(cv, pname, desc, name, flags, ptr)                     \
-    if constexpr (flags & CONFIG_VAR_GROUP_DEBUG)                            \
+    if constexpr ((flags) & CONFIG_VAR_GROUP_DEBUG)                          \
         Add(dbgParent ? dbgParent : (dbgParent = AddPluginsAndDebug()), cv); \
     else                                                                     \
         Add(nullptr, cv);
@@ -113,6 +110,8 @@ class ConfigVariableUiPanel : public Panel {
     VarTypePopupWindow *mTypePopup = nullptr;
     Dynamic *mValueDynamic = nullptr;
     CheckBox *mValueCheck = nullptr;
+    StyledLabel *mValueCheckDefault = nullptr;
+    Layout *mValueCheckLayout = nullptr;
     EditLine *mValueEdit = nullptr;
     Layout *mValueEditLayout = nullptr;
     DropDownEditLine *mValueConfig = nullptr;
@@ -145,9 +144,9 @@ class ConfigVariableUiPanel : public Panel {
         switch (var) {
 #define CONFIG_ON_VAR(cv, pname, desc, name, flags, ptr) \
     case cv:                                             \
-        if constexpr (flags & CONFIG_VAR_BOOL)           \
-            return mValueCheck;                          \
-        if constexpr (flags & CONFIG_VAR_STR)            \
+        if constexpr ((flags) & CONFIG_VAR_BOOL)         \
+            return mValueCheckLayout;                    \
+        if constexpr ((flags) & CONFIG_VAR_STR)          \
             return mValueEditLayout;                     \
         break;
 
@@ -160,26 +159,50 @@ class ConfigVariableUiPanel : public Panel {
             return mValueConfigLayout;
         case ConfigVar::Device:
             return mValueDeviceLayout;
+        case ConfigVar::StickShape:
+            return mValueDeviceLayout; // hacky...
         case ConfigVar::Unknown:
             return nullptr;
 
         default:
             if (var >= ConfigVar::CustomStart && GPlugins.Vars[var - ConfigVar::CustomStart].IsBool) {
-                return mValueCheck;
+                return mValueCheckLayout;
             } else {
                 return mValueEditLayout;
             }
         }
     }
 
+    bool GetBoolVariableDefault(ConfigVar var) // dup with SetVariableDefault...
+    {
+        switch (var) {
+#define CONFIG_ON_VAR(cv, pname, desc, name, flags, ptr) \
+    case cv:                                             \
+        if constexpr ((flags) & CONFIG_VAR_BOOL)         \
+            return *(bool *)ptr;                         \
+        break;
+
+            ENUMERATE_CONFIG_VARS(CONFIG_ON_VAR);
+#undef CONFIG_ON_VAR
+
+        default:
+            if (var >= ConfigVar::CustomStart) {
+                auto &pluginVar = GPlugins.Vars[var - ConfigVar::CustomStart];
+                return pluginVar.IsBool && pluginVar.DefaultBool;
+            }
+        }
+        return false;
+    }
+
     void SetVariableDefault(ConfigVar var, ConfigEditEntry *entry) {
         entry->Variable->BoolValue = false;
         entry->Variable->StrValue = "";
+        entry->Variable->UserIdx = -1;
 
         switch (var) {
 #define CONFIG_ON_VAR(cv, pname, desc, name, flags, ptr) \
     case cv:                                             \
-        if constexpr (flags & CONFIG_VAR_BOOL)           \
+        if constexpr ((flags) & CONFIG_VAR_BOOL)         \
             entry->Variable->BoolValue = *(bool *)ptr;   \
         break;
 
@@ -202,6 +225,11 @@ class ConfigVariableUiPanel : public Panel {
             entry->Variable->MiscValue = (uintptr_t)ConfigDevice::XBox;
             entry->Variable->UserIdx = 0;
             break;
+
+        case ConfigVar::StickShape:
+            entry->Variable->MiscValue = (uintptr_t)ImplStickShape::Default;
+            entry->Variable->UserIdx = 0;
+            break;
         }
     }
 
@@ -212,7 +240,10 @@ class ConfigVariableUiPanel : public Panel {
         mValueDynamic = New<Dynamic>();
 
         mValueCheck = New<CheckBox>(L"On", [this](bool value) {
-            ChangeConfigEntry(mConfig, [&](auto entry) { entry->Variable->BoolValue = value; });
+            ChangeConfigEntry(mConfig, [&](auto entry) {
+                entry->Variable->BoolValue = value;
+                mValueCheckDefault->Show(value == GetBoolVariableDefault(mVarType));
+            });
         });
         mValueEdit = New<EditLine>([this] {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Variable->StrValue = ToStdStr(mValueEdit->Get()); });
@@ -220,6 +251,8 @@ class ConfigVariableUiPanel : public Panel {
         mValueConfig = New<DropDownEditLine>([this] {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Variable->StrValue = ToStdStr(mValueConfig->Get()); });
         });
+
+        mValueCheckDefault = New<StyledLabel>(L"(This is the default)", RGB(0xff, 0x80, 0));
 
         mValueDevice = New<DropDownList>([this](int sel) {
             ChangeConfigEntry(mConfig, [&](auto entry) { entry->Variable->MiscValue = (uintptr_t)mValueDevice->GetData(sel); });
@@ -229,6 +262,10 @@ class ConfigVariableUiPanel : public Panel {
         });
         mValueDeviceUser->SetRange(1, IMPL_MAX_USERS);
 
+        mValueCheckLayout = New<Layout>();
+        mValueCheckLayout->AddLeft(mValueCheck);
+        mValueCheckLayout->AddLeft(mValueCheckDefault);
+
         mValueEditLayout = New<Layout>();
         mValueEditLayout->AddLeft(mValueEdit, 250);
 
@@ -236,7 +273,7 @@ class ConfigVariableUiPanel : public Panel {
         mValueConfigLayout->AddLeft(mValueConfig, 250);
 
         mValueDeviceLayout = New<Layout>();
-        mValueDeviceLayout->AddLeftMiddle(mValueDevice, 175);
+        mValueDeviceLayout->AddLeftMiddle(mValueDevice, 200);
         mValueDeviceLayout->AddLeftMiddle(New<Label>(L"for gamepad #"), -1, 0, 0);
         mValueDeviceLayout->AddLeftMiddle(mValueDeviceUser, 25);
 
@@ -270,8 +307,22 @@ class ConfigVariableUiPanel : public Panel {
         int devIdx = 0;
         for (auto &dev : GPlugins.Devices) {
             add(ConfigDevice::CustomStart + (devIdx++),
-                (ToStdWStr("(Plugin '" + GPlugins.Plugins[dev.PluginIdx].Name + "') ") + dev.Description).c_str());
+                (dev.Description + ToStdWStr(" (Plugin '" + GPlugins.Plugins[dev.PluginIdx].Name + "')")).c_str());
         }
+    }
+
+    void AddStickShapes(DropDownList *shapes, ImplStickShape currShape) // TODO: generalize...
+    {
+        auto add = [&](ImplStickShape shape, const wchar_t *desc) {
+            int idx = shapes->Add(desc, (void *)shape);
+            if (shape == currShape) {
+                shapes->SetSelected(idx, false);
+            }
+        };
+
+#define CONFIG_ON_SHAPE(cv, pname, desc, name, ...) add(cv, desc);
+        ENUMERATE_STICK_SHAPES(CONFIG_ON_SHAPE);
+#undef CONFIG_ON_SHAPE
     }
 
     void UpdateType(ConfigEditEntry *entry, ConfigVar var, bool action = true) {
@@ -281,8 +332,9 @@ class ConfigVariableUiPanel : public Panel {
         Control *varUi = GetVariableUi(var);
         mValueDynamic->SetChild(varUi);
 
-        if (varUi == mValueCheck) {
+        if (varUi == mValueCheckLayout) {
             mValueCheck->Set(entry->Variable->BoolValue);
+            mValueCheckDefault->Show(entry->Variable->BoolValue == GetBoolVariableDefault(var));
         } else if (varUi == mValueEditLayout) {
             mValueEdit->Set(PathFromStr(entry->Variable->StrValue.c_str()));
         } else if (varUi == mValueConfigLayout) {
@@ -294,7 +346,11 @@ class ConfigVariableUiPanel : public Panel {
             mValueConfig->Set(PathFromStr(entry->Variable->StrValue.c_str()));
         } else if (varUi == mValueDeviceLayout) {
             mValueDevice->Clear();
-            AddDevices(mValueDevice, (ConfigDevice)entry->Variable->MiscValue);
+            if (var == ConfigVar::Device) {
+                AddDevices(mValueDevice, (ConfigDevice)entry->Variable->MiscValue);
+            } else if (var == ConfigVar::StickShape) {
+                AddStickShapes(mValueDevice, (ImplStickShape)entry->Variable->MiscValue);
+            }
 
             mValueDeviceUser->Set(entry->Variable->UserIdx + 1);
         }

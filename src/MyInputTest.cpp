@@ -1940,6 +1940,16 @@ void MeasureLatencyInMsg() {
     }
 }
 
+void WasteCpu() {
+    SYSTEM_INFO info = GetOutput(GetSystemInfo);
+    for (DWORD i = 0; i < info.dwNumberOfProcessors * 2; i++) {
+        CreateThread([] {
+            while (true) {
+            }
+        });
+    }
+}
+
 bool GetCIM() {
     return GetOutput(GetCurrentInputMessageSource).originId == IMO_INJECTED;
 }
@@ -2945,11 +2955,11 @@ void ReadWmi(bool print, bool printAll) {
 void *gTestKey = nullptr;
 void *gTestVar = nullptr;
 
-void OnTestKey(bool down, double strength, unsigned long time, void *data) {
-    printf("test key %s (%f, %d)\n", down ? "DOWN" : "UP", strength, time);
+void OnTestKey(const MyInputHook_KeyInfo *info, void *data) {
+    printf("test key %s (%f, %d)\n", info->Down ? "DOWN" : "UP", info->Strength, info->Time);
 
     // hook the output back into the input, just for testing.
-    MyInputHook_UpdateCustomKey(gTestKey, down, strength, time);
+    MyInputHook_UpdateCustomKey(gTestKey, info);
 }
 
 void OnTestVar(const char *value, void *data) {
@@ -3022,7 +3032,6 @@ int main(int argc, char **argv) {
     Args args;
     BOOL_ARG(loadHook, "hook");
     STR_ARG(hookConfig, "hook-config");
-    BOOL_ARG(hookTest, "hook-test");
     BOOL_ARG(testWindow, "test-win");
     INT_ARG(testWindowCount, "test-win-count", 1);
     BOOL_ARG(visualizeWindow, "vis-win");
@@ -3069,6 +3078,7 @@ int main(int argc, char **argv) {
     G_BOOL_ARG(gStressDevice, "stress-device");
     G_BOOL_ARG(gStressDeviceCommunicate, "stress-device-comm");
     BOOL_ARG(measureLatency, "measure-latency");
+    BOOL_ARG(wasteCpu, "waste-cpu");
 
     G_BOOL_ARG(gPrintGamepad, "print-pad");
     G_BOOL_ARG(gPrintKeyboard, "print-keys");
@@ -3123,6 +3133,7 @@ int main(int argc, char **argv) {
         Alert(L"Hook not loaded in child!");
     }
 
+#if ZERO // TODO - create dll, or just don't bother
     if (hookTest) {
         MyInputHook_PostInDllThread([](void *) {
             gTestKey = MyInputHook_RegisterCustomKey("Test", OnTestKey, nullptr);
@@ -3131,6 +3142,7 @@ int main(int argc, char **argv) {
         },
                                     nullptr);
     }
+#endif
 
     CreateNotifyWindow();
 
@@ -3178,6 +3190,10 @@ int main(int argc, char **argv) {
 
     if (measureLatency) {
         MeasureLatency();
+    }
+
+    if (wasteCpu) {
+        WasteCpu();
     }
 
     if (readWmi) {

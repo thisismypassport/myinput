@@ -138,8 +138,9 @@ static LRESULT CALLBACK MouseCaptureHook(int nCode, WPARAM wParam, LPARAM lParam
 
             if (start || changed ||
                 (activeWindow && msg->hwnd == activeWindow &&
-                 (msg->message == WM_SIZE || msg->message == WM_MOVE || msg->message == WM_MOUSEMOVE ||
-                  (msg->message == WM_NULL && msg->lParam == (LPARAM)MouseCaptureHook)))) {
+                 (msg->message == WM_SIZE || msg->message == WM_MOVE)) ||
+                (activeWindow && msg->message == WM_MOUSEMOVE)) // of any window
+            {
                 MouseCaptureUpdate(activeWindow, start || changed || msg->message != WM_MOUSEMOVE);
             }
         }
@@ -187,9 +188,17 @@ static void UpdateHideCursor() {
         if (captureThread) {
             lock_guard<mutex> lock(GCapture.HooksMutex);
             HHOOK hook = SetWindowsHookExW_Real(WH_GETMESSAGE, MouseCaptureHook, nullptr, captureThread);
-            PostThreadMessageW(captureThread, WM_NULL, 0, (LPARAM)MouseCaptureHook); // hide immediately
+            PostThreadMessageW(captureThread, WM_NULL, 0, 0); // ensure hook gets called immediately
             GCapture.Hooks.push_back({captureThread, hook});
         }
+    }
+}
+
+static void RehookHideCursor() {
+    lock_guard<mutex> lock(GCapture.HooksMutex);
+    for (auto &info : GCapture.Hooks) {
+        UnhookWindowsHookEx_Real(info.HHook);
+        info.HHook = SetWindowsHookExW_Real(WH_GETMESSAGE, MouseCaptureHook, nullptr, info.Thread);
     }
 }
 

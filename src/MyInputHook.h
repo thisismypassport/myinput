@@ -5,6 +5,18 @@
 #define MYINPUT_HOOK_DLL_DECLSPEC __declspec(dllimport)
 #endif
 
+struct MyInputHook_KeyInfo {
+    int Flags;          // MyInputHook_KeyFlags
+    bool Down;          // always set
+    unsigned long Time; // always set
+    double Strength;    // always set
+    const char *Data;   // only set if .._Has_Data
+};
+
+enum MyInputHook_KeyFlags {
+    MyInputHook_KeyFlag_Has_Data = 0x1,
+};
+
 enum MyInputHook_InStateType {
     MyInputHook_InState_Basic_Type = 1,
     MyInputHook_InState_Motion_Type = 101,
@@ -56,24 +68,24 @@ MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_PostInDllThread(void (*cb)(void *data
 // Asserts that the calling thread is the dll thread or dllmain
 MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_AssertInDllThread();
 
-// Must be called from dllmain
-// Registers a custom key named 'name' (as it'd appear in the config file: <name> : <...> and/or <...> : <name>)
+// Must be called from dllmain of plugin
+// Registers a custom key named 'name' (as it'd appear in the config file: <plugin>/<name> : <...> and/or <...> : <plugin>/<name>)
 // 'cb' is called from dll thread whenever the key's state changes
 // Returns an opaque identifier of the custom key
-MYINPUT_HOOK_DLL_DECLSPEC void *MyInputHook_RegisterCustomKey(const char *name, void (*cb)(bool down, double strength, unsigned long time, void *data), void *data);
+MYINPUT_HOOK_DLL_DECLSPEC void *MyInputHook_RegisterCustomKey(const char *name, void (*cb)(const MyInputHook_KeyInfo *info, void *data), void *data);
 
 // Must be called from dll thread
 // Updates the state of a custom key, identified by 'customKeyObj' (return value of MyInputHook_RegisterCustomKey)
-MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double strength, unsigned long time);
+MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_UpdateCustomKey(void *customKeyObj, const MyInputHook_KeyInfo *info);
 
-// Must be called from dllmain
-// Registers a custom variable named 'name' (as it's appear in the config file: !<name> = <value>)
+// Must be called from dllmain of plugin
+// Registers a custom variable named 'name' (as it's appear in the config file: !<plugin>/<name> = <value>)
 // 'cb' is called from dllmain or dll thread when the variable is encountered in the config, with its value as the parameter
 // Returns an opaque identifier of the custom variable
 MYINPUT_HOOK_DLL_DECLSPEC void *MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const char *value, void *data), void *data);
 
-// Must be called from dllmain
-// Registers a custom device named 'name' (as it'd appear in the config file: !Device<i> <name>)
+// Must be called from dllmain of plugin
+// Registers a custom device named 'name' (as it'd appear in the config file: !Device<i> <plugin>/<name>)
 // 'cb' is called from dllmain or dll thread whenever the device is added to or removed from a user
 // Returns an opaque identifier of the custom device
 MYINPUT_HOOK_DLL_DECLSPEC void *MyInputHook_RegisterCustomDevice(const char *name, void (*cb)(int userIdx, bool added, void *data), void *data);

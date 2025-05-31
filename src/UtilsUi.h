@@ -362,6 +362,14 @@ protected:
         PostMessageW(::GetParent(mControl), WM_APP, (WPARAM) new function<void()>(move(func)), true);
     }
 
+    void TrackMouseLeave(bool on) {
+        TRACKMOUSEEVENT ev = {};
+        ev.cbSize = sizeof ev;
+        ev.dwFlags = TME_LEAVE | (on ? 0 : TME_CANCEL);
+        ev.hwndTrack = mControl;
+        TrackMouseEvent(&ev);
+    }
+
     friend class PopupMenu;
     friend class Shortcuts;
 
@@ -530,7 +538,7 @@ public:
     }
 
     SIZE GetSize(SizeType type) override {
-        SIZE size = HwndBase::GetSize(type);
+        SIZE size = {};
         if (mType == SepType::Horz) {
             size.cy = 2;
         } else if (mType == SepType::Vert) {
@@ -989,6 +997,7 @@ class EditFloat : public EditNumberBase {
 
     function<void(TFloat)> mChanged;
     TFloat mMin = 0, mMax = 0, mStep = 0;
+    int mPrecision = -1;
 
     void OnChange() override {
         if (mChanged) {
@@ -1000,7 +1009,7 @@ public:
     EditFloat(HWND parent, intptr_t id, function<void(TFloat)> &&changed = {}) : EditNumberBase(parent, id, 0), mChanged(move(changed)) {
         EditNumberBase::SetRange(0, 100);
         EditNumberBase::Set(50);
-        SetRange(numeric_limits<TFloat>::min(), numeric_limits<TFloat>::max(), 1);
+        SetRange(numeric_limits<TFloat>::lowest(), numeric_limits<TFloat>::max(), 1);
     }
 
     EditFloat(HWND parent, intptr_t id, TFloat value, function<void(TFloat)> &&changed = {}) : EditFloat(parent, id, move(changed)) { Set(value); }
@@ -1009,9 +1018,15 @@ public:
         mMin = min, mMax = max, mStep = step;
     }
 
+    void SetPrecision(int precision) { mPrecision = precision; }
+
     void Set(TFloat value) {
         value = Clamp(value, mMin, mMax);
-        mBuddy.Set(StrFromValue<wchar_t>(value, std::chars_format::general, std::numeric_limits<TFloat>::digits10).c_str());
+        if (mPrecision >= 0) {
+            mBuddy.Set(StrFromValue<wchar_t>(value, std::chars_format::fixed, mPrecision).c_str());
+        } else {
+            mBuddy.Set(StrFromValue<wchar_t>(value, std::chars_format::general, std::numeric_limits<TFloat>::digits10).c_str());
+        }
     }
 
     TFloat Get() {
@@ -1457,7 +1472,7 @@ enum class ClickType {
 class ListViewBase : public HwndBase {
     function<void(int, bool)> mCheckAction;
     function<void(int, int, bool, bool)> mClickAction;
-    function<void(int)> mKeyAction;
+    function<bool(int)> mKeyAction;
     function<void()> mRectChangedAction;
     int mResizableColumn = -1;
 
@@ -1470,10 +1485,8 @@ class ListViewBase : public HwndBase {
             mClickAction(info->iItem, info->iSubItem, right, dblclk);
         }
     }
-    void DoKey(int vk) {
-        if (mKeyAction) {
-            mKeyAction(vk);
-        }
+    bool DoKey(int vk) {
+        return mKeyAction ? mKeyAction(vk) : false;
     }
 
 protected:
@@ -1524,7 +1537,7 @@ public:
     void SetOnClick(function<void(int idx, int colIdx, bool right, bool dblclk)> &&action) {
         mClickAction = move(action);
     }
-    void SetOnKey(function<void(int key)> &&action) {
+    void SetOnKey(function<bool(int key)> &&action) {
         mKeyAction = move(action);
     }
     void SetOnRectChanged(function<void()> &&action) {
@@ -1663,7 +1676,7 @@ public:
         } else if (header->code == NM_RETURN) {
             DoKey(VK_RETURN);
         } else if (header->code == LVN_KEYDOWN) {
-            DoKey(((NMLVKEYDOWN *)header)->wVKey);
+            *ptrResult = DoKey(((NMLVKEYDOWN *)header)->wVKey) ? 1 : 0;
         }
     }
 };
@@ -1754,7 +1767,7 @@ class TreeViewBase : public HwndBase {
     function<void(TreeNode, MaybeBool)> mPartialCheckAction;
     function<MaybeBool(TreeNode, MaybeBool)> mPartialToggle;
     function<void(TreeNode, bool, bool)> mClickAction;
-    function<void(int)> mKeyAction;
+    function<bool(int)> mKeyAction;
 
     int StateToChecked(int state) { return ((state >> 12) & 3) - 1; }
     int CheckedToState(bool checked) { return (checked ? 2 : 1) << 12; }
@@ -1777,10 +1790,8 @@ class TreeViewBase : public HwndBase {
             mClickAction(node, right, dblclk);
         }
     }
-    void DoKey(int vk) {
-        if (mKeyAction) {
-            mKeyAction(vk);
-        }
+    bool DoKey(int vk) {
+        return mKeyAction ? mKeyAction(vk) : false;
     }
 
 protected:
@@ -1834,7 +1845,7 @@ public:
     void SetOnClick(function<void(TreeNode node, bool right, bool dblclk)> &&action) {
         mClickAction = move(action);
     }
-    void SetOnKey(function<void(int key)> &&action) {
+    void SetOnKey(function<bool(int key)> &&action) {
         mKeyAction = move(action);
     }
 
@@ -2043,7 +2054,7 @@ public:
         } else if (header->code == NM_RETURN) {
             DoKey(VK_RETURN);
         } else if (header->code == TVN_KEYDOWN) {
-            DoKey(((NMTVKEYDOWN *)header)->wVKey);
+            *ptrResult = DoKey(((NMTVKEYDOWN *)header)->wVKey) ? 1 : 0;
         }
     }
 };
@@ -2165,11 +2176,21 @@ public:
     }
 };
 
+class Keyboard {
+public:
+    static int Modifiers(int vk = 0) {
+        return (GetKeyState(VK_SHIFT) < 0 && vk != VK_SHIFT ? FSHIFT : 0) |
+               (GetKeyState(VK_CONTROL) < 0 && vk != VK_CONTROL ? FCONTROL : 0) |
+               (GetKeyState(VK_MENU) < 0 && vk != VK_MENU ? FALT : 0);
+    }
+};
+
 class EditKey : public EditLine {
     UniquePtr<ProgressBar> mProgressBar;
     function<void(int, int, int, int)> mVkAction;
     function<void(int, int)> mWheelAction;
     tuple<int, int, int> mPrevVk = {};
+    bool mTrackMouseLeave = false;
 
     void Abort() {
         mPrevVk = {};
@@ -2188,7 +2209,7 @@ class EditKey : public EditLine {
             }
         } else {
             if (mPrevVk == vkTuple && !mProgressBar && mVkAction) {
-                mVkAction(vk, scan, ext, GetModifierMask(vk));
+                mVkAction(vk, scan, ext, Keyboard::Modifiers(vk));
             }
             Abort();
         }
@@ -2202,12 +2223,6 @@ class EditKey : public EditLine {
 
         Abort();
         return 0;
-    }
-
-    int GetModifierMask(int vk) {
-        return (GetKeyState(VK_SHIFT) < 0 && vk != VK_SHIFT ? LVKF_SHIFT : 0) |
-               (GetKeyState(VK_CONTROL) < 0 && vk != VK_CONTROL ? LVKF_CONTROL : 0) |
-               (GetKeyState(VK_MENU) < 0 && vk != VK_MENU ? LVKF_ALT : 0);
     }
 
     void StartProgressIfNeeded(int vk) {
@@ -2227,6 +2242,11 @@ class EditKey : public EditLine {
             mProgressBar->Set(1);
 
             SetTimer(mControl, (UINT_PTR)this, USER_TIMER_MINIMUM, nullptr);
+
+            if (vk == VK_LBUTTON) {
+                TrackMouseLeave(true);
+                mTrackMouseLeave = true;
+            }
             break;
         }
     }
@@ -2235,6 +2255,11 @@ class EditKey : public EditLine {
         if (mProgressBar) {
             KillTimer(mControl, (UINT_PTR)this);
             mProgressBar = nullptr;
+
+            if (mTrackMouseLeave) {
+                TrackMouseLeave(false);
+                mTrackMouseLeave = false;
+            }
         }
     }
 
@@ -2271,6 +2296,12 @@ class EditKey : public EditLine {
         case WM_XBUTTONUP:
             return OnVk(msg != WM_XBUTTONUP, HIWORD(wParam) == XBUTTON1 ? VK_XBUTTON1 : VK_XBUTTON2);
 
+        case WM_MOUSELEAVE:
+            if (mTrackMouseLeave) {
+                Abort();
+            }
+            break;
+
         case WM_MOUSEWHEEL:
             return OnWheel(0, (short)HIWORD(wParam));
         case WM_MOUSEHWHEEL:
@@ -2282,7 +2313,7 @@ class EditKey : public EditLine {
                 if (mProgressBar->Done()) {
                     auto [vk, scan, ext] = mPrevVk;
                     if (mVkAction) {
-                        mVkAction(vk, scan, ext, GetModifierMask(vk));
+                        mVkAction(vk, scan, ext, Keyboard::Modifiers(vk));
                     }
                     Abort();
                 }
@@ -2351,6 +2382,10 @@ public:
 
             OnChildResize();
         }
+    }
+
+    Control *InitialFocus() override {
+        return mCurrent ? mCurrent->InitialFocus() : nullptr;
     }
 
     SIZE GetSize(SizeType type) override {
@@ -2495,6 +2530,8 @@ public:
             mAction(GetSelected());
         }
     }
+
+    Control *InitialFocus() override { return this->mBuddy.InitialFocus(); }
 };
 
 class UnionTab : public TabBase<Union> {
@@ -3255,11 +3292,11 @@ public:
     Shortcuts(HWND, intptr_t) {}
     ~Shortcuts() { DestroyAcceleratorTable(mAccel); }
 
-    void Add(HwndBase *dest, int key, bool ctrl = false, bool shift = false, bool alt = false) {
+    void Add(HwndBase *dest, int key, int mods = 0) {
         ACCEL accel;
         accel.cmd = dest->GetId();
         accel.key = key;
-        accel.fVirt = FVIRTKEY | (ctrl ? FCONTROL : 0) | (shift ? FSHIFT : 0) | (alt ? FALT : 0);
+        accel.fVirt = FVIRTKEY | mods;
         mAccels.push_back(accel);
         Invalidate();
     }
@@ -4079,6 +4116,57 @@ public:
 
     using PopupWindowBase::Create;
     using PopupWindowBase::PopupWindowBase;
+};
+
+class Clipboard {
+    static void Set(int format, const void *data, size_t size) {
+        if (OpenClipboard(nullptr)) {
+            EmptyClipboard();
+
+            HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, size);
+            if (mem) {
+                memcpy(GlobalLock(mem), data, size);
+                GlobalUnlock(mem);
+
+                SetClipboardData(format, mem);
+            }
+            CloseClipboard();
+        }
+    }
+
+    template <typename TCopy>
+    static void Get(int format, TCopy &&copy) {
+        if (OpenClipboard(nullptr)) {
+            HGLOBAL mem = GetClipboardData(format);
+            if (mem) {
+                const void *data = GlobalLock(mem);
+                if (data) {
+                    copy(data, GlobalSize(mem));
+                }
+                GlobalUnlock(mem);
+            }
+
+            CloseClipboard();
+        }
+    }
+
+public:
+    static void SetText(const wchar_t *text) {
+        size_t size = (wcslen(text) + 1) * sizeof(wchar_t);
+        Set(CF_UNICODETEXT, text, size);
+    }
+
+    static Path GetText() {
+        Path path;
+        Get(CF_UNICODETEXT, [&](const void *dest, size_t size) {
+            if (size < sizeof(wchar_t)) {
+                return;
+            }
+
+            path = Path((const wchar_t *)dest, (size / 2) - 1);
+        });
+        return path;
+    }
 };
 
 void UiInit() {

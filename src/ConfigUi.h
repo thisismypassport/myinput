@@ -26,6 +26,10 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
     Timer *mAutoSaveTimer = nullptr;
     Button *mUndoButton = nullptr;
     Button *mRedoButton = nullptr;
+    Button *mExportButton = nullptr;
+    Button *mCutButton = nullptr;
+    Button *mCopyButton = nullptr;
+    Button *mPasteButton = nullptr;
     ConfigChoicePanel *mConfigChoice = nullptr;
     TreeView *mConfigTree = nullptr;
     Dynamic *mConfigDynamic = nullptr;
@@ -44,12 +48,14 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
     ConfigMappingUiPanel *mMappingUiPanel = nullptr;
 
     Path mCurrConfig;
-    UniquePtr<ConfigEdit> mCurrEdit;
+    UniquePtr<ConfigEditGroup> mCurrRoot;
     ConfigEditEntry *mCurrEntry = nullptr;
     std::deque<ConfigChg> mChanges;
     int mRedoDepth = 0;
+    bool mInitialized = false;
     bool mFromActivate = false;
     bool mSaveNeeded = false;
+    bool mReloadNeeded = false;
     uint64_t mLastChangeTimestamp = 0;
 
     uint64_t GetTimestamp() {
@@ -64,7 +70,7 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
     void SaveIfNeeded() {
         if (mSaveNeeded && mCurrConfig) {
 #ifndef CONFIG_NO_SAVE
-            ConfigEditSave(GetPath(ConfigsPath, mCurrConfig, ConfigsExt), mCurrEdit);
+            ConfigEditSave(GetPath(ConfigsPath, mCurrConfig, ConfigsExt), mCurrRoot);
 #endif
             mSaveNeeded = false;
         }
@@ -223,6 +229,10 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
         mConfigTree->Set(GetNode(entry), GetEntryText(entry));
     }
 
+    bool EntryNeedsNode(ConfigEditEntry *entry) {
+        return entry->Group || entry->Mapping || entry->Variable || entry->Info.Error;
+    }
+
     void InsertGroup(TreeNode destNode, ConfigEditGroup *dest) {
         auto loadGroupRec = [&](TreeNode node, ConfigEditGroup *group, auto &loadEntryRecF) -> void {
             ConfigEditEntry *child = group->FirstChild;
@@ -236,7 +246,7 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
         };
 
         auto loadEntryRec = [&](TreeNode parent, ConfigEditEntry *entry, auto &loadEntryRecF) -> void {
-            if (!entry->Group && !entry->Mapping && !entry->Variable && !entry->Info.Error) {
+            if (!EntryNeedsNode(entry)) {
                 return;
             }
 
@@ -275,7 +285,7 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
     template <typename TCtor>
     void CreateEntry(TCtor &&ctor) {
         auto refEntry = GetEntry(mConfigTree->GetSelected());
-        ConfigEditGroup *parent = refEntry ? (refEntry->Group ? refEntry->Group : refEntry->Parent) : mCurrEdit->Root;
+        ConfigEditGroup *parent = refEntry ? (refEntry->Group ? refEntry->Group : refEntry->Parent) : mCurrRoot;
         ConfigEditEntry *prev = refEntry ? (refEntry->Group ? nullptr : refEntry) : nullptr;
 
         auto newEntry = UniquePtr<ConfigEditEntry>::New();
@@ -356,14 +366,20 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
         mChanges.clear();
         mRedoDepth = 0;
         mCurrEntry = nullptr;
-        mCurrEdit = mCurrConfig ? ConfigEditLoad(GetPath(ConfigsPath, mCurrConfig, ConfigsExt)) : nullptr;
+        mCurrRoot = mCurrConfig ? ConfigEditLoad(GetPath(ConfigsPath, mCurrConfig, ConfigsExt)) : nullptr;
+        mReloadNeeded = false;
 
-        if (mCurrEdit) {
-            InsertGroup(nullptr, mCurrEdit->Root);
+        if (mCurrRoot) {
+            InsertGroup(nullptr, mCurrRoot);
         }
 
-        mNewMappingBtn->Enable(mCurrEdit != nullptr);
-        mEditTextBtn->Enable(mCurrEdit != nullptr);
+        bool hasCfg = mCurrRoot != nullptr;
+        mNewMappingBtn->Enable(hasCfg);
+        mNewVariableBtn->Enable(hasCfg);
+        mNewGroupBtn->Enable(hasCfg);
+        mExportButton->Enable(hasCfg);
+        mEditTextBtn->Enable(hasCfg);
+        mPasteButton->Enable(hasCfg);
 
         UpdateUndoRedoButtons();
     }
@@ -393,6 +409,53 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
             }
         });
 
+        mExportButton = New<Button>(L"Export", [this] {
+            Path path = SelectFileForSave(ConfigsFilter, L"Export MyInput Config");
+            if (path) {
+                ConfigEditSave(path, mCurrRoot);
+            }
+        });
+
+        mCutButton = New<Button>(L"Cut", [this] {
+            mCopyButton->Click();
+            mDeleteBtn->Click();
+        });
+
+        mCopyButton = New<Button>(L"Copy", [this] {
+            // no multi-select, unfortunately...
+
+            auto parent = mCurrEntry->Parent;
+            auto prev = mCurrEntry->Prev;
+            auto copy = UniquePtr<ConfigEditGroup>::New();
+
+            mCurrEntry->Insert(copy, nullptr, mCurrEntry->Remove());
+
+            std::ostringstream stream;
+            ConfigEditSave(stream, copy);
+            Clipboard::SetText(ToStdWStr(move(stream).str()).c_str());
+
+            mCurrEntry->Insert(parent, prev, mCurrEntry->Remove());
+        });
+
+        mPasteButton = New<Button>(L"Paste", [this] {
+            Path text = Clipboard::GetText();
+            if (text) {
+                std::istringstream stream(ToStdStr(text));
+                auto paste = ConfigEditLoad(stream);
+
+                ConfigEditEntry *entry = paste->FirstChild;
+                while (entry) {
+                    ConfigEditEntry *next = entry->Next;
+
+                    if (EntryNeedsNode(entry) && !entry->Info.Error) {
+                        CreateEntry([&](UniquePtr<ConfigEditEntry> &out) { out = entry->Remove(); });
+                    }
+
+                    entry = next;
+                }
+            }
+        });
+
         mConfigChoice = New<ConfigChoicePanel>(CONFIG_CHOICE_ALLOW_NEW | CONFIG_CHOICE_ALLOW_DELETE,
                                                [this](Path &&config) {
                                                    if (config && mCurrConfig && tstreq(config, mCurrConfig)) {
@@ -415,8 +478,11 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
             mConfigDynamic->SetChild(GetEntryUi(entry));
 
             bool hasEntry = entry != nullptr;
+            bool hasValidEntry = hasEntry && !entry->Info.Error;
             mDeleteBtn->Enable(hasEntry);
             mUpDownBtn->Enable(hasEntry);
+            mCutButton->Enable(hasValidEntry);
+            mCopyButton->Enable(hasValidEntry);
         });
 
         mConfigTree->SetOnPartialCheck([this](TreeNode node, MaybeBool value) {
@@ -446,7 +512,16 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
         mConfigTree->SetOnKey([this](int key) {
             if (key == VK_DELETE) {
                 mDeleteBtn->Click();
+            } else if (key == 'X' && Keyboard::Modifiers() == FCONTROL) {
+                mCutButton->Click();
+            } else if (key == 'C' && Keyboard::Modifiers() == FCONTROL) {
+                mCopyButton->Click();
+            } else if (key == 'V' && Keyboard::Modifiers() == FCONTROL) {
+                mPasteButton->Click();
+            } else {
+                return false;
             }
+            return true;
         });
 
         mConfigDynamic = New<Dynamic>();
@@ -494,7 +569,7 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
                 if (ok) {
                     AddChange(ConfigChg::Swap, entry, nullptr, entry->Parent, GetPrev(entry));
 
-                    ConfigEditGroup *parent = parentNode ? GetEntry(parentNode)->Group : mCurrEdit->Root;
+                    ConfigEditGroup *parent = parentNode ? GetEntry(parentNode)->Group : mCurrRoot;
                     ConfigEditEntry *prev = GetEntry(prevNode);
                     SwapEntry(entry, &parent, &prev);
                 }
@@ -510,19 +585,25 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
             pop->Add(mNewVariableBtn);
             pop->Add(mNewGroupBtn);
             pop->AddSep();
+            pop->Add(mCutButton);
+            pop->Add(mCopyButton);
+            pop->Add(mPasteButton);
+            pop->AddSep();
             pop->Add(mDeleteBtn);
         });
 
         mConfigTree->SetSelected(nullptr);
 
         auto shortcuts = GetShortcuts();
-        shortcuts->Add(mUndoButton, 'Z', true);
-        shortcuts->Add(mRedoButton, 'Z', true, true);
-        shortcuts->Add(mRedoButton, 'Y', true);
+        shortcuts->Add(mUndoButton, 'Z', FCONTROL);
+        shortcuts->Add(mRedoButton, 'Z', FCONTROL | FSHIFT);
+        shortcuts->Add(mRedoButton, 'Y', FCONTROL);
 
         auto topLayout = New<Layout>();
         topLayout->AddLeft(mUndoButton);
         topLayout->AddLeft(mRedoButton);
+        topLayout->AddLeft(New<Separator>(Separator::Vert));
+        topLayout->AddLeft(mExportButton);
 #ifdef CONFIG_NO_SAVE
         topLayout->AddRight(New<StyledLabel>(L"Saving disabled", RGB(0xff, 0, 0)));
 #else
@@ -550,11 +631,16 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
 
     void OnActivate(bool activate, void *root, void *prev) override {
         if (activate) {
+            if (!mInitialized) {
+                ConfigEditLoadAllPlugins();
+                mInitialized = true;
+            }
+
             mFromActivate = true;
 
-            bool changedSince = GetTimestamp() > mLastChangeTimestamp;
-            if (changedSince) {
+            if (GetTimestamp() > mLastChangeTimestamp) {
                 mSaveNeeded = false; // just in case
+                mReloadNeeded = true;
             }
 
             Path reqConfig = mExeUiIntf->GetConfig();
@@ -562,7 +648,9 @@ class ConfigPanel : public Panel, public ConfigUiIntf {
                 mConfigChoice->SetSelected(reqConfig);
             } else if (!mConfigChoice->HasSelected()) {
                 mConfigChoice->SetSelected(ConfigsDefault);
-            } else if (changedSince) {
+            }
+
+            if (mReloadNeeded) {
                 ReloadConfig();
             }
 

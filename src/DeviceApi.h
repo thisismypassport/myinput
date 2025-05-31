@@ -8,6 +8,8 @@
 
 UniqueLog gUniqLogDeviceOpen;
 
+static InfiniteThreadPool GInputThreadPool{InputThreadPriority};
+
 class ImplProcessPipeThread {
     DeviceIntf *Device;
     Path FinalName;
@@ -246,7 +248,7 @@ public:
             }
             return true;
         });
-        GInfiniteThreadPool.CreateThread(ImplProcessPipeThread::ProcessThread, this);
+        GInputThreadPool.CreateThread(ImplProcessPipeThread::ProcessThread, this);
     }
 };
 

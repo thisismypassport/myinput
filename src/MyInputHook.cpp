@@ -50,6 +50,10 @@ static DWORD WINAPI DllThread(LPVOID param) {
 
     SetEvent(G.InitEvent);
 
+    LOG << "Initialization finished" << END;
+
+    SetThreadPriority(GetCurrentThread(), InputThreadPriority);
+
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
         if (msg.message == WM_APP) {
@@ -83,16 +87,28 @@ void MyInputHook_AssertInDllThread() {
     CUSTOM_ASSERT_DLL_THREAD(ASSERT);
 }
 
-void *MyInputHook_RegisterCustomKey(const char *name, void (*cb)(bool, double, unsigned long, void *), void *data) {
+void *MyInputHook_RegisterCustomKey(const char *name, void (*cb)(const MyInputHook_KeyInfo *, void *), void *data) {
+    auto keyCb = [=](const InputValue &value, const ImplMapping *mapping) {
+        MyInputHook_KeyInfo info = {};
+        info.Down = value.Down;
+        info.Strength = value.Strength;
+        info.Time = value.Time;
+        if (mapping->Data) {
+            info.Flags |= MyInputHook_KeyFlag_Has_Data;
+            info.Data = mapping->Data->c_str();
+        }
+        cb(&info, data);
+    };
+
     DBG_ASSERT_DLL_THREAD();
-    int index = ConfigRegisterCustomKey(name, cb ? [=](auto &info) { cb(info.Down, info.Strength, info.Time, data); } : function<void(const InputValue &)>());
+    int index = ConfigRegisterCustomKey(name, cb ? keyCb : function<void(const InputValue &, const ImplMapping *)>{});
     return (void *)(uintptr_t)(index + 1);
 }
 
-void MyInputHook_UpdateCustomKey(void *customKeyObj, bool down, double strength, unsigned long time) {
+void MyInputHook_UpdateCustomKey(void *customKeyObj, const MyInputHook_KeyInfo *info) {
     DBG_ASSERT_DLL_THREAD();
     int index = (int)(uintptr_t)customKeyObj - 1;
-    ImplOnCustomKey(index, InputValue{down, strength, time});
+    ImplOnCustomKey(index, InputValue{info->Down, info->Strength, info->Time});
 }
 
 void *MyInputHook_RegisterCustomVar(const char *name, void (*cb)(const char *, void *), void *data) {
@@ -109,7 +125,7 @@ void *MyInputHook_RegisterCustomDevice(const char *name, void (*cb)(int, bool, v
 
 void *MyInputHook_RegisterCallback(int userIdx, void (*cb)(int, void *), void *data) {
     DBG_ASSERT_DLL_THREAD();
-    auto user = ImplGetUser(userIdx);
+    auto user = ImplGetUser(userIdx, true);
     if (!user) {
         return nullptr;
     }
@@ -122,7 +138,7 @@ void *MyInputHook_RegisterCallback(int userIdx, void (*cb)(int, void *), void *d
 
 void *MyInputHook_UnregisterCallback(int userIdx, void *cbObj) {
     DBG_ASSERT_DLL_THREAD();
-    auto user = ImplGetUser(userIdx);
+    auto user = ImplGetUser(userIdx, true);
     ImplUserCb *cb = (ImplUserCb *)cbObj;
     if (user && cb) {
         user->Callbacks.Remove(*cb);
@@ -150,9 +166,10 @@ void MyInputHook_SetOutState(int userIdx, int type, const void *state, int size)
 void MyInputHook_LoadConfig(const wchar_t *name) {
     DBG_ASSERT_DLL_THREAD();
     if (name) {
-        GConfig.MainFile = PathCombineExt(name, L"ini");
+        ConfigLoad(name);
+    } else {
+        ConfigReload();
     }
-    ConfigReload();
 }
 
 void MyInputHook_WaitInit() {

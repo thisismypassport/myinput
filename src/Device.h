@@ -248,6 +248,8 @@ struct DeviceIntf : public DeviceNode {
         }
     }
 
+    virtual ImplStickShape DefaultStickShape() { return ImplStickShape::Circle; } // ?
+
     void Init(int userIdx) {
         // TODO: need to vary devices, even if they end up in the same userIdx...
 

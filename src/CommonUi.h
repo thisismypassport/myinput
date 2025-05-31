@@ -1,5 +1,6 @@
 #pragma once
 #include "UtilsUi.h"
+#include "ConfigEdit.h"
 
 StockIcon gDelIcon{SIID_DELETE};
 StockIcon gFolderIcon{SIID_FOLDER};
@@ -40,6 +41,9 @@ constexpr const wchar_t *ConfigsByName = L"<by name>";
 constexpr const wchar_t *LogsPath = L"Logs";
 constexpr const wchar_t *LogsExt = L"log";
 
+constexpr const wchar_t *ExecutablesFilter = L"Executables\0*.EXE\0";
+constexpr const wchar_t *ConfigsFilter = L"MyInput Configs\0*.INI\0";
+
 class ConfigNamesClass {
     vector<Path> mNames; // sorted
     int mSeq = 1;
@@ -59,9 +63,8 @@ public:
         mNames.clear();
     }
 
-    bool TryCreate(const wchar_t *name, const wchar_t *fromName) {
+    bool TryCreate(const wchar_t *name, const wchar_t *fromPath) {
         Path path = GetPath(ConfigsPath, name, ConfigsExt);
-        Path fromPath = fromName ? GetPath(ConfigsPath, fromName, ConfigsExt) : Path();
 
         if (!fromPath || !CopyFileW(fromPath, path, true)) {
             HANDLE handle = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, 0, nullptr);
@@ -207,32 +210,71 @@ public:
 };
 
 class NewConfigWindow : public ModalDialog {
+    enum class SourceType {
+        Empty,
+        Copy,
+        Import
+    };
+
     const wchar_t *mInitialName = nullptr;
     const wchar_t *mInitialSrcCfg = nullptr;
-    EditLine *mEdit = nullptr;
+    EditLine *mNameEdit = nullptr;
+    RadioGroup<SourceType> *mSourceRadio = nullptr;
+    RadioBox *mEmptyRadio = nullptr;
     ConfigChoicePanel *mCopyConfig = nullptr;
-    CheckBox *mCopyConfigChk = nullptr;
+    RadioBox *mCopyRadio = nullptr;
+    Button *mImportBrowse = nullptr;
+    EditLine *mImportEdit = nullptr;
+    RadioBox *mImportRadio = nullptr;
+
+    SourceType mSourceType = {};
     Path mResult;
 
 public:
     Control *OnCreate() override {
-        mEdit = New<EditLine>(mInitialName);
+        mNameEdit = New<EditLine>(mInitialName);
 
-        mCopyConfigChk = New<CheckBox>(L"Copy from:", true, [this](bool copy) {
-            mCopyConfig->Enable(copy);
+        mSourceRadio = New<RadioGroup<SourceType>>([this](SourceType choice) {
+            mSourceType = choice;
+            mCopyConfig->Enable(choice == SourceType::Copy);
+            mImportBrowse->Enable(choice == SourceType::Import);
+            mImportEdit->Enable(choice == SourceType::Import);
         });
+
+        mEmptyRadio = New<RadioBox>(L"Create empty", mSourceRadio, SourceType::Empty);
+        mCopyRadio = New<RadioBox>(L"Copy from:", mSourceRadio, SourceType::Copy);
+        mImportRadio = New<RadioBox>(L"Import from:", mSourceRadio, SourceType::Import);
 
         mCopyConfig = New<ConfigChoicePanel>(CONFIG_CHOICE_ALLOW_NONE);
         mCopyConfig->SetSelected(mInitialSrcCfg);
 
+        mImportBrowse = New<Button>(L"Select File...", [this] {
+            Path path = SelectFileForOpen(ConfigsFilter, L"Import MyInput Config");
+            if (path) {
+                mImportEdit->Set(path);
+            }
+        });
+
+        mImportEdit = New<EditLine>();
+
         Button *ok = New<Button>(L"OK", [this]() {
-            Path newConfig = mEdit->Get();
+            Path newConfig = mNameEdit->Get();
             if (!newConfig || !*newConfig) {
                 return Alert(L"Config name is empty");
             }
 
-            Path srcConfig = mCopyConfigChk->Get() ? mCopyConfig->GetSelected() : Path();
-            if (!ConfigNames.TryCreate(newConfig, srcConfig)) {
+            Path fromPath = nullptr;
+            switch (mSourceType) {
+            case SourceType::Copy:
+                fromPath = GetPath(ConfigsPath, mCopyConfig->GetSelected(), ConfigsExt);
+                break;
+
+            case SourceType::Import:
+                fromPath = mImportEdit->Get();
+                break;
+            }
+
+            if (!ConfigNames.TryCreate(newConfig, fromPath)) {
                 return Alert(L"Config %ws already exists", newConfig.Get());
             }
 
@@ -241,13 +283,20 @@ public:
         });
         Button *cancel = New<Button>(L"Cancel", [this]() { Close(); });
 
+        mCopyRadio->Click();
+
         auto shortcuts = GetShortcuts();
         shortcuts->Add(ok, VK_RETURN);
         shortcuts->Add(cancel, VK_ESCAPE);
 
         auto copyLay = New<Layout>();
-        copyLay->AddLeft(mCopyConfigChk);
-        copyLay->AddLeft(mCopyConfig);
+        copyLay->AddLeftMiddle(mCopyRadio);
+        copyLay->AddLeftMiddle(mCopyConfig);
+
+        auto importLay = New<Layout>();
+        importLay->AddLeftMiddle(mImportRadio);
+        importLay->AddLeftMiddle(mImportBrowse);
+        importLay->AddRemaining(mImportEdit);
 
         auto btns = New<Layout>();
         btns->AddRight(cancel);
@@ -255,14 +304,17 @@ public:
 
         auto layout = New<Layout>(true);
         layout->AddTopLeft(New<Label>(L"New Config Name:"));
-        layout->AddTop(mEdit);
+        layout->AddTop(mNameEdit);
+        layout->AddTop(New<Separator>());
+        layout->AddTopLeft(mEmptyRadio);
         layout->AddTop(copyLay);
+        layout->AddTop(importLay);
         layout->AddBottom(btns);
         layout->AddBottom(New<Separator>());
         return layout;
     }
 
-    Control *InitialFocus() override { return mEdit; }
+    Control *InitialFocus() override { return mNameEdit; }
 
     Path Create(const wchar_t *initialName, const wchar_t *initialSrcCfg) {
         mInitialName = initialName;
@@ -275,6 +327,13 @@ public:
 Path NewConfigWindowCreate(const wchar_t *initialName, const wchar_t *initialSrcCfg) {
     NewConfigWindow win;
     return win.Create(initialName, initialSrcCfg);
+}
+
+void AddPluginNodesToTree(TreeView *tree) {
+    for (auto &plugin : GPlugins.Plugins) {
+        auto node = tree->Add(nullptr, (L"Plugin '" + ToStdWStr(plugin.Name) + L"' (" + plugin.Description + L")").c_str());
+        plugin.TempUserData = node;
+    }
 }
 
 struct BaseUiIntf {

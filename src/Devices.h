@@ -148,15 +148,15 @@ struct DS4HidReport {
         Btns[2] |= state.Extra.State ? 0x2 : 0;
         Btns[2] |= state.Version << 2;
 
-        constexpr double gScale = 1.0 / 0x2000;
-        constexpr double rotScale = DegreesToRadians / 16;
+        constexpr double gScale = 0x2000;
+        constexpr double rotScale = 16.0 / DegreesToRadians;
         auto &motion = state.Motion;
-        AX = ClampToInt<int16_t>(motion.X.GAccel / gScale);
-        AY = ClampToInt<int16_t>(motion.Y.GAccel / gScale);
-        AZ = ClampToInt<int16_t>(motion.Z.GAccel / gScale);
-        GX = ClampToInt<int16_t>(motion.RX.Speed / rotScale);
-        GY = ClampToInt<int16_t>(motion.RY.Speed / rotScale);
-        GZ = ClampToInt<int16_t>(motion.RZ.Speed / rotScale);
+        AX = ClampToInt<int16_t>(motion.X.GAccel * gScale);
+        AY = ClampToInt<int16_t>(motion.Y.GAccel * gScale);
+        AZ = ClampToInt<int16_t>(motion.Z.GAccel * gScale);
+        GX = ClampToInt<int16_t>(motion.RX.Speed * rotScale);
+        GY = ClampToInt<int16_t>(motion.RY.Speed * rotScale);
+        GZ = ClampToInt<int16_t>(motion.RZ.Speed * rotScale);
 
         Time = (uint16_t)((uint64_t)state.Time * 1000 * 3 / 16);
 
@@ -164,6 +164,8 @@ struct DS4HidReport {
         PowerOptions = 0x1b;
         // TODO: touch?
         Touch1[0] = Touch2[0] = 0x80;
+
+        // LOG << user->Device->UserIdx << " : " << AX << " " << AY << " " << AZ << " ; " << GX << " " << GY << " " << GZ << END;
     }
 };
 #pragma pack(pop)

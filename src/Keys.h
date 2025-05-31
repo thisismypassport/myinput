@@ -137,6 +137,7 @@ enum {
     MY_VK_TOGGLE_HIDE_CURSOR,
     MY_VK_TOGGLE_ALWAYS,
     MY_VK_TOGGLE_SPARE_FOR_DEBUG,
+    MY_VK_LOAD_CONFIG,
     MY_VK_LAST_CMD,
 
     MY_VK_FIRST_USER_CMD = 0xc500,
@@ -438,6 +439,7 @@ enum class MyVkGroup {
     /* Command group */                                                                                                                                   \
     e(MY_VK_NONE, "None", L"No Effect", Command, "none");                                                                                                 \
     e(MY_VK_RELOAD, "Reload", L"Reload Config", Command, "reload");                                                                                       \
+    e(MY_VK_LOAD_CONFIG, "LoadConfig", L"Load Another Config", Command, "loadconfig");                                                                    \
     e(MY_VK_TOGGLE_DISABLE, "ToggleDisable", L"Toggle Disable Mappings", Command, "toggledisable");                                                       \
     e(MY_VK_SET_ACTIVE_USER, "SetActive", L"Set Active Gamepad", Command, "setactive");                                                                   \
     e(MY_VK_HOLD_ACTIVE_USER, "HoldActive", L"Set Active Gamepad while Held", Command, "holdactive");                                                     \

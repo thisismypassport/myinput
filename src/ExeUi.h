@@ -315,13 +315,16 @@ class ExePanel : public Panel, public ExeUiIntf {
         mRegList->SetOnKey([this](int key) {
             if (key == VK_RETURN) {
                 mEditCfgBtn->Click();
+                return true;
             } else if (key == VK_DELETE) {
                 auto indices = mRegList->GetSelected();
                 if (indices.size() == 1 ? Confirm(L"Are you sure you want to unregister '%ws'?", mRegisteredExes[indices[0]].Name.Get()) : indices.size() > 1 ? Confirm(L"Are you sure you want to unregister these %d executables?", indices.size())
                                                                                                                                                               : false) {
                     mUnregBtn->Click();
                 }
+                return true;
             }
+            return false;
         });
 
         mRegList->SetOnRectChanged([this]() {
@@ -367,7 +370,7 @@ class ExePanel : public Panel, public ExeUiIntf {
         });
 
         mRegBtn = New<Button>(L"Register New", [this] {
-            Path selected = SelectFileForOpen(L"Executables\0*.EXE\0", L"Register Executable", false);
+            Path selected = SelectFileForOpen(ExecutablesFilter, L"Register Executable", false);
             if (selected) {
                 RegisterNew(selected);
                 UpdateList(move(selected));
@@ -375,7 +378,7 @@ class ExePanel : public Panel, public ExeUiIntf {
         });
 
         mRegDisabledBtn = New<Button>(L"Add without Registering", [this] {
-            Path selected = SelectFileForOpen(L"Executables\0*.EXE\0", L"Add Executable (without Registering)", false);
+            Path selected = SelectFileForOpen(ExecutablesFilter, L"Add Executable (without Registering)", false);
             if (selected) {
                 RegisterNew(selected, true);
                 UpdateList(move(selected));

@@ -58,9 +58,14 @@ class ReusableThread {
     mutex Mutex;
     HANDLE Event = nullptr;
     deque<Action> Actions;
+    int Priority = THREAD_PRIORITY_NORMAL;
 
     static DWORD WINAPI ProcessThread(LPVOID param) {
         ReusableThread *self = (ReusableThread *)param;
+
+        if (self->Priority != THREAD_PRIORITY_NORMAL) {
+            SetThreadPriority(GetCurrentThread(), self->Priority);
+        }
 
         while (true) {
             WaitForSingleObject(self->Event, INFINITE);
@@ -83,6 +88,8 @@ class ReusableThread {
     }
 
 public:
+    ReusableThread(int priority = THREAD_PRIORITY_NORMAL) : Priority(priority) {}
+
     void CreateThread(LPTHREAD_START_ROUTINE routine, void *param) {
         lock_guard<mutex> lock(Mutex);
         if (!Event) {
@@ -107,9 +114,14 @@ class InfiniteThreadPool {
 
     mutex Mutex;
     vector<ThreadEntry *> IdleThreads;
+    int Priority = THREAD_PRIORITY_NORMAL;
 
     static DWORD WINAPI ProcessThread(LPVOID param) {
         ThreadEntry *entry = (ThreadEntry *)param;
+
+        if (entry->Pool->Priority != THREAD_PRIORITY_NORMAL) {
+            SetThreadPriority(GetCurrentThread(), entry->Pool->Priority);
+        }
 
         while (true) {
             entry->Routine(entry->Param);
@@ -123,6 +135,8 @@ class InfiniteThreadPool {
     }
 
 public:
+    InfiniteThreadPool(int priority = THREAD_PRIORITY_NORMAL) : Priority(priority) {}
+
     void CreateThread(LPTHREAD_START_ROUTINE routine, void *param) {
         lock_guard<mutex> lock(Mutex);
         if (!IdleThreads.empty()) {
@@ -137,7 +151,7 @@ public:
             CloseHandle(::CreateThread(nullptr, 0, ProcessThread, entry, 0, nullptr));
         }
     }
-} GInfiniteThreadPool;
+};
 
 class ReliablePostThreadMessage // regular PostThreadMessage doesn't work early in a thread's lifetime
 {

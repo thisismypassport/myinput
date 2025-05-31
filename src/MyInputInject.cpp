@@ -145,6 +145,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
             SHELLEXECUTEINFOW exec = {};
             exec.cbSize = sizeof(exec);
             exec.fMask = SEE_MASK_NOCLOSEPROCESS;
+            exec.nShow = (si.dwFlags & STARTF_USESHOWWINDOW) ? si.wShowWindow : SW_SHOW;
             exec.lpVerb = L"runas";
             exec.lpFile = ownPath;
             exec.lpParameters = SkipCommandLineArgs(cmdLine, 1);

@@ -213,6 +213,8 @@ enum : ULONG {
     ExtraInfoAppCustomCount = 0xfe,
 };
 
+constexpr int InputThreadPriority = THREAD_PRIORITY_TIME_CRITICAL; // ok?
+
 using AppCallback = void (*)(void *);
 void PostAppCallback(AppCallback cb, void *data);
 using VoidCallback = void (*)();
@@ -221,6 +223,7 @@ void PostAppCallback(VoidCallback cb);
 HANDLE GetCustomDeviceHandle(int user);
 void UpdateAll();
 void UpdateHideCursor();
+void RehookHideCursor();
 bool ProcessRawKeyboardEvent(int msg, int key, int scan, int flags, ULONG extraInfo, bool injected);
 void ImplAbortMappings();
 void ImplToggleForeground(bool allowUpdateAll = true);

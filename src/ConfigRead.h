@@ -2,10 +2,14 @@
 #include "State.h"
 #include "Keys.h"
 
-struct ConfigCustomMap {
+struct ConfigPlugin {
     unordered_map<string, int> Keys;
     unordered_map<string, int> Vars;
     unordered_map<string, int> Devices;
+};
+
+struct ConfigCustom {
+    unordered_map<string, UniquePtr<ConfigPlugin>> Plugins;
 };
 
 struct ConfigAuxInfo {
@@ -37,7 +41,7 @@ string ConfigReadToken(const string &str, intptr_t *startPtr, bool welded = fals
     intptr_t end = start;
     while ((size_t)end < str.size() && !isspace(str[end])) {
         char ch = str[end];
-        if (!isalnum(ch) && ch != '.' && ch != '_' && ch != '%') {
+        if (!isalnum(ch) && ch != '.' && ch != '_' && ch != '%' && ch != '/') {
             if (start == end) {
                 end++;
             }
@@ -50,15 +54,68 @@ string ConfigReadToken(const string &str, intptr_t *startPtr, bool welded = fals
     return str.substr(start, end - start);
 }
 
+string ConfigReadRest(const string &str, intptr_t *startPtr) {
+    string rest = StrTrimmed(str.substr(*startPtr));
+    *startPtr = str.size();
+    return rest;
+}
+
 string ConfigNormStr(const string &str) {
     string strLow = StrLowerCase(str);
     StrReplaceAll(strLow, ".", "");
     return strLow;
 }
 
+Path ConfigReadPlugin(const string &name, const Path &pathUnderRoot) {
+    if (StrContains(name, "/") || StrContains(name, "\\")) {
+        LOG_ERR << "Invalid plugin name: " << name << END;
+        return nullptr;
+    }
+
+    return PathCombine(PathCombine(PathGetDirName(pathUnderRoot), L"plugins"), PathFromStr(name.c_str()));
+}
+
+bool ConfigLoadPlugin(ConfigPlugin *plugin, const string &name);
+
+ConfigPlugin *ConfigLoadPlugin(ConfigCustom &custom, const string &name) {
+    string nameLow = name;
+    StrToLowerCase(nameLow);
+
+    ConfigPlugin *plugin = (custom.Plugins[nameLow] = UniquePtr<ConfigPlugin>::New());
+    if (!ConfigLoadPlugin(plugin, name)) {
+        custom.Plugins.erase(nameLow);
+        plugin = nullptr;
+    }
+    return plugin;
+}
+
+ConfigPlugin *ConfigTryGetPlugin(ConfigCustom &custom, string *pStrLow) {
+    intptr_t pos = pStrLow->find('/');
+    if (pos < 0) {
+        return nullptr;
+    }
+
+    string pluginName = pStrLow->substr(0, pos);
+    auto iter = custom.Plugins.find(pluginName);
+
+    ConfigPlugin *plugin;
+    if (iter != custom.Plugins.end()) {
+        plugin = iter->second.get();
+    } else {
+        plugin = ConfigLoadPlugin(custom, pluginName);
+    }
+
+    if (!plugin) {
+        return nullptr;
+    }
+
+    *pStrLow = pStrLow->substr(pos + 1);
+    return plugin;
+}
+
 #define CONFIG_UNKNOWN_NAME "tbd"
 
-int ConfigReadKey(const ConfigCustomMap &custom, const string &str, ConfigAuxInfo *auxInfo) {
+int ConfigReadKey(ConfigCustom &custom, const string &str, ConfigAuxInfo *auxInfo) {
     string strLow = ConfigNormStr(str);
 
     if (strLow.size() == 1 && ((strLow[0] >= 'a' && strLow[0] <= 'z') || (strLow[0] >= '0' && strLow[0] <= '9'))) {
@@ -73,9 +130,12 @@ int ConfigReadKey(const ConfigCustomMap &custom, const string &str, ConfigAuxInf
     ENUMERATE_KEYS_WITHOUT_SIMPLE(CONFIG_ON_KEY);
 #undef CONFIG_ON_KEY
 
-    auto customKeyIter = custom.Keys.find(strLow);
-    if (customKeyIter != custom.Keys.end()) {
-        return MY_VK_CUSTOM_START + customKeyIter->second;
+    auto plugin = ConfigTryGetPlugin(custom, &strLow);
+    if (plugin) {
+        auto customKeyIter = plugin->Keys.find(strLow);
+        if (customKeyIter != plugin->Keys.end()) {
+            return MY_VK_CUSTOM_START + customKeyIter->second;
+        }
     }
 
     if (strLow != CONFIG_UNKNOWN_NAME) {
@@ -136,7 +196,7 @@ double ConfigReadRate(const string &str, bool isTurbo, ConfigAuxInfo *auxInfo) {
     return isTurbo ? 0.02 : 0.01;
 }
 
-SharedPtr<ImplCond> ConfigReadCond(const ConfigCustomMap &custom, const string &line, intptr_t *idxPtr,
+SharedPtr<ImplCond> ConfigReadCond(ConfigCustom &custom, const string &line, intptr_t *idxPtr,
                                    ConfigAuxInfo *auxInfo, bool nested = false) {
     string condStr = ConfigReadToken(line, idxPtr);
     auto cond = SharedPtr<ImplCond>::New();
@@ -222,7 +282,7 @@ SharedPtr<ImplCond> ConfigReadCond(const ConfigCustomMap &custom, const string &
     return cond;
 }
 
-SharedPtr<ImplMapping> ConfigReadInputLine(const ConfigCustomMap &custom, const string &line, intptr_t idx = 0,
+SharedPtr<ImplMapping> ConfigReadInputLine(ConfigCustom &custom, const string &line, intptr_t idx = 0,
                                            ConfigAuxInfo *auxInfo = nullptr) {
     auto cfg = SharedPtr<ImplMapping>::New();
 
@@ -283,6 +343,8 @@ SharedPtr<ImplMapping> ConfigReadInputLine(const ConfigCustomMap &custom, const 
             rateStr = ConfigReadToken(line, &idx);
         } else if (token == "~") {
             strengthStr = ConfigReadToken(line, &idx);
+        } else if (token == "=") {
+            cfg->Data = SharedPtr<string>::New(ConfigReadRest(line, &idx));
         } else {
             LOG_W << "ERROR: Ignoring unknown token in mapping line: " << token << END, ConfigError(auxInfo);
         }
@@ -306,26 +368,12 @@ SharedPtr<ImplMapping> ConfigReadInputLine(const ConfigCustomMap &custom, const 
     return cfg;
 }
 
-int ConfigReadDeviceIdx(const string &idx, ConfigAuxInfo *auxInfo = nullptr) {
-    return ConfigReadUser(idx, auxInfo);
-}
-
 Path ConfigReadInclude(const string &val) {
     if (val.ends_with(".ini")) {
         return PathFromStr(val.c_str());
     } else {
         return PathCombineExt(PathFromStr(val.c_str()), L"ini");
     }
-}
-
-string ConfigReadPlugin(const string &val, const Path &pathUnderRoot, Path *outPath) {
-    intptr_t idx = 0;
-    string name = ConfigReadToken(val, &idx);
-    string rest = StrTrimmed(val.substr(idx));
-
-    *outPath = rest.empty() ? PathCombine(PathCombine(PathGetDirName(pathUnderRoot), L"plugins"), PathFromStr(name.c_str())) : PathFromStr(rest.c_str());
-
-    return name;
 }
 
 bool ConfigReadBoolVar(const string &val, ConfigAuxInfo *auxInfo) {
@@ -358,7 +406,8 @@ enum class ConfigVar : uint32_t {
     RumbleWindow,
     Device,
     Include,
-    Plugin,
+    Comment,
+    StickShape,
     CustomStart = 0x10000000,
 };
 
@@ -367,8 +416,8 @@ int operator-(ConfigVar l, ConfigVar r) { return (int)l - (int)r; }
 
 #define CONFIG_VAR_BOOL 0x1
 #define CONFIG_VAR_STR 0x2
-#define CONFIG_VAR_STR_CFG 0x4
-#define CONFIG_VAR_SPECIAL 0x8
+#define CONFIG_VAR_SPECIAL 0x4
+#define CONFIG_VAR_NO_EQUAL 0x8
 #define CONFIG_VAR_GROUP_DEBUG 0x100
 
 // (in ui order, vars with same CONFIG_VAR_GROUP_* must be consecutive)
@@ -376,12 +425,14 @@ int operator-(ConfigVar l, ConfigVar r) { return (int)l - (int)r; }
     /* Normal group */                                                                     \
     e(ConfigVar::RumbleWindow, "RumbleWindow", L"Shake the window on gamepad vibration",   \
       "rumblewindow", CONFIG_VAR_BOOL, &G.RumbleWindow);                                   \
-    e(ConfigVar::Device, "Device", L"Configure a virtual gamepad's type",                  \
+    e(ConfigVar::Device, "Device", L"Gamepad type",                                        \
       "device", CONFIG_VAR_SPECIAL, nullptr);                                              \
+    e(ConfigVar::StickShape, "StickShape", L"Shape traced by gamepad's thumbsticks",       \
+      "stickshape", CONFIG_VAR_SPECIAL, nullptr);                                          \
     e(ConfigVar::HideCursor, "HideCursor", L"Hide the cursor while in focus",              \
       "hidecursor", CONFIG_VAR_BOOL, &G.HideCursor);                                       \
     e(ConfigVar::Include, "Include", L"Include another config",                            \
-      "include", CONFIG_VAR_STR_CFG, nullptr);                                             \
+      "include", CONFIG_VAR_SPECIAL | CONFIG_VAR_NO_EQUAL, nullptr);                       \
     e(ConfigVar::Always, "Always", L"Always process mappings, even in background",         \
       "always", CONFIG_VAR_BOOL, &G.Always);                                               \
     e(ConfigVar::Forward, "Forward", L"Forward all inputs, even if mapped to outputs",     \
@@ -390,8 +441,8 @@ int operator-(ConfigVar l, ConfigVar r) { return (int)l - (int)r; }
       "disable", CONFIG_VAR_BOOL, &G.Disable);                                             \
     e(ConfigVar::InjectChildren, "InjectChildren", L"Inject into child processes",         \
       "injectchildren", CONFIG_VAR_BOOL, &G.InjectChildren);                               \
-    e(ConfigVar::Plugin, "Plugin", L"Load a MyInput plugin",                               \
-      "plugin", CONFIG_VAR_STR_CFG, nullptr);                                              \
+    e(ConfigVar::Comment, "Comment", L"Comment (no effect)",                               \
+      "comment", CONFIG_VAR_SPECIAL | CONFIG_VAR_NO_EQUAL, nullptr);                       \
     /* Debug group */                                                                      \
     e(ConfigVar::ApiDebug, "ApiDebug", L"Log debug-level api calls",                       \
       "apidebug", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.ApiDebug);                  \
@@ -408,39 +459,54 @@ int operator-(ConfigVar l, ConfigVar r) { return (int)l - (int)r; }
     //
 
 template <class TBoolHandler, class TCustomHandler>
-void ConfigReadVarLine(const ConfigCustomMap &custom, const string &line, intptr_t idx,
+void ConfigReadVarLine(ConfigCustom &custom, const string &line, intptr_t idx,
                        TBoolHandler &&boolHandler, TCustomHandler &&customHandler, ConfigAuxInfo *auxInfo = nullptr) {
     string key = ConfigReadToken(line, &idx);
     string keyLow = ConfigNormStr(key);
 
     intptr_t validx = idx;
+    user_t user = -1;
     string val = ConfigReadToken(line, &idx);
+    if (val == "@") {
+        string userStr = ConfigReadToken(line, &idx);
+        user = ConfigReadUser(userStr, auxInfo);
+
+        validx = idx;
+        val = ConfigReadToken(line, &idx);
+    }
     if (val == "=") // optional '='
     {
         validx = idx;
         val = ConfigReadToken(line, &idx);
     }
 
-    auto getRest = [&] { return StrTrimmed(line.substr(validx)); };
+retryLegacy:
+    auto getRest = [&] { return ConfigReadRest(line, &validx); };
 
 #define CONFIG_ON_VAR(cv, pname, desc, name, flags, ptr)                  \
     if (keyLow == name) {                                                 \
-        if constexpr (flags & CONFIG_VAR_BOOL)                            \
+        if constexpr ((flags) & CONFIG_VAR_BOOL)                          \
             return boolHandler(cv, ConfigReadBoolVar(val, auxInfo), ptr); \
         else                                                              \
-            return customHandler(cv, getRest(), "");                      \
+            return customHandler(cv, getRest(), user);                    \
     }
 
     ENUMERATE_CONFIG_VARS(CONFIG_ON_VAR);
 #undef CONFIG_ON_VAR
 
-    if (keyLow.starts_with("device")) {
-        return customHandler(ConfigVar::Device, getRest(), key.substr(6));
+    auto plugin = ConfigTryGetPlugin(custom, &keyLow);
+    if (plugin) {
+        auto iter = plugin->Vars.find(keyLow);
+        if (iter != plugin->Vars.end()) {
+            return customHandler(ConfigVar::CustomStart + iter->second, getRest(), user);
+        }
     }
 
-    auto iter = custom.Vars.find(keyLow);
-    if (iter != custom.Vars.end()) {
-        return customHandler(ConfigVar::CustomStart + iter->second, getRest(), "");
+    if (keyLow.starts_with("device") && keyLow.size() > 6) // legacy
+    {
+        user = ConfigReadUser(keyLow.substr(6), auxInfo);
+        keyLow = keyLow.substr(0, 6);
+        goto retryLegacy;
     }
 
     if (keyLow != CONFIG_UNKNOWN_NAME) {
@@ -467,7 +533,7 @@ int operator-(ConfigDevice l, ConfigDevice r) { return (int)l - (int)r; }
     e(ConfigDevice::Ds4, "PS4", L"PS4 (Dual Shock 4) Controller", "ps4", "ds4");          \
     //
 
-ConfigDevice ConfigReadDeviceName(const ConfigCustomMap &custom, const string &type,
+ConfigDevice ConfigReadDeviceName(ConfigCustom &custom, const string &type,
                                   ConfigAuxInfo *auxInfo = nullptr) {
     string typeLow = ConfigNormStr(type);
 
@@ -479,9 +545,12 @@ ConfigDevice ConfigReadDeviceName(const ConfigCustomMap &custom, const string &t
     ENUMERATE_CONFIG_DEVICES(CONFIG_ON_DEVICE);
 #undef CONFIG_ON_DEVICE
 
-    auto iter = custom.Devices.find(typeLow);
-    if (iter != custom.Devices.end()) {
-        return ConfigDevice::CustomStart + iter->second;
+    auto plugin = ConfigTryGetPlugin(custom, &typeLow);
+    if (plugin) {
+        auto iter = plugin->Devices.find(typeLow);
+        if (iter != plugin->Devices.end()) {
+            return ConfigDevice::CustomStart + iter->second;
+        }
     }
 
     if (typeLow != CONFIG_UNKNOWN_NAME) {
@@ -489,4 +558,26 @@ ConfigDevice ConfigReadDeviceName(const ConfigCustomMap &custom, const string &t
     }
     LOG_W << "ERROR: Invalid device: " << typeLow << END;
     return ConfigDevice::Unknown;
+}
+
+// (in ui order)
+#define ENUMERATE_STICK_SHAPES(e)                                                  \
+    e(ImplStickShape::Default, "Default", L"Use Controller's Default", "default"); \
+    e(ImplStickShape::Circle, "Circle", L"Circle", "circle");                      \
+    e(ImplStickShape::Square, "Square", L"Square", "square");                      \
+    //
+
+ImplStickShape ConfigReadStickShape(const string &type, ConfigAuxInfo *auxInfo = nullptr) {
+    string typeLow = ConfigNormStr(type);
+
+#define CONFIG_ON_SHAPE(cv, pname, desc, name) \
+    if (typeLow == name)                       \
+        return cv;
+
+    ENUMERATE_STICK_SHAPES(CONFIG_ON_SHAPE);
+#undef CONFIG_ON_SHAPE
+
+    ConfigError(auxInfo);
+    LOG_W << "ERROR: Invalid stick shape: " << typeLow << END;
+    return ImplStickShape::Default;
 }
