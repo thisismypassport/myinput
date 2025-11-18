@@ -81,14 +81,15 @@ In addition, you can map keys to one of several actions (in the "Actions" sectio
 ### Multiple Gamepads
 
 There are several ways to configure multiple gamepads (controllers):
+* Specifying exactly which gamepad each mapping is for - by changing "Active Gamepad" to "Gamepad #..." and selecting the gamepad number to use.
 * Mapping a key to "Actions" -> "Set Active Gamepad" : allows you to change the active gamepad by pressing a key
 * Mapping a key to "Actions" -> "Set Active Gamepad while Held" : allows you to change the active gamepad while a key is held
-* Specifying exactly which gamepad each mapping is for - by changing "Active Gamepad" to "Gamepad #..." and selecting the gamepad number to use.
 
 ### Supported Global Options
 
 These are accessible via adding a "New Option" - see the arrow next to "New Mapping":
 * You can shake the window when a gamepad's rumble occurs.
+* You can specify what shape a gamepad's thumbstick traces (diagonal movement goes further with a square than with a circle)
 * You can hide the cursor while the window is in focus. (Also toggle-able via "Actions")
 * You can control whether the mapping continues to work while the game is in the background. (Also toggle-able via "Actions")
 * You can include one config inside another.
@@ -100,7 +101,7 @@ These are accessible via adding a "New Option" - see the arrow next to "New Mapp
 
 For Steam Games:
 * Make sure to disable Steam Input (either globally or for that specific game)
-* You may have better luck if you register the executable to always run (via myinput_register.exe), as Steam games often ask Steam to relaunch them, even if you run them directly.
+* You may have better luck if you register the executable to always run, as Steam games often ask Steam to relaunch them, even if you run them directly.
 
 # Building from Source
 
