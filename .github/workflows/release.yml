@@ -22,13 +22,13 @@ jobs:
       - name: Build detours (Release | x64)
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat" -arch=amd64
-          msbuild "3rdparty/detours/vc/Detours.sln" /m /p:Configuration=Release /p:Platform=x64
+          msbuild "3rdparty/detours/vc/Detours.sln" /m /p:Configuration=ReleaseMD /p:Platform=x64
         shell: cmd
 
       - name: Build detours (Release | x86)
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat"
-          msbuild "3rdparty/detours/vc/Detours.sln" /m /p:Configuration=Release /p:Platform=x86
+          msbuild "3rdparty/detours/vc/Detours.sln" /m /p:Configuration=ReleaseMD /p:Platform=x86
         shell: cmd
 
       - name: Build solution (Release | x64)
