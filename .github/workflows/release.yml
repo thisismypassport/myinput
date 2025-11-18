@@ -38,13 +38,13 @@ jobs:
       - name: Build solution (Release | x64)
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat" -arch=amd64
-          msbuild "myinput.sln" /m /p:Configuration=Release /p:Platform=x64
+          msbuild "src/myinput.sln" /m /p:Configuration=Release /p:Platform=x64
         shell: cmd
 
       - name: Build solution (Release | x86)
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat"
-          msbuild "myinput.sln" /m /p:Configuration=Release /p:Platform=x86
+          msbuild "src/myinput.sln" /m /p:Configuration=Release /p:Platform=x86
         shell: cmd
 
       - name: Upload build artifacts
@@ -52,12 +52,12 @@ jobs:
         with:
           name: release-build
           path: |
-            myinput.exe
-            */myinput*.dll
-            */myinput*.exe
-            Logs/_default.log
-            Configs/_default.ini
-            !*/myinput_test.exe
+            src/Run/myinput.exe
+            src/Run/*/myinput*.dll
+            src/Run/*/myinput*.exe
+            src/Run/Logs/_default.log
+            src/Run/Configs/_default.ini
+            !src/Run/*/myinput_test.exe
 
   prerelease:
     name: Create GitHub release
