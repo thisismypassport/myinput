@@ -30,7 +30,7 @@ UINT WINAPI GetRawInputDeviceList_Hook(PRAWINPUTDEVICELIST pRawInputDeviceList, 
         LOG << "GetRawInputDeviceList ()" << END;
     }
 
-    UINT usersMask;
+    user_mask_t usersMask;
     int usersCount = ImplGetUsers(&usersMask, DEVICE_NODE_TYPE_HID);
 
     UINT result = GetRawInputDeviceList_Real(pRawInputDeviceList, puiNumDevices, cbSize);
@@ -272,10 +272,11 @@ static void TryRegisterRawInputDevice(const RAWINPUTDEVICE &instr, int usage, TR
         if ((instr.dwFlags & RIDEV_REMOVE) || mode == RIDEV_EXCLUDE) {
             rawInputReg.Unregister(instr.dwFlags);
 
-            UINT fullFlags;
-            HWND fullWindow;
-            if (mode != RIDEV_EXCLUDE && GRawInputRegFullPage.GetRegistered(&fullWindow, &fullFlags)) {
-                rawInputReg.Register(fullWindow, fullFlags);
+            if (mode != RIDEV_EXCLUDE) {
+                auto fullInfo = GRawInputRegFullPage.GetRegisteredInfo();
+                if (fullInfo.Registered) {
+                    rawInputReg.Register(fullInfo.Window, fullInfo.Flags);
+                }
             }
         } else {
             rawInputReg.Unregister(instr.dwFlags);
@@ -340,23 +341,33 @@ BOOL WINAPI RegisterRawInputDevices_Hook(PCRAWINPUTDEVICE pRawInputDevices, UINT
     return success;
 }
 
+// returns whether to skip instr
+bool TryGetRegisteredRawInputDevice(RAWINPUTDEVICE &instr, int usage, const RawInputRegInfo &info) {
+    if (instr.usUsagePage == HID_USAGE_PAGE_GENERIC && instr.usUsage == usage) {
+        if (!info.Private) {
+            return false;
+        }
+
+        instr.dwFlags = info.Flags;
+        instr.hwndTarget = info.Window;
+    }
+    return true;
+}
+
 UINT WINAPI GetRegisteredRawInputDevices_Hook(PRAWINPUTDEVICE pRawInputDevices, PUINT puiNumDevices, UINT cbSize) {
     if (G.ApiDebug) {
         LOG << "GetRegisteredRawInputDevices" << END;
     }
 
     if (cbSize == sizeof(RAWINPUTDEVICE) && puiNumDevices) {
-        UINT keyFlags, mouseFlags;
-        HWND keyWindow, mouseWindow;
-        bool keyPrivate, mousePrivate;
-        GRawInputRegKeyboard.GetRegistered(&keyWindow, &keyFlags, &keyPrivate);
-        GRawInputRegMouse.GetRegistered(&mouseWindow, &mouseFlags, &mousePrivate);
+        auto keyInfo = GRawInputRegKeyboard.GetRegisteredInfo();
+        auto mouseInfo = GRawInputRegMouse.GetRegisteredInfo();
 
         UINT deltaReal = 0;
-        if (!keyPrivate) {
+        if (!keyInfo.Private) {
             deltaReal++;
         }
-        if (!mousePrivate) {
+        if (!mouseInfo.Private) {
             deltaReal++;
         }
 
@@ -376,22 +387,11 @@ UINT WINAPI GetRegisteredRawInputDevices_Hook(PRAWINPUTDEVICE pRawInputDevices, 
 
         UINT outI = 0;
         for (UINT i = 0; i < realResult; i++) {
-            if (realDevices[i].usUsagePage == HID_USAGE_PAGE_GENERIC && realDevices[i].usUsage == HID_USAGE_GENERIC_KEYBOARD) {
-                if (!keyPrivate) {
-                    continue;
-                }
-
-                realDevices[i].dwFlags = keyFlags;
-                realDevices[i].hwndTarget = keyWindow;
+            if (!TryGetRegisteredRawInputDevice(realDevices[i], HID_USAGE_GENERIC_KEYBOARD, keyInfo)) {
+                continue;
             }
-
-            if (realDevices[i].usUsagePage == HID_USAGE_PAGE_GENERIC && realDevices[i].usUsage == HID_USAGE_GENERIC_MOUSE) {
-                if (!mousePrivate) {
-                    continue;
-                }
-
-                realDevices[i].dwFlags = mouseFlags;
-                realDevices[i].hwndTarget = mouseWindow;
+            if (!TryGetRegisteredRawInputDevice(realDevices[i], HID_USAGE_GENERIC_MOUSE, mouseInfo)) {
+                continue;
             }
 
             if (copy) {

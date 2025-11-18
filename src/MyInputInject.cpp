@@ -142,6 +142,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         } else if (GetLastError() == ERROR_ELEVATION_REQUIRED) {
             Path ownPath = PathGetModulePath(nullptr);
 
+            // since runas checks the zone identifier
+            Path ownZoneId = PathConcatRaw(ownPath, L":Zone.Identifier");
+            DeleteFileW(ownZoneId);
+
             SHELLEXECUTEINFOW exec = {};
             exec.cbSize = sizeof(exec);
             exec.fMask = SEE_MASK_NOCLOSEPROCESS;

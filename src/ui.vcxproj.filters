@@ -12,4 +12,7 @@
     <ClInclude Include="ConfigKeyUi.h" />
     <ClInclude Include="ConfigTestUi.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="myinput.rc" />
+  </ItemGroup>
 </Project>

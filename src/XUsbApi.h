@@ -1,6 +1,7 @@
 #pragma once
 #include <Xinput.h>
 #include "UtilsBase.h"
+#include "Device.h"
 
 #define XINPUT_GAMEPAD_GUIDE 0x400 // private value
 
@@ -20,28 +21,35 @@ UniqueLog gUniqLogXUsbOpen;
 UniqueLog gUniqLogXUsbAsync;
 
 static HANDLE XUsbCreateFile(DeviceIntf *device, DWORD flags) {
-    UINT seq = ++gXUsbSequence;
+    while (true) {
+        UINT seq = ++gXUsbSequence;
 
-    // See also device's FinalPipePrefix and GetDeviceNodeByHandle
-    wchar_t pipeName[MAX_PATH];
-    wsprintfW(pipeName, LR"(\\.\Pipe\MyInputHook_%d.%d.xusb.%d)", GetCurrentProcessId(), device->UserIdx, seq);
+        // See also device's FinalPipePrefix and GetDeviceNodeByHandle
+        wchar_t pipeName[MAX_PATH];
+        wsprintfW(pipeName, LR"(\\.\Pipe\MyInputHook_%d.%d.xusb.%d)", GetCurrentProcessId(), device->UserIdx, seq);
 
-    HANDLE pipe = CreateNamedPipeW(pipeName, PIPE_ACCESS_INBOUND | (flags & FILE_FLAG_OVERLAPPED),
-                                   PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
-                                   1, 0, 0, 0, nullptr); // 0 buffer for "immediate" mode
+        HANDLE pipe = CreateNamedPipeW(pipeName, PIPE_ACCESS_INBOUND | (flags & FILE_FLAG_OVERLAPPED),
+                                       PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
+                                       1, 0, 0, 0, nullptr); // 0 buffer for "immediate" mode
 
-    if (pipe == INVALID_HANDLE_VALUE) {
-        LOG_ERR << "failed creating xusb pipe" << END;
-    } else {
-        if (gUniqLogXUsbOpen) {
-            LOG << "Opening xusb device" << END;
+        if (pipe == INVALID_HANDLE_VALUE) {
+            if (GetLastError() == ERROR_PIPE_BUSY) {
+                LOG << "xusb pipe name already taken, retrying..." << END;
+                continue;
+            }
+
+            LOG_ERR << "failed creating xusb pipe" << END;
+        } else {
+            if (gUniqLogXUsbOpen) {
+                LOG << "Opening xusb device" << END;
+            }
+            if (G.ApiDebug) {
+                LOG << "Created xusb pipe " << pipe << END;
+            }
         }
-        if (G.ApiDebug) {
-            LOG << "Created xusb pipe " << pipe << END;
-        }
+
+        return pipe;
     }
-
-    return pipe;
 }
 
 template <class TData, class TCopy>

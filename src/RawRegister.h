@@ -4,6 +4,13 @@
 
 UniqueLog gUniqLogRawInputRegister;
 
+struct RawInputRegInfo {
+    bool Registered;
+    bool Private;
+    HWND Window;
+    UINT Flags;
+};
+
 class RawInputRegBase {
 protected:
     mutex Mutex;
@@ -58,12 +65,13 @@ protected:
         lock_guard<mutex> lock(Mutex);
         if (Registered) {
             uninit();
-
-            Window = 0;
-            Flags = flags & RIDEV_EXCLUDE;
-            Private = Flags == RIDEV_EXCLUDE;
-            Registered = false;
         }
+
+        // update method of unregistration (delete vs exclude) either way
+        Window = 0;
+        Flags = flags & RIDEV_EXCLUDE;
+        Private = Flags == RIDEV_EXCLUDE;
+        Registered = false;
     }
 
     UINT ReadFrom(UINT uiCommand, PVOID dest, PUINT pCbSize, RAWINPUT *src, int srcSize) {
@@ -98,18 +106,9 @@ public:
     bool IsRegistered() { return Registered; }
     bool IsRegisteredPrivate() { return Registered && Private; }
 
-    bool GetRegistered(HWND *outWindow, UINT *outFlags, bool *outPrivate = nullptr) {
+    RawInputRegInfo GetRegisteredInfo() {
         lock_guard<mutex> lock(Mutex);
-        if (outWindow) {
-            *outWindow = Window;
-        }
-        if (outFlags) {
-            *outFlags = Flags;
-        }
-        if (outPrivate) {
-            *outPrivate = Private;
-        }
-        return Registered;
+        return RawInputRegInfo{Registered, Private, Window, Flags};
     }
 };
 
@@ -583,7 +582,7 @@ void ProcessMouseButton(RAWMOUSE &mouse, int mask, int key, bool down, DWORD tim
 void ProcessRawInput(HRAWINPUT handle, DWORD time) {
     RAWINPUT input;
     UINT inputSize = sizeof(input);
-    if (GetRawInputData_Real(handle, RID_INPUT, &input, &inputSize, sizeof(RAWINPUTHEADER)) >= 0 &&
+    if ((int)GetRawInputData_Real(handle, RID_INPUT, &input, &inputSize, sizeof(RAWINPUTHEADER)) >= 0 &&
         input.header.dwType == RIM_TYPEMOUSE) {
         auto &mouse = input.data.mouse;
 
@@ -678,7 +677,7 @@ void ProcessRawDeviceChange(HANDLE handle, bool added) {
         RID_DEVICE_INFO info;
         UINT infoSize = sizeof(info);
         info.cbSize = infoSize;
-        if (GetRawInputDeviceInfoW_Real(handle, RIDI_DEVICEINFO, &info, &infoSize) >= 0) {
+        if ((int)GetRawInputDeviceInfoW_Real(handle, RIDI_DEVICEINFO, &info, &infoSize) >= 0) {
             switch (info.dwType) {
             case RIM_TYPEKEYBOARD:
                 GRawInputRegKeyboard.OnDeviceAdded(handle);

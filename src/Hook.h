@@ -23,10 +23,13 @@ vector<Hook> GHooks;
 // This is probably the worst solution, aside from all other solutions
 // (e.g: using a threadlocal variable would not be able to recognize re-entrancy and would need to handle exceptions.)
 // (well, maybe that's still more practical, though... reconsider if/when below gives trouble)
-class AddrRange {
+// for now, let's have the threadlocal solution available via a #define...
+
+#ifndef MYINPUT_THREAD_LOCAL_DETECTOR
+class RedirectDetector {
     void *Start = nullptr;
     void *End = nullptr;
-    AddrRange *More = nullptr; // (probably not needed)
+    RedirectDetector *More = nullptr;
 
 public:
     void Add(void *addr) {
@@ -49,7 +52,7 @@ public:
             }
         } else if (addr < Start || addr >= End) {
             if (!More) {
-                More = new AddrRange();
+                More = new RedirectDetector();
             }
 
             More->Add(addr);
@@ -67,13 +70,54 @@ public:
     }
 };
 
+#define REDIRECT_DETECT(detector, caller, origCall) \
+    if (detector.Contains(caller))                  \
+        return origCall();
+
+#else
+class RedirectDetector {
+    DWORD tls;
+
+public:
+    // wasting tls slots...
+    RedirectDetector() { tls = TlsAlloc(); }
+    ~RedirectDetector() { TlsFree(tls); }
+
+    void Add(void *addr) {} // irrelevant in this mode
+
+    class Scope {
+        RedirectDetector &Parent;
+        bool PrevEntered;
+
+    public:
+        Scope(RedirectDetector &parent) : Parent(parent) {
+            PrevEntered = (intptr_t)TlsGetValue(parent.tls);
+            if (!PrevEntered) {
+                TlsSetValue(parent.tls, (void *)(intptr_t)1);
+            }
+        }
+        ~Scope() {
+            TlsSetValue(Parent.tls, (void *)(intptr_t)PrevEntered);
+        }
+        bool WasEntered() { return PrevEntered; }
+    };
+};
+
+// (if caller is null, this is an internal call that should never be detected as a redirect)
+#define REDIRECT_DETECT(detector, caller, origCall) \
+    RedirectDetector::Scope scope(detector);        \
+    if (caller && scope.WasEntered())               \
+        return origCall();
+
+#endif
+
 template <class TFunc>
 void AddGlobalHook(TFunc *pReal, TFunc hook) {
     GHooks.push_back(Hook{pReal, hook});
 }
 
 template <class TFunc>
-void AddGlobalHook(TFunc *pReal, TFunc hook, AddrRange *range) {
+void AddGlobalHook(TFunc *pReal, TFunc hook, RedirectDetector *range) {
     // We prefer to add individual func addrs instead of module addrs because - in theory - they may come from another module
     range->Add(*pReal);
     AddGlobalHook(pReal, hook);

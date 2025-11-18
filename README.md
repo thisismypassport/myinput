@@ -35,6 +35,8 @@ You can edit the configuration a game uses by double clicking on it in the list 
 
 You can test the configuration without launching the game by switching to the "Test" tab.
 
+Also, if the game is running, switching back to it after changing the configuration will automatically reapply it.
+
 Note that by default, newly added games use the same default configuration (called "_default") - so modifying it will affect all games.
 
 To have a game use a different configuration, select the game in the list and use the "Use Config:" drop down at the bottom of the window (clicking "New" to use a new configuration)
@@ -116,3 +118,7 @@ It hooks:
 - low-level keyboard & mouse events
 - The wbem interface (currently partial, to match existing common uses)
 - Misc. APIs to improve compatibility.
+
+# Attributions
+
+Icon from https://icon-icons.com/icon/gamepad-console/73549

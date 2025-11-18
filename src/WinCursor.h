@@ -3,16 +3,21 @@
 #include "Hook.h"
 #include "State.h"
 
+#define MOUSE_CAPTURE_HIDE (1 << 0)
+#define MOUSE_CAPTURE_BOUND (1 << 1)
+
 struct MouseCapture {
     struct ThreadHook {
         DWORD Thread = 0;
         HHOOK HHook = nullptr;
+        DWORD CaptureFlags = 0;
         int ShowCursorValue = 0;
         bool Started = false;
         bool NeedFinish = false;
     };
 
     DWORD CaptureThread = 0;
+    DWORD CaptureFlags = 0;
     POINT OldPos = {0, 0};
     WeakAtomic<DWORD> PrevThread{0};
     WeakAtomic<HWND> PrevWindow{nullptr};
@@ -37,13 +42,15 @@ static void MouseCaptureStart(MouseCapture::ThreadHook &info, DWORD threadId) {
     // affect thread state
     info.Started = true;
 
-    info.ShowCursorValue = ShowCursor_Real(false) + 1;
-    for (int i = 0; i < info.ShowCursorValue; i++) {
-        ShowCursor_Real(false);
+    if (info.CaptureFlags & MOUSE_CAPTURE_HIDE) {
+        info.ShowCursorValue = ShowCursor_Real(false) + 1;
+        for (int i = 0; i < info.ShowCursorValue; i++) {
+            ShowCursor_Real(false);
+        }
     }
 
-    if (!info.NeedFinish) // affect global state, unless someone else took over already
-    {
+    // affect global state, unless someone else took over already
+    if (!info.NeedFinish) {
         GCapture.PrevThread = threadId;
 
         GetCursorPos(&GCapture.OldPos);
@@ -65,39 +72,47 @@ static void MouseCaptureStop(const MouseCapture::ThreadHook &info) {
 
     if (info.Started) {
         // affect thread state
-
-        int newValue = ShowCursor_Real(info.ShowCursorValue >= 0);
-        for (int i = newValue; i < info.ShowCursorValue; i++) {
-            ShowCursor_Real(true);
+        if (info.CaptureFlags & MOUSE_CAPTURE_HIDE) {
+            int newValue = ShowCursor_Real(info.ShowCursorValue >= 0);
+            for (int i = newValue; i < info.ShowCursorValue; i++) {
+                ShowCursor_Real(true);
+            }
+            for (int i = newValue; i > info.ShowCursorValue; i--) {
+                ShowCursor_Real(false);
+            }
         }
-        for (int i = newValue; i > info.ShowCursorValue; i--) {
-            ShowCursor_Real(false);
-        }
 
-        if (GCapture.PrevThread == 0) // affect global state, unless someone else took it already
-        {
+        // affect global state, unless someone else took it already
+        if (GCapture.PrevThread == 0) {
             if (GCapture.ClipCursorOverride) {
                 ClipCursor_Real(GCapture.ClipCursorSet ? &GCapture.ClipCursorRect : nullptr);
             }
 
-            SetCursorPos(GCapture.OldPos.x, GCapture.OldPos.y);
+            if (info.CaptureFlags & MOUSE_CAPTURE_HIDE) {
+                SetCursorPos(GCapture.OldPos.x, GCapture.OldPos.y);
+            }
         }
     }
 }
 
 static void MouseCaptureUpdate(HWND activeWindow, bool updateClip) {
-    RECT r = {};
     if (updateClip) {
-        GetWindowRect(activeWindow, &r);
+        RECT r = {};
+        GetClientRect(activeWindow, &r);
+        MapWindowPoints(activeWindow, nullptr, (POINT *)&r, 2);
         ClipCursor_Real(&r);
         if (G.Debug) {
             LOG << "set cursor rect to " << r.left << ".." << r.right << ", " << r.top << ".." << r.bottom << END;
         }
     }
-    GetClipCursor_Real(&r);
 
-    POINT pos = {(r.left + r.right) / 2, (r.top + r.bottom) / 2};
-    SetCursorPos(pos.x, pos.y);
+    if (GCapture.CaptureFlags & MOUSE_CAPTURE_HIDE) {
+        RECT r = {};
+        GetClipCursor_Real(&r);
+
+        POINT pos = {(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+        SetCursorPos(pos.x, pos.y);
+    }
 }
 
 static LRESULT CALLBACK MouseCaptureHook(int nCode, WPARAM wParam, LPARAM lParam) // called in thread
@@ -114,18 +129,18 @@ static LRESULT CALLBACK MouseCaptureHook(int nCode, WPARAM wParam, LPARAM lParam
         if (GCapture.PrevThread != threadId) {
             lock_guard<mutex> lock(GCapture.HooksMutex);
             auto &threadHooks = GCapture.Hooks;
-            for (int i = (int)threadHooks.size() - 1; i >= 0; i--) {
+            for (int i = 0; i < (int)threadHooks.size(); i++) {
                 auto &info = threadHooks[i];
                 if (info.Thread == threadId) {
                     if (info.NeedFinish) {
                         finish = true;
                         MouseCaptureStop(info);
-                        threadHooks.erase(threadHooks.begin() + i);
+                        threadHooks.erase(threadHooks.begin() + i--);
                     } else if (!info.Started && activeWindow) {
                         start = true;
                         MouseCaptureStart(info, threadId);
+                        break;
                     }
-                    break;
                 }
             }
         }
@@ -162,14 +177,17 @@ void WinCursorDetachThread(DWORD threadId) {
     }
 }
 
-static void UpdateHideCursor() {
+static void UpdateCursor() {
     DBG_ASSERT_DLL_THREAD();
 
-    bool wantCapture = G.HideCursor && !G.Disable;
+    DWORD captureFlags = G.HideCursor ? MOUSE_CAPTURE_HIDE : G.BoundCursor ? MOUSE_CAPTURE_BOUND
+                                                                           : 0;
+    bool wantCapture = captureFlags && !G.Disable;
     DWORD captureThread = wantCapture ? GetWindowThreadInOurProcess(GetForegroundWindow()) : 0;
 
     DWORD oldCaptureThread = GCapture.CaptureThread;
-    if (captureThread != oldCaptureThread) {
+    DWORD oldCaptureFlags = GCapture.CaptureFlags;
+    if (captureThread != oldCaptureThread || captureFlags != oldCaptureFlags) {
         if (oldCaptureThread) {
             lock_guard<mutex> lock(GCapture.HooksMutex);
             for (auto &hook : GCapture.Hooks) {
@@ -177,9 +195,11 @@ static void UpdateHideCursor() {
             }
             GCapture.PrevThread = 0;
             GCapture.PrevWindow = nullptr;
+            PostThreadMessageW(GCapture.CaptureThread, WM_NULL, 0, 0); // ensure hook gets called immediately
         }
 
         GCapture.CaptureThread = captureThread;
+        GCapture.CaptureFlags = captureFlags;
 
         if (G.Debug) {
             LOG << "mouse thread changed to: " << captureThread << END;
@@ -189,12 +209,12 @@ static void UpdateHideCursor() {
             lock_guard<mutex> lock(GCapture.HooksMutex);
             HHOOK hook = SetWindowsHookExW_Real(WH_GETMESSAGE, MouseCaptureHook, nullptr, captureThread);
             PostThreadMessageW(captureThread, WM_NULL, 0, 0); // ensure hook gets called immediately
-            GCapture.Hooks.push_back({captureThread, hook});
+            GCapture.Hooks.push_back({captureThread, hook, captureFlags});
         }
     }
 }
 
-static void RehookHideCursor() {
+static void RehookCursor() {
     lock_guard<mutex> lock(GCapture.HooksMutex);
     for (auto &info : GCapture.Hooks) {
         UnhookWindowsHookEx_Real(info.HHook);
@@ -208,7 +228,7 @@ int WINAPI ShowCursor_Hook(BOOL show) {
     {
         lock_guard<mutex> lock(GCapture.HooksMutex);
         for (auto &hook : GCapture.Hooks) {
-            if (hook.Thread == thread && hook.Started) {
+            if (hook.Thread == thread && hook.Started && (hook.CaptureFlags & MOUSE_CAPTURE_HIDE)) {
                 if (show) {
                     hook.ShowCursorValue++;
                 } else {
@@ -233,7 +253,7 @@ BOOL WINAPI GetCursorInfo_Hook(PCURSORINFO pci) {
 
         lock_guard<mutex> lock(GCapture.HooksMutex);
         for (auto &hook : GCapture.Hooks) {
-            if (hook.Thread == thread && hook.Started &&
+            if (hook.Thread == thread && hook.Started && (hook.CaptureFlags & MOUSE_CAPTURE_HIDE) &&
                 !(pci->flags & CURSOR_SHOWING) &&
                 GetCursorPos(&cursorPos) &&
                 (cursorWin = WindowFromPoint(cursorPos)) != nullptr &&

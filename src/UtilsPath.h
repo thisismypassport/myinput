@@ -3,6 +3,8 @@
 #include "UtilsStr.h"
 #include <Windows.h>
 
+struct TakeTag {};
+
 template <class tchar>
 class BasicPath {
     tchar *Buffer;
@@ -34,6 +36,8 @@ public:
     BasicPath(BasicPath<tchar> &&other) : Buffer(other.Buffer) {
         other.Buffer = nullptr;
     }
+
+    BasicPath(tchar *source, TakeTag) : Buffer(source) {}
 
     ~BasicPath() {
         delete[] Buffer;

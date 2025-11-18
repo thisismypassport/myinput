@@ -10,7 +10,10 @@
 #define IMPL_MAX_SLOTS 31 // last bit in ImplBoolOutput.Slots
 
 using user_t = int8_t;
+using user_mask_t = uint16_t;
 using slot_t = uint8_t;
+
+static_assert(CHAR_BIT * sizeof(user_mask_t) >= IMPL_MAX_USERS);
 
 #pragma pack(push, 1) // just because it's often followed by more uint8_t's
 struct ImplBoolOutput {
@@ -260,7 +263,7 @@ struct ImplUser {
     bool Connected = false;
     bool DeviceSpecified = false;
     ImplStickShape StickShape = ImplStickShape::Default;
-    DeviceIntf *Device = nullptr;
+    WeakAtomic<DeviceIntf *> Device = nullptr;
     CallbackList<bool(ImplUser *)> Callbacks;
 
     void Reset() {
@@ -425,9 +428,10 @@ struct ImplG {
 
     // reset by ResetVars
     bool Trace, Debug, ApiTrace, ApiDebug, WaitDebugger, SpareForDebug;
-    bool Forward, Always, Disable, HideCursor, RumbleWindow;
-    bool InjectChildren;
+    bool Forward, Always, Disable, HideCursor, BoundCursor, RumbleWindow;
+    bool InjectChildren, AutoReload;
 
+    bool InjectChildrenDisallow = false;
     HINSTANCE HInstance = nullptr;
     HANDLE InitEvent = nullptr;
     DWORD DllThread = 0;
@@ -447,7 +451,7 @@ struct ImplG {
 
         Keyboard.Reset();
         Mouse.Reset();
-        ActiveUser = 0;
+        ActiveUser = DefaultActiveUser = 0;
 
         for (auto &custom : CustomKeys) {
             custom->Key.Reset();
@@ -459,8 +463,8 @@ struct ImplG {
 private:
     void ResetVars() {
         Trace = Debug = ApiTrace = ApiDebug = WaitDebugger = SpareForDebug = false;
-        Forward = Always = Disable = HideCursor = RumbleWindow = false;
-        InjectChildren = true;
+        Forward = Always = Disable = HideCursor = BoundCursor = RumbleWindow = false;
+        InjectChildren = AutoReload = true;
     }
 } G;
 

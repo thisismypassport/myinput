@@ -259,43 +259,49 @@ class ImplProcessPipeThreads {
 
 public:
     HANDLE CreatePipeHandle(DeviceIntf *device, DWORD flags) {
-        UINT seq = ++mSequence;
+        while (true) {
+            UINT seq = ++mSequence;
 
-        // See also device's FinalPipePrefix
-        wchar_t pipeName[MAX_PATH];
-        wsprintfW(pipeName, LR"(\\.\Pipe\MyInputHook_%d.%d.%d)", GetCurrentProcessId(), device->UserIdx, seq);
+            // See also device's FinalPipePrefix
+            wchar_t pipeName[MAX_PATH];
+            wsprintfW(pipeName, LR"(\\.\Pipe\MyInputHook_%d.%d.%d)", GetCurrentProcessId(), device->UserIdx, seq);
 
-        Path finalName(MAX_PATH);
-        wsprintfW(finalName, L"%s%d", device->FinalPipePrefix.Get(), seq);
+            Path finalName(MAX_PATH);
+            wsprintfW(finalName, L"%s%d", device->FinalPipePrefix.Get(), seq);
 
-        HANDLE pipe = CreateNamedPipeW(pipeName, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                                       PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
-                                       1, 0, 0, 0, nullptr); // 0 buffer helps with immediate mode, at least
+            HANDLE pipe = CreateNamedPipeW(pipeName, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                           PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
+                                           1, 0, 0, 0, nullptr); // 0 buffer helps with immediate mode, at least
 
-        HANDLE client = CreateFileW_Real(pipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-                                         FILE_ATTRIBUTE_NORMAL | (flags & FILE_FLAG_OVERLAPPED), nullptr);
+            HANDLE client = pipe == INVALID_HANDLE_VALUE ? INVALID_HANDLE_VALUE : CreateFileW_Real(pipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | (flags & FILE_FLAG_OVERLAPPED), nullptr);
 
-        if (pipe == INVALID_HANDLE_VALUE || client == INVALID_HANDLE_VALUE) {
-            LOG_ERR << "failed creating pipe" << END;
-        } else {
-            if (gUniqLogDeviceOpen) {
-                LOG << "Opening device via file API" << END;
+            if (pipe == INVALID_HANDLE_VALUE || client == INVALID_HANDLE_VALUE) {
+                if (GetLastError() == ERROR_PIPE_BUSY) {
+                    LOG << "pipe name already taken, retrying..." << END;
+                    continue;
+                }
+
+                LOG_ERR << "failed creating pipe" << END;
+            } else {
+                if (gUniqLogDeviceOpen) {
+                    LOG << "Opening device via file API" << END;
+                }
+                if (G.ApiDebug) {
+                    LOG << "Created pipe " << pipe << END;
+                }
+
+                DWORD readMode = PIPE_READMODE_MESSAGE;
+                SetNamedPipeHandleState(client, &readMode, nullptr, nullptr); // (doesn't help that much - still reads partials...)
+
+                // must create after client exists as this starts reading
+                lock_guard<mutex> lock(mMutex);
+                auto thread = new ImplProcessPipeThread(pipe, device, move(finalName));
+                mThreads[device->UserIdx].push_back(thread);
+                thread->Start();
             }
-            if (G.ApiDebug) {
-                LOG << "Created pipe " << pipe << END;
-            }
 
-            DWORD readMode = PIPE_READMODE_MESSAGE;
-            SetNamedPipeHandleState(client, &readMode, nullptr, nullptr); // (doesn't help that much - still reads partials...)
-
-            // must create after client exists as this starts reading
-            lock_guard<mutex> lock(mMutex);
-            auto thread = new ImplProcessPipeThread(pipe, device, move(finalName));
-            mThreads[device->UserIdx].push_back(thread);
-            thread->Start();
+            return client;
         }
-
-        return client;
     }
 
     void OnPipeThreadEnded(ImplProcessPipeThread *thread, int userIdx) {

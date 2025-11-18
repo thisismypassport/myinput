@@ -320,11 +320,14 @@ class ConfigTestPanel : public Panel {
         if (regEnable && !mRegistered) {
             if (!mInitialized) {
                 SetEnvironmentVariableW(L"MYINPUT_HOOK_CONFIG", L"<empty>");
-                if (!LoadLibraryA("myinput_hook.dll")) {
+                bool loaded = LoadLibraryA("myinput_hook.dll");
+                SetEnvironmentVariableW(L"MYINPUT_HOOK_CONFIG", nullptr);
+                if (!loaded) {
                     return Alert(L"Failed loading myinput");
                 }
 
                 MyInputHook_WaitInit();
+                MyInputHook_DisallowInjectChildren(true);
                 mInitialized = true;
             }
 

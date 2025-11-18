@@ -8,7 +8,7 @@
 
 DEVINST gRootDevInst;
 UniqueLog gUniqLogCfgMgrFind;
-AddrRange gCfgMgrAddrs;
+RedirectDetector gCfgMgrRedirect;
 
 // Note - I'm ignoring HMACHINE since in modern windows, non-local HMACHINEs aren't supported anyway
 
@@ -61,9 +61,7 @@ static bool ZZTStrAppend(tchar *&buffer, ULONG &bufferLen, const tchar *src) {
 
 template <class TOrigCall>
 static CONFIGRET CM_Get_Parent_GenHook(PDEVINST pdnDevInst, DEVINST dnDevInst, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && pdnDevInst) {
@@ -88,9 +86,7 @@ CONFIGRET WINAPI CM_Get_Parent_Ex_Hook(PDEVINST pdnDevInst, DEVINST dnDevInst, U
 
 template <class TOrigCall>
 CONFIGRET WINAPI CM_Get_Sibling_GenHook(PDEVINST pdnDevInst, DEVINST dnDevInst, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     int devNodeIdx;
     DeviceNode *node = GetCustomDevInstNode(dnDevInst, &devNodeIdx);
@@ -137,9 +133,7 @@ CONFIGRET WINAPI CM_Get_Sibling_Ex_Hook(PDEVINST pdnDevInst, DEVINST dnDevInst, 
 
 template <class TOrigCall>
 CONFIGRET WINAPI CM_Get_Child_GenHook(PDEVINST pdnDevInst, DEVINST dnDevInst, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && pdnDevInst) {
@@ -164,9 +158,7 @@ CONFIGRET WINAPI CM_Get_Child_Ex_Hook(PDEVINST pdnDevInst, DEVINST dnDevInst, UL
 
 template <class TOrigCall>
 CONFIGRET WINAPI CM_Get_Depth_GenHook(PULONG pulDepth, DEVINST dnDevInst, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && pulDepth) {
@@ -191,9 +183,7 @@ CONFIGRET WINAPI CM_Get_Depth_Ex_Hook(PULONG pulDepth, DEVINST dnDevInst, ULONG 
 
 template <class TOrigCall>
 CONFIGRET WINAPI CM_Get_Device_ID_Size_GenHook(PULONG pulLen, DEVINST dnDevInst, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && pulLen) {
@@ -219,9 +209,7 @@ CONFIGRET WINAPI CM_Get_Device_ID_Size_Ex_Hook(PULONG pulLen, DEVINST dnDevInst,
 
 template <class tchar, class TOrigCall>
 CONFIGRET WINAPI CM_Get_Device_ID_GenHook(DEVINST dnDevInst, tchar *buffer, ULONG bufferLen, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && buffer) {
@@ -293,9 +281,7 @@ static bool DeviceIDListFilterMatches(const tchar *pszFilter, ULONG ulFlags, Fil
 
 template <class tchar, class TOrigCall>
 CONFIGRET WINAPI CM_Get_Device_ID_List_Size_GenHook(PULONG pulLen, const tchar *pszFilter, ULONG ulFlags, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     if (G.ApiDebug) {
         LOG << "CM_Get_Device_ID_List_Size " << (pszFilter ? pszFilter : TSTR("")) << ", " << ulFlags << END;
@@ -335,9 +321,7 @@ CONFIGRET WINAPI CM_Get_Device_ID_List_Size_ExW_Hook(PULONG pulLen, PCWSTR pszFi
 
 template <class tchar, class TOrigCall>
 CONFIGRET WINAPI CM_Get_Device_ID_List_GenHook(const tchar *pszFilter, tchar *buffer, ULONG bufferLen, ULONG ulFlags, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     if (G.ApiDebug) {
         LOG << "CM_Get_Device_ID_List " << (pszFilter ? pszFilter : TSTR("")) << ", " << ulFlags << END;
@@ -397,9 +381,7 @@ static DEVINST LocateCustomDevNode(tchar *pDeviceID) {
 
 template <class tchar, class TOrigCall>
 CONFIGRET WINAPI CM_Locate_DevNode_GenHook(PDEVINST pdnDevInst, tchar *pDeviceID, ULONG ulFlags, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     // Without validation, CM_Locate_DevNode*_Real would create a dummy device node, which is unwanted
     // The question then is whether validation is faster or slower than LocateCustomDevNode...
@@ -443,9 +425,7 @@ CONFIGRET WINAPI CM_Locate_DevNode_ExW_Hook(PDEVINST pdnDevInst, DEVINSTID_W pDe
 
 template <class TOrigCall>
 CONFIGRET WINAPI CM_Get_DevNode_Status_GenHook(PULONG pulStatus, PULONG pulProblemNumber, DEVINST dnDevInst, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && pulStatus && pulProblemNumber) {
@@ -546,9 +526,7 @@ ostream &operator<<(ostream &o, const DEVPROPKEY *propKey) {
 
 template <class TOrigCall>
 CONFIGRET WINAPI CM_Get_DevNode_Property_Keys_GenHook(DEVINST dnDevInst, DEVPROPKEY *propKeys, PULONG propKeyCount, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && propKeyCount) {
@@ -589,9 +567,7 @@ CONFIGRET WINAPI CM_Get_DevNode_Property_Keys_Ex_Hook(DEVINST dnDevInst, DEVPROP
 
 template <class tchar, class TOrigCall>
 CONFIGRET WINAPI CM_Get_DevNode_Property_GenHook(DEVINST dnDevInst, const DEVPROPKEY *propKey, DEVPROPTYPE *propType, PBYTE propBuf, PULONG propSize, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && propKey && propType && propSize) {
@@ -641,9 +617,7 @@ CONFIGRET WINAPI CM_Get_DevNode_Property_ExW_Hook(DEVINST dnDevInst, const DEVPR
 
 template <class tchar, class TOrigCall>
 CONFIGRET WINAPI CM_Get_DevNode_Registry_Property_GenHook(DEVINST dnDevInst, ULONG prop, PULONG propType, PVOID buffer, PULONG pulLength, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     DeviceNode *node = GetCustomDevInstNode(dnDevInst);
     if (node && pulLength) {
@@ -751,9 +725,7 @@ static bool DeviceInterfaceListFilterMatches(LPGUID clsGuid, const tchar *pDevic
 
 template <class tchar, class TOrigCall>
 CONFIGRET WINAPI CM_Get_Device_Interface_List_Size_GenHook(PULONG pulLen, LPGUID clsGuid, tchar *pDeviceID, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     CONFIGRET ret = origCall();
 
@@ -793,9 +765,7 @@ CONFIGRET WINAPI CM_Get_Device_Interface_List_Size_ExW_Hook(PULONG pulLen, LPGUI
 
 template <class tchar, class TOrigCall>
 CONFIGRET WINAPI CM_Get_Device_Interface_List_GenHook(LPGUID clsGuid, tchar *pDeviceID, tchar *buffer, ULONG bufferLen, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     CONFIGRET ret = origCall();
 
@@ -843,9 +813,7 @@ CONFIGRET WINAPI CM_Get_Device_Interface_List_ExW_Hook(LPGUID clsGuid, DEVINSTID
 
 template <class TOrigCall>
 CONFIGRET WINAPI CM_Get_Device_Interface_Property_Keys_GenHook(LPCWSTR pszIntf, DEVPROPKEY *propKeys, PULONG propKeyCount, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     ULONG oldKeyCount = propKeyCount ? *propKeyCount : 0;
     CONFIGRET ret = origCall();
@@ -889,9 +857,7 @@ CONFIGRET WINAPI CM_Get_Device_Interface_Property_Keys_ExW_Hook(LPCWSTR pszIntf,
 
 template <class TOrigCall>
 CONFIGRET WINAPI CM_Get_Device_Interface_Property_GenHook(LPCWSTR pszIntf, const DEVPROPKEY *propKey, DEVPROPTYPE *propType, PBYTE propBuf, PULONG propSize, void *caller, TOrigCall origCall) {
-    if (gCfgMgrAddrs.Contains(caller)) {
-        return origCall();
-    }
+    REDIRECT_DETECT(gCfgMgrRedirect, caller, origCall);
 
     ULONG oldPropSize = propSize ? *propSize : 0;
     CONFIGRET ret = origCall();
@@ -1056,60 +1022,60 @@ CONFIGRET WINAPI CM_Unregister_Notification_Hook(HCMNOTIFICATION NotifyContext) 
 void HookCfgMgr() {
     CM_Locate_DevNodeW(&gRootDevInst, NULL, 0);
 
-    ADD_GLOBAL_HOOK(CM_Get_Parent, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Parent_Ex, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Child, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Child_Ex, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Sibling, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Sibling_Ex, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Depth, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Depth_Ex, &gCfgMgrAddrs);
+    ADD_GLOBAL_HOOK(CM_Get_Parent, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Parent_Ex, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Child, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Child_Ex, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Sibling, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Sibling_Ex, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Depth, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Depth_Ex, &gCfgMgrRedirect);
 
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_Size, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_Size_Ex, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_IDA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_ExA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_IDW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_ExW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_SizeA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_Size_ExA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_SizeW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_Size_ExW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_ListA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_ExA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_ListW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_ExW, &gCfgMgrAddrs);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_Size, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_Size_Ex, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_IDA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_ExA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_IDW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_ExW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_SizeA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_Size_ExA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_SizeW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_Size_ExW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_ListA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_ExA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_ListW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_ID_List_ExW, &gCfgMgrRedirect);
 
-    ADD_GLOBAL_HOOK(CM_Locate_DevNodeA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Locate_DevNode_ExA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Locate_DevNodeW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Locate_DevNode_ExW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Status, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Status_Ex, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Property_Keys, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Property_Keys_Ex, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_PropertyW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Property_ExW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Registry_PropertyA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Registry_Property_ExA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Registry_PropertyW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_DevNode_Registry_Property_ExW, &gCfgMgrAddrs);
+    ADD_GLOBAL_HOOK(CM_Locate_DevNodeA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Locate_DevNode_ExA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Locate_DevNodeW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Locate_DevNode_ExW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Status, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Status_Ex, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Property_Keys, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Property_Keys_Ex, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_PropertyW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Property_ExW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Registry_PropertyA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Registry_Property_ExA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Registry_PropertyW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_DevNode_Registry_Property_ExW, &gCfgMgrRedirect);
 
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_SizeA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_Size_ExA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_SizeW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_Size_ExW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_ListA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_ExA, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_ListW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_ExW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_Property_KeysW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_Property_Keys_ExW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_PropertyW, &gCfgMgrAddrs);
-    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_Property_ExW, &gCfgMgrAddrs);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_SizeA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_Size_ExA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_SizeW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_Size_ExW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_ListA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_ExA, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_ListW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_List_ExW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_Property_KeysW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_Property_Keys_ExW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_PropertyW, &gCfgMgrRedirect);
+    ADD_GLOBAL_HOOK(CM_Get_Device_Interface_Property_ExW, &gCfgMgrRedirect);
 
     ADD_GLOBAL_HOOK(CM_Register_Notification);
     ADD_GLOBAL_HOOK(CM_Unregister_Notification);
 
-    gCfgMgrAddrs.Add(G.HInstance); // for tailcalls & Real-calls
+    gCfgMgrRedirect.Add(G.HInstance); // for tailcalls & Real-calls
 }

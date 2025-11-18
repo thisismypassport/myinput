@@ -138,6 +138,7 @@ enum {
     MY_VK_TOGGLE_ALWAYS,
     MY_VK_TOGGLE_SPARE_FOR_DEBUG,
     MY_VK_LOAD_CONFIG,
+    MY_VK_TOGGLE_BOUND_CURSOR,
     MY_VK_LAST_CMD,
 
     MY_VK_FIRST_USER_CMD = 0xc500,
@@ -446,6 +447,7 @@ enum class MyVkGroup {
     e(MY_VK_TOGGLE_CONNECTED, "ToggleConnected", L"Toggle Gamepad Connected", Command, "toggleconnected");                                                \
     e(MY_VK_TOGGLE_ALWAYS, "ToggleAlways", L"Toggle Mapping in Background", Command, "togglealways");                                                     \
     e(MY_VK_TOGGLE_HIDE_CURSOR, "ToggleHideCursor", L"Toggle Hide Cursor", Command, "togglehidecursor");                                                  \
+    e(MY_VK_TOGGLE_BOUND_CURSOR, "ToggleBoundCursor", L"Toggle Bound Cursor", Command, "toggleboundcursor");                                              \
     /* Command Debug group */                                                                                                                             \
     e(MY_VK_TOGGLE_SPARE_FOR_DEBUG, "ToggleSpareForDebug", L"(Debug) No Effect Toggle", CommandDebug, "togglesparefordebug");                             \
     //

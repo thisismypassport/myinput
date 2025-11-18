@@ -524,4 +524,15 @@ public:
     void ResetSelection() override {
         mRegList->SetSelected({});
     }
+
+    void SetSelection(const wchar_t *text) {
+        for (int i = 0; i < (int)mRegisteredExes.size(); i++) {
+            Path baseName = PathGetBaseNameWithoutExt(mRegisteredExes[i].Name);
+            if (tstrieq(baseName, text)) {
+                mRegList->SetSelected(vector<int>{i});
+                mRegList->EnsureVisible(i);
+                break;
+            }
+        }
+    }
 };

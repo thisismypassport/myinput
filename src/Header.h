@@ -3,6 +3,9 @@
 #include <Windows.h>
 #include <cfgmgr32.h>
 
+#define MYINPUT_HOOK_DLL_DECLSPEC __declspec(dllexport)
+#include "MyInputHook.h"
+
 CONFIGRET(WINAPI *CM_Get_Parent_Real)
 (PDEVINST pdnDevInst, DEVINST dnDevInst, ULONG ulFlags) = CM_Get_Parent;
 CONFIGRET(WINAPI *CM_Get_Parent_Ex_Real)
@@ -222,8 +225,8 @@ void PostAppCallback(VoidCallback cb);
 
 HANDLE GetCustomDeviceHandle(int user);
 void UpdateAll();
-void UpdateHideCursor();
-void RehookHideCursor();
+void UpdateCursor();
+void RehookCursor();
 bool ProcessRawKeyboardEvent(int msg, int key, int scan, int flags, ULONG extraInfo, bool injected);
 void ImplAbortMappings();
 void ImplToggleForeground(bool allowUpdateAll = true);

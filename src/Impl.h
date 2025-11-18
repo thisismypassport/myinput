@@ -320,7 +320,14 @@ static void ImplProcess(ImplMapping &mapping, InputValue &v, ChangedMask *change
         case MY_VK_TOGGLE_HIDE_CURSOR:
             if (!v.Down) {
                 G.HideCursor = !G.HideCursor;
-                UpdateHideCursor();
+                UpdateCursor();
+            }
+            break;
+
+        case MY_VK_TOGGLE_BOUND_CURSOR:
+            if (!v.Down) {
+                G.BoundCursor = !G.BoundCursor;
+                UpdateCursor();
             }
             break;
 

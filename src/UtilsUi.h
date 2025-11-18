@@ -1,5 +1,6 @@
 #pragma once
 #include "UtilsUiBase.h"
+#include "resource.h"
 #include <CommCtrl.h>
 #include <Uxtheme.h>
 
@@ -878,6 +879,10 @@ public:
 
     void SetOnFinish(function<void()> &&finished) { mFinished = move(finished); }
 
+    void SetReadOnly(bool readOnly) {
+        SendMessageW(mControl, EM_SETREADONLY, readOnly, 0);
+    }
+
     void OnCommand(WORD value) override {
         if (value == EN_CHANGE && !mProgrammatic) {
             mHasChanges = true;
@@ -1170,6 +1175,7 @@ public:
 
     void Remove(int idx) { SendMessageW(mControl, LB_DELETESTRING, idx, 0); }
     void Clear() { SendMessageW(mControl, LB_RESETCONTENT, 0, 0); }
+    int Count() { return (int)SendMessageW(mControl, LB_GETCOUNT, 0, 0); }
 
     int Find(const wchar_t *str) { return (int)SendMessageW(mControl, LB_FINDSTRINGEXACT, -1, (LPARAM)str); }
     Path Get(int idx) {
@@ -1278,6 +1284,7 @@ public:
 
     void Remove(int idx) { SendMessageW(mControl, CB_DELETESTRING, idx, 0); }
     void Clear() { SendMessageW(mControl, CB_RESETCONTENT, 0, 0); }
+    int Count() { return (int)SendMessageW(mControl, CB_GETCOUNT, 0, 0); }
 
     int Find(const wchar_t *str) { return (int)SendMessageW(mControl, CB_FINDSTRINGEXACT, -1, (LPARAM)str); }
     Path Get(int idx) {
@@ -1289,6 +1296,15 @@ public:
         Path path(len + 1);
         SendMessageW(mControl, CB_GETLBTEXT, idx, (LPARAM)path.Get());
         return path;
+    }
+
+    int FindByData(void *data) {
+        for (int i = 0, count = Count(); i < count; i++) {
+            if (GetData(i) == data) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     int GetSelected() { return (int)SendMessageW(mControl, CB_GETCURSEL, 0, 0); }
@@ -1605,6 +1621,7 @@ public:
 
     void Remove(int idx) { SendMessageW(mControl, LVM_DELETEITEM, idx, 0); }
     void Clear() { SendMessageW(mControl, LVM_DELETEALLITEMS, 0, 0); }
+    int Count() { return (int)SendMessageW(mControl, LVM_GETITEMCOUNT, 0, 0); }
 
     bool GetChecked(int idx) {
         int state = (int)SendMessageW(mControl, LVM_GETITEMSTATE, idx, LVIS_STATEIMAGEMASK);
@@ -3439,6 +3456,7 @@ protected:
         wincls.lpszClassName = WindowClassName;
         wincls.lpfnWndProc = WinProc;
         wincls.hCursor = LoadCursorA(nullptr, IDC_ARROW);
+        wincls.hIcon = LoadIconA(GetModuleHandleA(nullptr), MAKEINTRESOURCE(IDI_ICON));
         wincls.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
         RegisterClassW(&wincls);
         registered = true;

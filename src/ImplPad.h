@@ -2,15 +2,13 @@
 #include "StateUtils.h"
 #include "Header.h"
 #include "ImplFeedback.h"
-#define MYINPUT_HOOK_DLL_DECLSPEC __declspec(dllexport)
-#include "MyInputHook.h"
 
 static void CALLBACK ImplRepeatTimerProc(HWND window, UINT msg, UINT_PTR id, DWORD time);
 static void ImplGenerateMouseMotionFinish();
 
 class ChangedMask {
-    UINT TouchedUsers = 0;
-    UINT ChangedUsers = 0;
+    user_mask_t TouchedUsers = 0;
+    user_mask_t ChangedUsers = 0;
     bool ChangedMouseMotion = false;
 
 public:

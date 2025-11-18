@@ -5,14 +5,15 @@
 #include <fstream>
 
 struct ConfigState {
-    list<Path> LoadedFiles;
-    unordered_set<wstring_view> LoadedFilesSet;
+    vector<wstring> LoadedFiles;
+    uint64_t MaxTime;
     Path MainFile;
     Path Directory;
     ConfigCustom Custom;
     ConfigPlugin *CurrPlugin = nullptr;
     vector<function<void(const string &)>> CustomVarCbs;
     vector<function<void(int, bool)>> CustomDeviceCbs;
+    vector<function<void(bool)>> ConfigCbs;
 } GConfig;
 
 bool ConfigLoadFrom(const wchar_t *filename);
@@ -225,13 +226,12 @@ void ConfigLoadVarLine(const string &line, intptr_t idx) {
 }
 
 bool ConfigLoadFrom(const wchar_t *filename) {
-    if (GConfig.LoadedFilesSet.contains(filename)) {
+    if (Find(GConfig.LoadedFiles, filename) >= 0) {
         LOG_W << "ERROR: Duplicate loading of config " << filename << END;
         return false;
     }
 
     GConfig.LoadedFiles.push_back(filename);
-    GConfig.LoadedFilesSet.insert(GConfig.LoadedFiles.back().Get());
 
     Path path = PathCombine(GConfig.Directory, filename);
     LOG << "Loading config from: " << path << END;
@@ -240,6 +240,8 @@ bool ConfigLoadFrom(const wchar_t *filename) {
         LOG_W << "ERROR: Failed to open: " << path << END;
         return false;
     }
+
+    GConfig.MaxTime = max(GConfig.MaxTime, GetFileLastWriteTime(path));
 
     string line;
     int inactiveDepth = 0;
@@ -281,8 +283,14 @@ bool ConfigLoadFrom(const wchar_t *filename) {
 void ConfigReset() {
     G.Reset();
 
-    GConfig.LoadedFilesSet.clear();
     GConfig.LoadedFiles.clear();
+    GConfig.MaxTime = 0;
+}
+
+void ConfigCallReloadCbs(bool after) {
+    for (auto &cb : GConfig.ConfigCbs) {
+        cb(after);
+    }
 }
 
 static void ConfigSendGlobalEvents(bool added, bool onInit = false) {
@@ -310,6 +318,7 @@ static void ConfigFinalizeUser(int idx, ImplUser *user) {
 
 static void ConfigReloadNoUpdate() {
     ConfigReset();
+    ConfigCallReloadCbs(false);
 
     if (!tstreq(GConfig.MainFile, ConfigEmpty)) {
         if (!ConfigLoadFrom(GConfig.MainFile)) {
@@ -322,6 +331,7 @@ static void ConfigReloadNoUpdate() {
     for (int i = 0; i < IMPL_MAX_USERS; i++) {
         ConfigFinalizeUser(i, &G.Users[i]);
     }
+    ConfigCallReloadCbs(true);
 }
 
 void ConfigInit(Path &&path, Path &&name) {
@@ -337,6 +347,19 @@ void ConfigReload() {
     ConfigReloadNoUpdate();
     ConfigSendGlobalEvents(true);
     UpdateAll();
+}
+
+void ConfigReloadIfNeeded() {
+    uint64_t newMaxTime = 0;
+    for (auto &filename : GConfig.LoadedFiles) {
+        Path path = PathCombine(GConfig.Directory, filename.c_str());
+        newMaxTime = max(newMaxTime, GetFileLastWriteTime(path));
+    }
+
+    if (newMaxTime > GConfig.MaxTime) {
+        LOG << "Config update, auto-reloading..." << END;
+        ConfigReload();
+    }
 }
 
 void ConfigLoad(const wchar_t *name) {
@@ -408,5 +431,15 @@ int ConfigRegisterCustomDevice(const char *name, function<void(int, bool)> &&cb)
         });
     }
 
+    return index;
+}
+
+int ConfigRegisterCB(function<void(bool)> &&cb) {
+    if (!ConfigCheckCurrPlugin()) {
+        return -1;
+    }
+
+    int index = (int)GConfig.ConfigCbs.size();
+    GConfig.ConfigCbs.push_back(move(cb));
     return index;
 }

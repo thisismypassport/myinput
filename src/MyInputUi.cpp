@@ -21,7 +21,9 @@ class MyInputWindow : public ModalWindow, public BaseUiIntf {
         mTab = New<UnionTab>();
         mTab->Add(L"Executables", mExePanel);
         mTab->Add(L"Configs", mConfigPanel);
-        mTab->Add(L"Test", mTestPanel);
+        mTab->Add(L"Test Config", mTestPanel);
+
+        ProcessArgs();
         return mTab;
     }
 
@@ -34,6 +36,29 @@ public:
 
     void SwitchToConfigs() override {
         mTab->SetSelected(mConfigPanel);
+    }
+
+    void ProcessArgs() {
+        int numArgs;
+        LPWSTR *args = CommandLineToArgvW(GetCommandLineW(), &numArgs);
+
+        for (int argI = 1; argI < numArgs; argI++) {
+            if (tstreq(args[argI], L"--select") && argI + 1 < numArgs) {
+                mExePanel->SetSelection(args[++argI]);
+            } else if (tstreq(args[argI], L"--edit") && argI + 1 < numArgs) {
+                mConfigPanel->SetConfig(args[++argI]);
+                mTab->SetSelected(mConfigPanel);
+            }
+#if ZERO
+            else if (tstreq(args[argI], L"--test") && argI + 1 < numArgs) {
+                mConfigPanel->SetConfig(args[++argI]);
+                mTab->SetSelected(mTestPanel);
+            }
+#endif
+            else {
+                Alert(L"Unrecognized option: %ws", args[argI]);
+            }
+        }
     }
 };
 

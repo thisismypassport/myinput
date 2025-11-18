@@ -18,7 +18,7 @@ void UpdateAll() {
     RawInputUpdateKeyboard();
     WinHooksUpdateMouse();
     RawInputUpdateMouse();
-    UpdateHideCursor();
+    UpdateCursor();
     ImplUpdateAsyncState();
 }
 
@@ -72,11 +72,6 @@ void MyInputHook_Log(const char *data, intptr_t size, char level) {
 
 void MyInputHook_SetLogCallback(void (*cb)(const char *str, size_t size, char level, void *data), void *data) {
     GLogCb = LogCbType{cb, data};
-}
-
-int MyInputHook_InternalForTest() {
-    UINT mask;
-    return ImplGetUsers(&mask, DEVICE_NODE_TYPE_HID);
 }
 
 void MyInputHook_PostInDllThread(AppCallback cb, void *data) {
@@ -147,6 +142,12 @@ void *MyInputHook_UnregisterCallback(int userIdx, void *cbObj) {
     return nullptr;
 }
 
+void *MyInputHook_RegisterConfigCallback(void (*cb)(bool after, void *data), void *data) {
+    DBG_ASSERT_DLL_THREAD();
+    int index = ConfigRegisterCB([=](bool after) { cb(after, data); });
+    return (void *)(uintptr_t)(index + 1);
+}
+
 void MyInputHook_GetInState(int userIdx, int type, void *state, int size) {
     DBG_ASSERT_DLL_THREAD();
     auto user = ImplGetUser(userIdx);
@@ -174,6 +175,26 @@ void MyInputHook_LoadConfig(const wchar_t *name) {
 
 void MyInputHook_WaitInit() {
     WaitForSingleObject(G.InitEvent, INFINITE);
+}
+
+void MyInputHook_DisallowInjectChildren(bool disallow) {
+    G.InjectChildrenDisallow = disallow;
+}
+
+int MyInputHook_InternalGetNumVirtual(char type) {
+    user_mask_t mask;
+    return ImplGetUsers(&mask, type == 'x' ? DEVICE_NODE_TYPE_XUSB : DEVICE_NODE_TYPE_HID);
+}
+
+bool MyInputHook_InternalIsVirtual(const wchar_t *path) {
+    for (int i = 0; i < IMPL_MAX_USERS; i++) {
+        DeviceIntf *device = ImplGetDevice(i);
+        if ((device && device->HasHid() && tstrieq(path, device->DevicePathW)) ||
+            (device && device->HasXUsb() && tstrieq(path, device->XUsbNode.DevicePathW))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD ul_reason_for_call, LPVOID lpReserved) {

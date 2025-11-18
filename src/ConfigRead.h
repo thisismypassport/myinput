@@ -408,6 +408,8 @@ enum class ConfigVar : uint32_t {
     Include,
     Comment,
     StickShape,
+    BoundCursor,
+    AutoReload,
     CustomStart = 0x10000000,
 };
 
@@ -421,41 +423,45 @@ int operator-(ConfigVar l, ConfigVar r) { return (int)l - (int)r; }
 #define CONFIG_VAR_GROUP_DEBUG 0x100
 
 // (in ui order, vars with same CONFIG_VAR_GROUP_* must be consecutive)
-#define ENUMERATE_CONFIG_VARS(e)                                                           \
-    /* Normal group */                                                                     \
-    e(ConfigVar::RumbleWindow, "RumbleWindow", L"Shake the window on gamepad vibration",   \
-      "rumblewindow", CONFIG_VAR_BOOL, &G.RumbleWindow);                                   \
-    e(ConfigVar::Device, "Device", L"Gamepad type",                                        \
-      "device", CONFIG_VAR_SPECIAL, nullptr);                                              \
-    e(ConfigVar::StickShape, "StickShape", L"Shape traced by gamepad's thumbsticks",       \
-      "stickshape", CONFIG_VAR_SPECIAL, nullptr);                                          \
-    e(ConfigVar::HideCursor, "HideCursor", L"Hide the cursor while in focus",              \
-      "hidecursor", CONFIG_VAR_BOOL, &G.HideCursor);                                       \
-    e(ConfigVar::Include, "Include", L"Include another config",                            \
-      "include", CONFIG_VAR_SPECIAL | CONFIG_VAR_NO_EQUAL, nullptr);                       \
-    e(ConfigVar::Always, "Always", L"Always process mappings, even in background",         \
-      "always", CONFIG_VAR_BOOL, &G.Always);                                               \
-    e(ConfigVar::Forward, "Forward", L"Forward all inputs, even if mapped to outputs",     \
-      "forward", CONFIG_VAR_BOOL, &G.Forward);                                             \
-    e(ConfigVar::Disable, "Disable", L"Disable all mappings by default",                   \
-      "disable", CONFIG_VAR_BOOL, &G.Disable);                                             \
-    e(ConfigVar::InjectChildren, "InjectChildren", L"Inject into child processes",         \
-      "injectchildren", CONFIG_VAR_BOOL, &G.InjectChildren);                               \
-    e(ConfigVar::Comment, "Comment", L"Comment (no effect)",                               \
-      "comment", CONFIG_VAR_SPECIAL | CONFIG_VAR_NO_EQUAL, nullptr);                       \
-    /* Debug group */                                                                      \
-    e(ConfigVar::ApiDebug, "ApiDebug", L"Log debug-level api calls",                       \
-      "apidebug", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.ApiDebug);                  \
-    e(ConfigVar::ApiTrace, "ApiTrace", L"Log trace-level api calls",                       \
-      "apitrace", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.ApiTrace);                  \
-    e(ConfigVar::Debug, "Debug", L"Log debug-level events",                                \
-      "debug", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.Debug);                        \
-    e(ConfigVar::Trace, "Trace", L"Log trace-level events",                                \
-      "trace", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.Trace);                        \
-    e(ConfigVar::WaitDebugger, "WaitDebugger", L"(Debug) Hang until debugger is attached", \
-      "waitdebugger", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.WaitDebugger);          \
-    e(ConfigVar::SpareForDebug, "SpareForDebug", L"(Debug) No effect",                     \
-      "sparefordebug", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.SpareForDebug);        \
+#define ENUMERATE_CONFIG_VARS(e)                                                               \
+    /* Normal group */                                                                         \
+    e(ConfigVar::RumbleWindow, "RumbleWindow", L"Shake the window on gamepad vibration",       \
+      "rumblewindow", CONFIG_VAR_BOOL, &G.RumbleWindow);                                       \
+    e(ConfigVar::Device, "Device", L"Gamepad type",                                            \
+      "device", CONFIG_VAR_SPECIAL, nullptr);                                                  \
+    e(ConfigVar::StickShape, "StickShape", L"Shape traced by gamepad's thumbsticks",           \
+      "stickshape", CONFIG_VAR_SPECIAL, nullptr);                                              \
+    e(ConfigVar::HideCursor, "HideCursor", L"Hide the cursor while in focus",                  \
+      "hidecursor", CONFIG_VAR_BOOL, &G.HideCursor);                                           \
+    e(ConfigVar::BoundCursor, "BoundCursor", L"Bound the cursor in its window while in focus", \
+      "boundcursor", CONFIG_VAR_BOOL, &G.BoundCursor);                                         \
+    e(ConfigVar::Include, "Include", L"Include another config",                                \
+      "include", CONFIG_VAR_SPECIAL | CONFIG_VAR_NO_EQUAL, nullptr);                           \
+    e(ConfigVar::Always, "Always", L"Always process mappings, even in background",             \
+      "always", CONFIG_VAR_BOOL, &G.Always);                                                   \
+    e(ConfigVar::Forward, "Forward", L"Forward all inputs, even if mapped to outputs",         \
+      "forward", CONFIG_VAR_BOOL, &G.Forward);                                                 \
+    e(ConfigVar::Disable, "Disable", L"Disable all mappings by default",                       \
+      "disable", CONFIG_VAR_BOOL, &G.Disable);                                                 \
+    e(ConfigVar::InjectChildren, "InjectChildren", L"Inject into child processes",             \
+      "injectchildren", CONFIG_VAR_BOOL, &G.InjectChildren);                                   \
+    e(ConfigVar::AutoReload, "AutoReload", L"Automatically reload config",                     \
+      "autoreload", CONFIG_VAR_BOOL, &G.AutoReload);                                           \
+    e(ConfigVar::Comment, "Comment", L"Comment (no effect)",                                   \
+      "comment", CONFIG_VAR_SPECIAL | CONFIG_VAR_NO_EQUAL, nullptr);                           \
+    /* Debug group */                                                                          \
+    e(ConfigVar::ApiDebug, "ApiDebug", L"Log debug-level api calls",                           \
+      "apidebug", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.ApiDebug);                      \
+    e(ConfigVar::ApiTrace, "ApiTrace", L"Log trace-level api calls",                           \
+      "apitrace", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.ApiTrace);                      \
+    e(ConfigVar::Debug, "Debug", L"Log debug-level events",                                    \
+      "debug", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.Debug);                            \
+    e(ConfigVar::Trace, "Trace", L"Log trace-level events",                                    \
+      "trace", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.Trace);                            \
+    e(ConfigVar::WaitDebugger, "WaitDebugger", L"(Debug) Hang until debugger is attached",     \
+      "waitdebugger", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.WaitDebugger);              \
+    e(ConfigVar::SpareForDebug, "SpareForDebug", L"(Debug) No effect",                         \
+      "sparefordebug", CONFIG_VAR_BOOL | CONFIG_VAR_GROUP_DEBUG, &G.SpareForDebug);            \
     //
 
 template <class TBoolHandler, class TCustomHandler>

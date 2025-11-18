@@ -59,9 +59,6 @@ MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_Log(const char *data, intptr_t size, 
 // For internal purposes, set a callback to be called when logging.
 MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_SetLogCallback(void (*cb)(const char *str, size_t size, char level, void *data), void *data);
 
-// For internal testing purposes, will be removed or changed
-MYINPUT_HOOK_DLL_DECLSPEC int MyInputHook_InternalForTest();
-
 // Can be called from any thread, queues 'cb' to be called in the dll thread
 MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_PostInDllThread(void (*cb)(void *data), void *data);
 
@@ -100,6 +97,11 @@ MYINPUT_HOOK_DLL_DECLSPEC void *MyInputHook_RegisterCallback(int userIdx, void (
 // Returns nullptr
 MYINPUT_HOOK_DLL_DECLSPEC void *MyInputHook_UnregisterCallback(int userIdx, void *cbObj);
 
+// Must be called from dllmain or dll thread
+// Registers a callback called from dll thread before & after the config is loaded.
+// Returns an opaque identifier of the callback
+MYINPUT_HOOK_DLL_DECLSPEC void *MyInputHook_RegisterConfigCallback(void (*cb)(bool after, void *data), void *data);
+
 // Must be called from dll thread
 // Gets the state of gamepad index 'userIdx'
 // type is one of MyInputHook_InStateType
@@ -119,4 +121,11 @@ MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_LoadConfig(const wchar_t *name);
 
 // Wait until initialization finishes (if loading manually)
 MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_WaitInit();
+
+// Disallow injecting into children, overriding any and all configs
+MYINPUT_HOOK_DLL_DECLSPEC void MyInputHook_DisallowInjectChildren(bool disallow);
+
+// For internal testing purposes, will be removed or changed
+MYINPUT_HOOK_DLL_DECLSPEC int MyInputHook_InternalGetNumVirtual(char type);
+MYINPUT_HOOK_DLL_DECLSPEC bool MyInputHook_InternalIsVirtual(const wchar_t *path);
 }

@@ -28,7 +28,7 @@ static DeviceNode *ImplGetDeviceNode(DWORD user, int type, DeviceIntf **outDevic
                                                                                  : nullptr;
 }
 
-static int ImplGetUsers(UINT *outMask, int devType = ~0, int minUser = 0) {
+static int ImplGetUsers(user_mask_t *outMask, int devType = ~0, int minUser = 0) {
     UINT mask = 0;
     int count = 0;
     for (int i = minUser; i < IMPL_MAX_USERS; i++) {
@@ -43,7 +43,7 @@ static int ImplGetUsers(UINT *outMask, int devType = ~0, int minUser = 0) {
     return count;
 }
 
-static int ImplNextUser(UINT *refMask) {
+static int ImplNextUser(user_mask_t *refMask) {
     DWORD userIdx = 0;
     BitScanForward(&userIdx, *refMask);
     *refMask &= ~(1 << userIdx);

@@ -88,6 +88,10 @@ static LRESULT CALLBACK LowMouseHook(int nCode, WPARAM wParam, LPARAM lParam) {
 static void UpdateInForeground(bool allowUpdateAll = true) {
     bool inForeground = IsWindowInOurProcess(GetForegroundWindow());
     if (inForeground != G.InForeground) {
+        if (inForeground && allowUpdateAll && G.AutoReload) {
+            ConfigReloadIfNeeded();
+        }
+
         ImplToggleForeground(allowUpdateAll);
         if (G.Debug) {
             LOG << "App " << (inForeground ? "entered" : "left") << " foreground" << END;
@@ -104,7 +108,7 @@ static LRESULT CALLBACK ForegroundHook(int nCode, WPARAM wParam, LPARAM lParam) 
         if (msg->message == WM_NCACTIVATE) {
             PostAppCallback([] {
                 UpdateInForeground();
-                UpdateHideCursor();
+                UpdateCursor();
             });
         }
     }
@@ -132,7 +136,7 @@ static void CALLBACK ObjectFocusHook(HWINEVENTHOOK hook, DWORD event, HWND windo
 
     // window is less up-to-date and sometimes wrong - ignoring it
     UpdateInForeground();
-    UpdateHideCursor();
+    UpdateCursor();
 
     // either it changed before we received the msg, or it's bugged and we need a hook to determine when it becomes truly foreground
     if (window != GetForegroundWindow()) {
@@ -364,7 +368,7 @@ HHOOK WINAPI SetWindowsHookEx_Hook(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DW
     HHOOK hook = SetWindowsHookEx_Real(idHook, lpfn, hmod, dwThreadId);
 
     if (hook && idHook == WH_GETMESSAGE) {
-        RehookHideCursor(); // make sure we're called first!
+        RehookCursor(); // make sure we're called first!
     }
 
     return hook;

@@ -59,7 +59,7 @@ bool InjectIndirect(HANDLE process) {
 BOOL WINAPI CreateProcessInternalW_Hook(
     HANDLE token, LPCWSTR appName, LPWSTR cmdLine, LPSECURITY_ATTRIBUTES processSec, LPSECURITY_ATTRIBUTES threadSec,
     BOOL inherit, DWORD flags, LPVOID env, LPCWSTR curDir, LPSTARTUPINFOW startupInfo, LPPROCESS_INFORMATION procInfo, PHANDLE newToken) {
-    if (!G.InjectChildren) {
+    if (!G.InjectChildren || G.InjectChildrenDisallow) {
         return CreateProcessInternalW_Real(token, appName, cmdLine, processSec, threadSec, inherit,
                                            flags, env, curDir, startupInfo, procInfo, newToken);
     }
