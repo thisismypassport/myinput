@@ -1,8 +1,6 @@
-name: Build and Release
+name: Build
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -47,36 +45,17 @@ jobs:
           msbuild "src/myinput.sln" /m /p:Configuration=Release /p:Platform=x86
         shell: cmd
 
+      - name: Delete unwanted
+        run: |
+          del src/Run/Configs/myinput_test.ini
+        shell: cmd
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-build
+          name: MyInput_Windows
           path: |
-            src/Run/myinput.exe
-            src/Run/*/myinput*.dll
-            src/Run/*/myinput*.exe
-            src/Run/Logs/_default.log
-            src/Run/Configs/_default.ini
-            !src/Run/*/myinput_test.exe
-
-  prerelease:
-    name: Create GitHub release
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-build
-          path: ./artifact
-
-      - name: Create release with gh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="v$(date +%Y%m%d%H%M%S)-rc"
-          gh release create "$VERSION" ./artifact/release-build.zip \
-            --prerelease \
-            --title "Prerelease $VERSION" \
-            --notes "Automated prerelease from CI"
+            src/Run
+            !**/*.exp
+            !**/*.pdb
+            !**/myinput_test.*
