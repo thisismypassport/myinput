@@ -31,7 +31,6 @@
 *.out
 *.app
 
-3rdparty
 share
 Build
 Run
