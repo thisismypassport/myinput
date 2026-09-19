@@ -9,7 +9,7 @@ If you find this useful, and have any requests or suggestions, let me know via o
 
 # Usage
 
-Run myinput.exe - this will open a window, allowing you to run games under MyInput and editing the configuring for each game.
+Run myinput.exe - this will open a window, allowing you to run games under MyInput and editing the configuration for each game.
 
 ## Run on Demand
 
@@ -33,25 +33,24 @@ Alternatively, in Windows Explorer, just drag the executable you want to registe
 
 You can edit the configuration a game uses by double clicking on it in the list - allowing you to specify what inputs map to what, etc.
 
-You can test the configuration without launching the game by switching to the "Test" tab.
+You can test the configuration without launching the game by switching to the "Test Config" tab.
 
 Also, if the game is running, switching back to it after changing the configuration will automatically reapply it.
 
 Note that by default, newly added games use the same default configuration (called "_default") - so modifying it will affect all games.
 
-To have a game use a different configuration, select the game in the list and use the "Use Config:" drop down at the bottom of the window (clicking "New" to use a new configuration)
+To have a game use a different configuration, select the game in the list and use the "Use Config:" drop down at the bottom of the window (clicking "New" to create a new configuration)
 
 ### Default Configuration File ("_default")
 
 By default, it maps keyboard keys to a XBox360 controller.
 
-You can switch to the "Configs" tab in MyInput to see exactly what keys it maps to what gamepad buttons - clicking on a mapping will show you more info on it (including a user-friendly description of the button).
+You can switch to the "Configs" tab in MyInput to see exactly what keys it maps to what gamepad buttons - clicking on a mapping will show you more info on it (including a user-friendly description of the button) and allow you to edit it.
 
 For example:
 * It maps the "C" key to the "A" button. (And so on for other buttons)
 * It maps the "Up" key to the left analog stick up direction. (And so on for other directions)
-* It maps the left shift to modify the range of the left analog stick movement by half.
-* It maps the "F12" key to reload mappings from the config file.
+* It maps the left shift to modify the range of the left analog stick movement by halving it.
 * It maps the "Pause" key to disable all other mappings until pressed again.
 
 Additionally, it contains a few more example sections disabled by default - you can enable them by clicking the checkbox next to them:
