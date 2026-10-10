@@ -104,9 +104,9 @@ For Steam Games:
 
 # Building from Source
 
-Prerequisite: https://github.com/microsoft/Detours - copy to 3rdparty/detours folder
+Prerequisite: https://github.com/microsoft/Detours - copy to 3rdparty/detours folder, then build (via Detours.sln in the vc subfolder) for both x64 and x86.
 
-Then just build with MSVC 2022 or above.
+Then just build (via src/myinput.sln) for both x64 and x86, using MSVC 2022 or above.
 
 # Implementation Details
 

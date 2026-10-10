@@ -1,0 +1,28 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <MSBuildAllProjects Condition="'$(MSBuildVersion)' == '' Or '$(MSBuildVersion)' &lt; '16.0'">$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <ItemsProjectGuid>{a929b6a2-c441-45ec-99d7-0916ecaca54b}</ItemsProjectGuid>
+    <ItemsProjectName>myinput_utils</ItemsProjectName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectCapability Include="SourceItemsFromImports" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(MSBuildThisFileDirectory)ComUtils.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)LogUtils.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)UtilsBase.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)UtilsBuffer.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)UtilsPath.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)UtilsStr.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)UtilsUi.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)UtilsUiBase.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)WinUtils.h" />
+  </ItemGroup>
+</Project>
