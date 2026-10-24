@@ -257,8 +257,7 @@ void ConfigEditLoadAllPlugins() {
 
 UniquePtr<ConfigEditVar> ConfigEditReadVarLine(const string &line, intptr_t idx, ConfigAuxInfo *auxInfo) {
     auto variable = UniquePtr<ConfigEditVar>::New();
-    ConfigReadVarLine(
-        GPlugins.Custom, line, idx, [&](ConfigVar var, bool value, bool *) {
+    ConfigReadVarLine(GPlugins.Custom, line, idx, [&](ConfigVar var, bool value, bool *) {
         variable->Var = var;
         variable->BoolValue = value; }, [&](ConfigVar var, const string &val, user_t userIdx) {
         variable->Var = var;

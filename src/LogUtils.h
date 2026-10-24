@@ -50,17 +50,30 @@ public:
     }
 };
 
-template <int MaxEstimate>
-class LimitedLog {
-    atomic<int> mValue = 0;
+template <typename T, int Limit>
+class LimitedLogOf {
+    WeakAtomic<T> mValue = 0;
 
 public:
     explicit operator bool() {
-        if (mValue >= MaxEstimate) { // may exceed the estimate
+        // not perfectly thread-safe, but low impact
+        if (mValue >= Limit) {
             return false;
         }
 
-        mValue++;
+        T value = ++mValue;
+        if (value >= Limit) {
+            if (value == Limit) {
+                LOG << "(Ignoring future occerences of this log message)" << END;
+            } else {
+                mValue = Limit;
+            }
+            return false;
+        }
+
         return true;
     }
 };
+
+using LimitedLog = LimitedLogOf<uint8_t, 5>;
+using LightlyLimitedLog = LimitedLogOf<uint8_t, 20>;

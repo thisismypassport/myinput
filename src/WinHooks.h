@@ -97,6 +97,10 @@ static void UpdateInForeground(bool allowUpdateAll = true) {
             LOG << "App " << (inForeground ? "entered" : "left") << " foreground" << END;
         }
     }
+
+    if (allowUpdateAll) {
+        UpdateCursor();
+    }
 }
 
 static unordered_map<DWORD, HHOOK> GForegroundHooks;
@@ -108,7 +112,6 @@ static LRESULT CALLBACK ForegroundHook(int nCode, WPARAM wParam, LPARAM lParam) 
         if (msg->message == WM_NCACTIVATE) {
             PostAppCallback([] {
                 UpdateInForeground();
-                UpdateCursor();
             });
         }
     }
@@ -116,7 +119,7 @@ static LRESULT CALLBACK ForegroundHook(int nCode, WPARAM wParam, LPARAM lParam) 
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
 
-static void AddForegroundHook(HWND window) {
+static void AddForegroundHookIfNeeded(HWND window) {
     DWORD thread = GetWindowThreadInOurProcess(window);
     if (thread) {
         auto &hook = GForegroundHooks[thread];
@@ -134,14 +137,13 @@ static void CALLBACK ObjectFocusHook(HWINEVENTHOOK hook, DWORD event, HWND windo
         return;
     }
 
-    // window is less up-to-date and sometimes wrong - ignoring it
+    // GetForegroundWindow should be more up-to-date than window
     UpdateInForeground();
-    UpdateCursor();
 
-    // either it changed before we received the msg, or it's bugged and we need a hook to determine when it becomes truly foreground
-    if (window != GetForegroundWindow()) {
-        AddForegroundHook(window);
-    }
+    // And yet, we still have cases where foreground changes are missed.
+    // To catch them, add hooks to all our windows that we find. (could've done only that? but that's much harder to do?)
+    // Note that the hooks are intentionally not destroyed and may fire again later.
+    AddForegroundHookIfNeeded(window);
 }
 
 static void WinHooksUpdateKeyboard(bool force = false) {
@@ -395,6 +397,7 @@ void WinHooksInitOnThread() {
 
 void WinHooksDetachThread(DWORD threadId) {
     GWinHooks.RemoveForThread(threadId);
+    GForegroundHooks.erase(threadId);
 }
 
 void HookWinHooks() {

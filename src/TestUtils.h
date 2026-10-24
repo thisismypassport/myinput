@@ -44,12 +44,9 @@ DEFINE_ALERT_ON_ERROR()
 template <class TFunc>
 DWORD CreateThread(TFunc threadFunc) {
     DWORD threadId;
-    CloseHandle(CreateThread(
-        nullptr, 0, [](PVOID param) -> DWORD {
-            (*((function<void()> *)param))();
-            return 0;
-        },
-        new function<void()>(threadFunc), 0, &threadId));
+    CloseHandle(CreateThread(nullptr, 0, [](PVOID param) -> DWORD {
+        (*((function<void ()>*) param)) ();
+        return 0; }, new function<void()>(threadFunc), 0, &threadId));
     return threadId;
 }
 

@@ -3,6 +3,10 @@
 #include "State.h"
 #include "Inject.h"
 
+LimitedLog gLogInjectUnsupported;
+LightlyLimitedLog gLogInjectSuccess;
+LightlyLimitedLog gLogInjectFail;
+
 typedef BOOL(WINAPI *CreateProcessInternalW_Type)(
     HANDLE, LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES,
     BOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION, PHANDLE);
@@ -22,13 +26,17 @@ bool InjectIndirect(HANDLE process) {
 
     HANDLE inhHandle;
     if (!replaced) {
-        LOG_ERR << "Cannot inject into new process - can't find myinput_inject of other bitness" << END;
+        if (gLogInjectError) {
+            LOG_ERR << "Cannot inject into new process - can't find myinput_inject of other bitness" << END;
+        }
         return false;
     }
 
     if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &inhHandle,
                          0, TRUE, DUPLICATE_SAME_ACCESS)) {
-        LOG_ERR << "Can't duplicate process handle " << GetLastError() << END;
+        if (gLogInjectError) {
+            LOG_ERR << "Can't duplicate process handle " << GetLastError() << END;
+        }
         return false;
     }
 
@@ -44,7 +52,9 @@ bool InjectIndirect(HANDLE process) {
     PROCESS_INFORMATION injPi;
     if (!CreateProcessInternalW_Real(nullptr, otherExePath, cmdArgs, nullptr, nullptr, TRUE,
                                      0, nullptr, nullptr, &injSi, &injPi, nullptr)) {
-        LOG_ERR << "Can't create inject process " << GetLastError() << END;
+        if (gLogInjectError) {
+            LOG_ERR << "Can't create inject process " << GetLastError() << END;
+        }
         return false;
     } else {
         DWORD exitCode;
@@ -68,7 +78,9 @@ BOOL WINAPI CreateProcessInternalW_Hook(
         // We might could add support by attaching later & probably hooking WaitForDebugEvent(Ex) - but that's complex.
         // Important - this check currently stops injecting into myinput_inject's CreateProcess call, so a different check is needed for that if this is removed
         // (As for why myinput_inject may get injected to - it's due to the disable-DEBUG_PROCESS case below on some systems)
-        LOG << "Not injecting into process because debugging is requested: " << (cmdLine ? cmdLine : appName) << END;
+        if (gLogInjectUnsupported) {
+            LOG << "Not injecting into process because debugging is requested: " << (cmdLine ? cmdLine : appName) << END;
+        }
         return CreateProcessInternalW_Real(token, appName, cmdLine, processSec, threadSec, inherit,
                                            flags, env, curDir, startupInfo, procInfo, newToken);
     }
@@ -92,7 +104,7 @@ repeat:
         success = CreateProcessInternalW_Real(token, appName, cmdLine, processSec, threadSec, inherit,
                                               actualFlags, env, curDir, startupInfo, procInfo, newToken);
 
-        if (success) {
+        if (success && gLogInjectUnsupported) {
             LOG << "Couldn't launch following process with debug flag, launching without..." << END;
         }
     }
@@ -108,15 +120,21 @@ repeat:
             if (IsWow64Process(GetCurrentProcess(), &meWow) &&
                 IsWow64Process(procInfo->hProcess, &themWow) &&
                 meWow == themWow) {
-                LOG << "Injecting into new process of same bitness " << (cmdLine ? cmdLine : appName) << END;
+                if (gLogInjectSuccess) {
+                    LOG << "Injecting into new process of same bitness " << (cmdLine ? cmdLine : appName) << END;
+                }
                 injectSuccess = InjectDirect(procInfo->hProcess);
             } else {
-                LOG << "Injecting into new process of different bitness " << (cmdLine ? cmdLine : appName) << END;
+                if (gLogInjectSuccess) {
+                    LOG << "Injecting into new process of different bitness " << (cmdLine ? cmdLine : appName) << END;
+                }
                 injectSuccess = InjectIndirect(procInfo->hProcess);
             }
 
             if (!injectSuccess) {
-                LOG << "Injection failed, retrying process creation without injection" << END;
+                if (gLogInjectFail) {
+                    LOG << "Injection failed, retrying process creation without injection" << END;
+                }
                 TerminateProcess(procInfo->hProcess, -1);
                 WaitForSingleObject(procInfo->hProcess, INFINITE); // incase there's a process quota
                 CloseHandle(procInfo->hProcess);
@@ -132,7 +150,9 @@ repeat:
             ResumeThread(procInfo->hThread);
         }
     } else if (!inject) {
-        LOG << "Retry without inject failed, error: " << GetLastError() << END;
+        if (gLogInjectFail) {
+            LOG << "Retry without inject failed, error: " << GetLastError() << END;
+        }
     }
 
     return success;

@@ -790,8 +790,7 @@ protected:
     RadioBase(HWND parent, intptr_t id, const wchar_t *text, function<void()> &&action, int styles, int index = -1) : ActionButtonBase(parent, id, text, nullptr, move(action), BS_AUTORADIOBUTTON | BS_MULTILINE | styles | (index == 0 ? (WS_TABSTOP | WS_GROUP) : 0)) {}
 
     template <class TValue>
-    RadioBase(HWND parent, intptr_t id, const wchar_t *text, RadioGroup<TValue> *group, const TValue &value, int styles) : RadioBase(
-                                                                                                                               parent, id, text, [=] { group->OnClicked(value); }, styles, group->Add(this)) { mGroup = group; }
+    RadioBase(HWND parent, intptr_t id, const wchar_t *text, RadioGroup<TValue> *group, const TValue &value, int styles) : RadioBase(parent, id, text, [=] { group->OnClicked(value); }, styles, group->Add(this)) { mGroup = group; }
 
 public:
     bool Get() { return SendMessageW(mControl, BM_GETCHECK, 0, 0) == BST_CHECKED; }
@@ -1476,13 +1475,6 @@ public:
         }
         ComboBase::OnCommand(value);
     }
-};
-
-enum class ClickType {
-    Left,
-    Double,
-    Right,
-    RightDouble,
 };
 
 class ListViewBase : public HwndBase {

@@ -193,7 +193,7 @@ public:
     }
 };
 
-#define INVALID_UINT_VALUE ((UINT)-1)
+#define INVALID_UINT_VALUE ((UINT) - 1)
 
 DWORD GetWindowThreadInOurProcess(HWND window) {
     DWORD processId = 0;

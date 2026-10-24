@@ -7,6 +7,9 @@
 #include "State.h"
 #include "LogUtils.h"
 
+LimitedLog gLogDevBadReport;
+LimitedLog gLogDevBadStr;
+
 struct PreparsedCap {
     USHORT Page = HID_USAGE_PAGE_GENERIC;
     UCHAR Report = 0, StartBit = 0;
@@ -204,14 +207,18 @@ struct DeviceIntf : public DeviceNode {
     virtual int CopyInputTo(byte *dest) = 0;
     int CopyInputTo(byte *dest, int size) {
         if (size < Preparsed->Input.Bytes) {
-            LOG << "Requested input report with not enough bytes" << END;
+            if (gLogDevBadReport) {
+                LOG << "Requested input report with not enough bytes" << END;
+            }
             return -1;
         }
         return CopyInputTo(dest);
     }
 
     virtual bool ProcessOutput(const byte *src, int size, int id) {
-        LOG << "Received invalid output report: " << id << END;
+        if (gLogDevBadReport) {
+            LOG << "Received invalid output report: " << id << END;
+        }
         return false;
     }
     bool ProcessOutput(const byte *src, int size) {
@@ -223,7 +230,9 @@ struct DeviceIntf : public DeviceNode {
     }
 
     virtual int ProcessFeature(const byte *src, byte *dest, int size, int id) {
-        LOG << "Requested invalid feature report: " << id << END;
+        if (gLogDevBadReport) {
+            LOG << "Requested invalid feature report: " << id << END;
+        }
         return -1;
     }
     int ProcessFeature(const byte *src, byte *dest, int size) {
@@ -243,7 +252,9 @@ struct DeviceIntf : public DeviceNode {
         case 3:
             return SerialString;
         default:
-            LOG << "Requested invalid indexed string: " << index << END;
+            if (gLogDevBadStr) {
+                LOG << "Requested invalid indexed string: " << index << END;
+            }
             return nullptr;
         }
     }

@@ -198,8 +198,7 @@ bool ConfigLoadPlugin(ConfigPlugin *plugin, const string &name) {
 }
 
 void ConfigLoadVarLine(const string &line, intptr_t idx) {
-    ConfigReadVarLine(
-        GConfig.Custom, line, idx, [](auto, bool value, bool *ptr) { *ptr = value; }, [&line](ConfigVar var, const string &rest, user_t user) {
+    ConfigReadVarLine(GConfig.Custom, line, idx, [](auto, bool value, bool *ptr) { *ptr = value; }, [&line](ConfigVar var, const string &rest, user_t user) {
         switch (var)
         {
         case ConfigVar::Include:

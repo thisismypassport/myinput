@@ -2,7 +2,9 @@
 #include "Impl.h"
 #include "Header.h"
 
-UniqueLog gUniqLogRawInputRegister;
+UniqueLog gLogRawInputRegister;
+LimitedLog gLogRawInputBadCmd;
+LimitedLog gLogRawRegError;
 
 struct RawInputRegInfo {
     bool Registered;
@@ -85,7 +87,9 @@ protected:
             break;
 
         default:
-            LOG_ERR << "Invalid uiCommand: " << uiCommand << END;
+            if (gLogRawInputBadCmd) {
+                LOG_ERR << "Invalid uiCommand: " << uiCommand << END;
+            }
             break;
         }
 
@@ -305,7 +309,7 @@ protected:
             device.usUsage = devUsage;
             device.dwFlags = mapped ? (devDisallowed ? RIDEV_EXCLUDE : mappedFlags) : (Registered ? Flags : RIDEV_EXCLUDE);
 
-            if (!RegisterRawInputDevices_Real(&device, 1, sizeof(RAWINPUTDEVICE))) {
+            if (!RegisterRawInputDevices_Real(&device, 1, sizeof(RAWINPUTDEVICE)) && gLogRawRegError) {
                 LOG_ERR << "Error registering real raw input device" << END;
             }
 
@@ -451,7 +455,7 @@ public:
     RawInputRegGamepad() : RawInputReg(GamepadInputHandleHighStart) {}
 
     void Register(HWND window, UINT flags) {
-        if (gUniqLogRawInputRegister) {
+        if (gLogRawInputRegister) {
             LOG << "Listening to device events via RawInput API" << END;
         }
         if (G.ApiDebug) {

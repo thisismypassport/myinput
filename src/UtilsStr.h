@@ -7,8 +7,6 @@
 #define TSTR(lit) (sizeof(tchar) == sizeof(char) ? (const tchar *)lit : (const tchar *)CONCAT(L, lit))
 #define TCHAR(lit) (sizeof(tchar) == sizeof(char) ? (tchar)lit : (tchar)CONCAT(L, lit))
 
-#define WSTR(lit) CONCAT(L, lit)
-
 size_t tstrlen(const char *str) { return strlen(str); }
 size_t tstrlen(const wchar_t *str) { return wcslen(str); }
 char *tstrcpy(char *dest, const char *src) { return strcpy(dest, src); }

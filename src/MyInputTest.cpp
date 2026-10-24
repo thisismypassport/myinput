@@ -394,44 +394,6 @@ void ProcessRawInputMsg(TReadCb readCallback, const MSG &msg, bool readBuffer) {
     }
 
     if (msg.message == WM_INPUT) {
-        UINT size = 0;
-        AssertEquals("ri.d.size", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)), 0);
-
-        const int junk = 10;
-        byte *buffer = new byte[size + junk];
-
-        UINT badSize = 1;
-        AssertEquals("ri.d.bad", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, buffer, &badSize, sizeof(RAWINPUTHEADER)), (UINT)-1);
-        AssertEquals("ri.d.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
-        WOW64_BROKEN(AssertEquals)
-        ("ri.d.bad.size", badSize, size);
-
-        UINT readSize = size + junk;
-        AssertEquals("ri.d", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, buffer, &readSize, sizeof(RAWINPUTHEADER)), size);
-        AssertEquals("ri.d.size", readSize, size + junk);
-
-        if (!readBuffer) {
-            readCallback((RAWINPUT *)buffer);
-        }
-
-        delete[] buffer;
-
-        UINT headSize = 0;
-        AssertEquals("ri.d.head.size", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, nullptr, &headSize, sizeof(RAWINPUTHEADER)), 0);
-        AssertEquals("ri.d.head.eq", headSize, sizeof(RAWINPUTHEADER));
-
-        RAWINPUTHEADER header[2];
-        badSize = 1;
-        WOW64_BROKEN(AssertEquals)
-        ("ri.d.head.bad", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, &header, &badSize, sizeof(RAWINPUTHEADER)), (UINT)-1);
-        AssertEquals("ri.d.head.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
-        AssertEquals("ri.d.bad.size", badSize, headSize);
-
-        readSize = headSize * 2;
-        AssertEquals("ri.d", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, &header, &readSize, sizeof(RAWINPUTHEADER)), headSize);
-        WOW64_BROKEN(AssertEquals)
-        ("ri.d.size", readSize, headSize * 2);
-
         if (readBuffer) {
             byte xbuffer[0x4000];
             RAWINPUT *xinput = (PRAWINPUT)xbuffer;
@@ -451,6 +413,39 @@ void ProcessRawInputMsg(TReadCb readCallback, const MSG &msg, bool readBuffer) {
                 readCallback(xinput);
                 xinput = NEXTRAWINPUTBLOCK(xinput);
             }
+        } else {
+            UINT size = 0;
+            AssertEquals("ri.d.size", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)), 0);
+
+            const int junk = 10;
+            byte *buffer = new byte[size + junk];
+
+            UINT badSize = 1;
+            AssertEquals("ri.d.bad", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, buffer, &badSize, sizeof(RAWINPUTHEADER)), (UINT)-1);
+            AssertEquals("ri.d.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
+            WOW64_BROKEN(AssertEquals)("ri.d.bad.size", badSize, size);
+
+            UINT readSize = size + junk;
+            AssertEquals("ri.d", GetRawInputData((HRAWINPUT)msg.lParam, RID_INPUT, buffer, &readSize, sizeof(RAWINPUTHEADER)), size);
+            AssertEquals("ri.d.size", readSize, size + junk);
+
+            readCallback((RAWINPUT *)buffer);
+
+            delete[] buffer;
+
+            UINT headSize = 0;
+            AssertEquals("ri.d.head.size", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, nullptr, &headSize, sizeof(RAWINPUTHEADER)), 0);
+            AssertEquals("ri.d.head.eq", headSize, sizeof(RAWINPUTHEADER));
+
+            RAWINPUTHEADER header[2];
+            badSize = 1;
+            WOW64_BROKEN(AssertEquals)("ri.d.head.bad", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, &header, &badSize, sizeof(RAWINPUTHEADER)), (UINT)-1);
+            AssertEquals("ri.d.head.errno", GetLastError(), ERROR_INSUFFICIENT_BUFFER);
+            AssertEquals("ri.d.bad.size", badSize, headSize);
+
+            readSize = headSize * 2;
+            AssertEquals("ri.d", GetRawInputData((HRAWINPUT)msg.lParam, RID_HEADER, &header, &readSize, sizeof(RAWINPUTHEADER)), headSize);
+            WOW64_BROKEN(AssertEquals)("ri.d.size", readSize, headSize * 2);
         }
     }
 }
@@ -1254,27 +1249,39 @@ void TestJoystick(bool read) {
     }
 }
 
+struct MY_XINPUT_CAPABILITIES_EX {
+    XINPUT_CAPABILITIES caps;
+    WORD vendor, product, version;
+    DWORD xid;
+};
+
+#define MY_XINPUT_MAX_SYSBUTTONS 8
 typedef DWORD(WINAPI *XInputGetState_T)(DWORD dwUserIndex, XINPUT_STATE *pState);
 typedef DWORD(WINAPI *XInputSetState_T)(DWORD dwUserIndex, XINPUT_VIBRATION *pVibration);
 typedef DWORD(WINAPI *XInputGetKeystroke_T)(DWORD dwUserIndex, DWORD dwReserved, XINPUT_KEYSTROKE *pKeystroke);
 typedef DWORD(WINAPI *XInputGetCapabilities_T)(DWORD dwUserIndex, DWORD dwFlags, XINPUT_CAPABILITIES *pCapabilities);
+typedef DWORD(WINAPI *XInputGetCapabilitiesEx_T)(DWORD type, DWORD dwUserIndex, DWORD dwFlags, MY_XINPUT_CAPABILITIES_EX *pCapabilities);
 typedef DWORD(WINAPI *XInputGetBatteryInformation_T)(DWORD dwUserIndex, BYTE devType, XINPUT_BATTERY_INFORMATION *pBatteryInformation);
 typedef DWORD(WINAPI *XInputGetAudioDeviceIds_T)(DWORD dwUserIndex, LPWSTR pRenderDeviceId, UINT *pRenderCount, LPWSTR pCaptureDeviceId, UINT *pCaptureCount);
+typedef DWORD(WINAPI *XInputGetSystemButtons_T)(DWORD dwUserIndex, DWORD *buttons);
 XInputGetState_T XInputGetState_F, XInputGetStateEx_F;
 XInputSetState_T XInputSetState_F;
 XInputGetKeystroke_T XInputGetKeystroke_F;
 XInputGetCapabilities_T XInputGetCapabilities_F;
+XInputGetCapabilitiesEx_T XInputGetCapabilitiesEx_F;
 XInputGetBatteryInformation_T XInputGetBatteryInformation_F;
 XInputGetAudioDeviceIds_T XInputGetAudioDeviceIds_F;
+XInputGetSystemButtons_T XInputGetSystemButtons_F;
 
-void ReadXInput(bool ex) {
+void ReadXInput(bool ex, bool sys) {
     XInputGetState_T XInputGetState = (ex && XInputGetStateEx_F) ? XInputGetStateEx_F : XInputGetState_F;
 
-    CreateThread([XInputGetState] {
+    CreateThread([XInputGetState, sys] {
         XINPUT_STATE oldState[XUSER_MAX_COUNT] = {};
         for (int i = 0; i < XUSER_MAX_COUNT; i++) {
             XInputGetState(i, &oldState[i]);
         }
+        bool oldSysButtons[XUSER_MAX_COUNT][MY_XINPUT_MAX_SYSBUTTONS] = {};
 
         while (true) {
             Sleep(10);
@@ -1313,6 +1320,17 @@ void ReadXInput(bool ex) {
                     }
 
                     oldState[i] = state;
+                }
+
+                DWORD sysButtons[MY_XINPUT_MAX_SYSBUTTONS];
+                if (sys && XInputGetSystemButtons_F &&
+                    XInputGetSystemButtons_F(i, sysButtons) == ERROR_SUCCESS) {
+                    for (int sb = 0; sb < MY_XINPUT_MAX_SYSBUTTONS; sb++) {
+                        if ((bool)sysButtons[sb] != oldSysButtons[i][sb]) {
+                            printf("pad.%d sys.%d -> %d : xinput\n", i, sb, (bool)sysButtons[sb]);
+                        }
+                        oldSysButtons[i][sb] = sysButtons[sb];
+                    }
                 }
             }
         }
@@ -1466,7 +1484,7 @@ void VisualizeXInput(int count) {
     }
 }
 
-void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumble, bool visualize, int visualizeCount) {
+void TestXInput(int version, bool read, bool readEx, bool readSys, bool readStroke, bool rumble, bool visualize, int visualizeCount) {
     const wchar_t *dll_name = L"";
     switch (version) {
     case 1:
@@ -1498,6 +1516,8 @@ void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumbl
     XInputGetBatteryInformation_F = (XInputGetBatteryInformation_T)GetProcAddress(xdll, "XInputGetBatteryInformation");
     XInputGetAudioDeviceIds_F = (XInputGetAudioDeviceIds_T)GetProcAddress(xdll, "XInputGetAudioDeviceIds");
     XInputGetStateEx_F = (XInputGetState_T)GetProcAddress(xdll, MAKEINTRESOURCEA(100));
+    XInputGetCapabilitiesEx_F = (XInputGetCapabilitiesEx_T)GetProcAddress(xdll, MAKEINTRESOURCEA(108));
+    XInputGetSystemButtons_F = (XInputGetSystemButtons_T)GetProcAddress(xdll, MAKEINTRESOURCEA(109));
 
     int actualCount = 0;
     for (int i = 0; i < XUSER_MAX_COUNT; i++) {
@@ -1537,7 +1557,7 @@ void TestXInput(int version, bool read, bool readEx, bool readStroke, bool rumbl
         StressXInput();
     }
     if (read || readEx) {
-        ReadXInput(readEx);
+        ReadXInput(readEx, readSys);
     }
     if (readStroke && XInputGetKeystroke_F) {
         ReadXInputStroke();
@@ -3164,6 +3184,7 @@ int main(int argc, char **argv) {
 
     BOOL_ARG(readXInput, "read-x");
     BOOL_ARG(readXInputEx, "read-x-ex");
+    BOOL_ARG(readXInputSys, "read-x-sys");
     BOOL_ARG(readXInputStroke, "read-x-stroke");
     BOOL_ARG(rumbleXInput, "rumble-x");
     INT_ARG(xinputVersion, "x-version", 4);
@@ -3266,7 +3287,7 @@ int main(int argc, char **argv) {
     TestRawInput(readRaw, readRawBuffer, readRawWait, readRawFullPage, printRawInputDevices);
     TestSetupDi(readDevice, readDeviceImmediate);
     TestCfgMgr(printCfgMgrDevices, printAllCfgMgrDevices);
-    TestXInput(xinputVersion, readXInput, readXInputEx, readXInputStroke, rumbleXInput, visualizeWindow, visualizeWindowCount);
+    TestXInput(xinputVersion, readXInput, readXInputEx, readXInputSys, readXInputStroke, rumbleXInput, visualizeWindow, visualizeWindowCount);
     TestWgi(readWgi, readWgiRaw, rumbleWgi);
 
     if (registerRaw) {

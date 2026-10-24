@@ -187,6 +187,9 @@ public:
     T exchange(T value) { return atomic.exchange(value, std::memory_order_acq_rel); }
     bool compare_exchange(T &expected, T value) { return atomic.compare_exchange_strong(expected, value, std::memory_order_acq_rel); }
 
+    T operator++(int) { return atomic.fetch_add((T)1, std::memory_order_acq_rel); }
+    T operator++() { return atomic.fetch_add((T)1, std::memory_order_acq_rel) + 1; }
+
     operator T() const { return get(); }
     T operator=(T value) {
         set(value);

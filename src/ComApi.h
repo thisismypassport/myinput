@@ -3,7 +3,7 @@
 #include "Header.h"
 #include "ComUtils.h"
 
-LimitedLog<50> gUniqLogComEscape;
+LightlyLimitedLog gLogComEscape;
 
 template <class TActual, class... TIntfWraps>
 class ComWrapperBase {
@@ -34,7 +34,7 @@ public:
         },
               mIntfs);
 
-        if (!result && gUniqLogComEscape) {
+        if (!result && gLogComEscape) {
             LOG_ERR << "COM: Unknown intf " << intf << " of " << typeid(TActual).name() << END;
         }
         return result;
@@ -129,7 +129,7 @@ public:
 
         if (!this->TrySetInterface(inObj, outObj)) {
             // In this case, we need ComIntfMultiWrapper
-            if (gUniqLogComEscape) {
+            if (gLogComEscape) {
                 LOG_ERR << "COM: Intf " << __uuidof(TIntf) << " has multiple ptrs for " << typeid(TRoot).name() << END;
             }
             return false;

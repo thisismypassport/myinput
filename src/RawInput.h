@@ -5,7 +5,9 @@
 #include "UtilsBuffer.h"
 #include "RawRegister.h"
 
-UniqueLog gUniqLogRawInputFind;
+UniqueLog gLogRawInputFind;
+LimitedLog gLogRawInputBadSize;
+LimitedLog gLogPeekMsgIssue;
 
 #ifndef _WIN64
 BOOL gWow64;
@@ -38,7 +40,9 @@ UINT WINAPI GetRawInputDeviceList_Hook(PRAWINPUTDEVICELIST pRawInputDeviceList, 
 
     if (ok && pRawInputDeviceList && puiNumDevices) {
         if (cbSize != sizeof(RAWINPUTDEVICELIST)) {
-            LOG_ERR << "Unknown input device list size: " << cbSize << END;
+            if (gLogRawInputBadSize) {
+                LOG_ERR << "Unknown input device list size: " << cbSize << END;
+            }
         } else if (result + usersCount > *puiNumDevices) {
             *puiNumDevices = result + usersCount;
             result = INVALID_UINT_VALUE;
@@ -87,7 +91,7 @@ static UINT GetRawCustomDeviceInfo(UINT uiCommand, LPVOID pData, PUINT pcbSize, 
     UINT strSize;
     switch (uiCommand) {
     case RIDI_DEVICENAME:
-        if (gUniqLogRawInputFind) {
+        if (gLogRawInputFind) {
             LOG << "Found device via RawInput API" << END;
         }
         strSize = (UINT)tstrlen(device->DevicePathW) + 1; // yes, not multiplied by sizeof(tchar)
@@ -96,17 +100,14 @@ static UINT GetRawCustomDeviceInfo(UINT uiCommand, LPVOID pData, PUINT pcbSize, 
         });
 
     case RIDI_DEVICEINFO:
-        return ProcessRawInputDeviceInfo<RID_DEVICE_INFO>(
-            sizeof(RID_DEVICE_INFO), pData, pcbSize, [device](RID_DEVICE_INFO *ptr) {
-                ptr->cbSize = sizeof(RID_DEVICE_INFO);
-                ptr->dwType = RIM_TYPEHID;
-                ptr->hid.dwVendorId = device->VendorId;
-                ptr->hid.dwProductId = device->ProductId;
-                ptr->hid.dwVersionNumber = device->VersionNum;
-                ptr->hid.usUsagePage = HID_USAGE_PAGE_GENERIC;
-                ptr->hid.usUsage = HID_USAGE_GENERIC_GAMEPAD;
-            },
-            false);
+        return ProcessRawInputDeviceInfo<RID_DEVICE_INFO>(sizeof(RID_DEVICE_INFO), pData, pcbSize, [device](RID_DEVICE_INFO *ptr) {
+            ptr->cbSize = sizeof (RID_DEVICE_INFO);
+            ptr->dwType = RIM_TYPEHID;
+            ptr->hid.dwVendorId = device->VendorId;
+            ptr->hid.dwProductId = device->ProductId;
+            ptr->hid.dwVersionNumber = device->VersionNum;
+            ptr->hid.usUsagePage = HID_USAGE_PAGE_GENERIC;
+            ptr->hid.usUsage = HID_USAGE_GENERIC_GAMEPAD; }, false);
 
     case RIDI_PREPARSEDDATA:
         return ProcessRawInputDeviceInfo<byte>(device->PreparsedSize, pData, pcbSize, [device](byte *ptr) {
@@ -114,7 +115,9 @@ static UINT GetRawCustomDeviceInfo(UINT uiCommand, LPVOID pData, PUINT pcbSize, 
         });
 
     default:
-        LOG_ERR << "Unknown raw device command: " << uiCommand << END;
+        if (gLogRawInputBadCmd) {
+            LOG_ERR << "Unknown raw device command: " << uiCommand << END;
+        }
         SetLastError(ERROR_INVALID_PARAMETER);
         return -1;
     }
@@ -241,7 +244,9 @@ UINT WINAPI GetRawInputBuffer_Hook(PRAWINPUT pData, PUINT pCbSize, UINT cbSizeHe
             MSG realMsg;
             while (!PeekMessageW(&realMsg, nullptr, WM_INPUT, WM_INPUT, PM_REMOVE | PM_QS_OUR_WM_INPUT) ||
                    realMsg.message != WM_INPUT || realMsg.lParam != msg.lParam) {
-                LOG << "Unexpected PeekMessage result: " << msg.message << END;
+                if (gLogPeekMsgIssue) {
+                    LOG << "Unexpected PeekMessage result: " << msg.message << END;
+                }
                 // ???
                 if (realMsg.message == WM_QUIT) {
                     PostQuitMessage((int)realMsg.wParam);

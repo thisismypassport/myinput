@@ -4,6 +4,8 @@
 #include "UtilsPath.h"
 #include <Windows.h>
 
+LightlyLimitedLog gLogInjectError;
+
 #if ZERO
 // the function defined in assembly below
 DWORD InjectedFunc() {
@@ -113,7 +115,9 @@ bool DoInject(HANDLE process, const Path &dllPath) {
 
     LPVOID injectAddr = VirtualAllocEx(process, NULL, injectSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (injectAddr == NULL) {
-        LOG_ERR << "Couldn't allocate memory in process: " << GetLastError() << END;
+        if (gLogInjectError) {
+            LOG_ERR << "Couldn't allocate memory in process: " << GetLastError() << END;
+        }
         return false;
     }
 
@@ -135,19 +139,25 @@ bool DoInject(HANDLE process, const Path &dllPath) {
 
     if (!WriteProcessMemoryFunc(process, injectAddr, &injectData, sizeof(injectData), NULL) ||
         !WriteProcessMemoryFunc(process, injectData.func.dllpath_ptr, dllPath, dllPathSize, NULL)) {
-        LOG_ERR << "Couldn't write memory to process: " << GetLastError() << END;
+        if (gLogInjectError) {
+            LOG_ERR << "Couldn't write memory to process: " << GetLastError() << END;
+        }
         return false;
     }
 
     DWORD oldProtect;
     if (!VirtualProtectEx(process, injectAddr, injectSize, PAGE_EXECUTE_READ, &oldProtect)) {
-        LOG_ERR << "Couldn't protect memory in process: " << GetLastError() << END;
+        if (gLogInjectError) {
+            LOG_ERR << "Couldn't protect memory in process: " << GetLastError() << END;
+        }
         return false;
     }
 
     HANDLE hRemote = CreateRemoteThreadFunc(process, NULL, 0, (LPTHREAD_START_ROUTINE)injectAddr, NULL, 0, NULL);
     if (hRemote == NULL) {
-        LOG_ERR << "Couldn't inject thread in process: " << GetLastError() << END;
+        if (gLogInjectError) {
+            LOG_ERR << "Couldn't inject thread in process: " << GetLastError() << END;
+        }
         return false;
     }
 
@@ -158,7 +168,9 @@ bool DoInject(HANDLE process, const Path &dllPath) {
     WaitForSingleObject(hRemote, INFINITE);
     DWORD code = -1;
     if (!GetExitCodeThread(hRemote, &code) || code != 1) {
-        LOG_ERR << "Injected func returned with exit code " << code << END;
+        if (gLogInjectError) {
+            LOG_ERR << "Injected func returned with exit code " << code << END;
+        }
         return false;
     }
 

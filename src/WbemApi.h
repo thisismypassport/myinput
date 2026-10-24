@@ -5,7 +5,8 @@
 
 // (best effort basis) (while hopefully not breaking much)
 
-UniqueLog gUniqLogWbemUsed;
+UniqueLog gLogWbemUsed;
+LimitedLog gLogWbemCreateFail;
 
 const wchar_t *GetComputerNameForWbem() {
     static const wchar_t *sComputerNamePtr = [] {
@@ -427,7 +428,9 @@ ComRef<IWbemClassObject> CreateWbemClassObject(IWbemServices *services, int devN
         // since we can't set __-prefixed props:
         return (new MyWbemClassObject())->WrapInterface(obj.Get());
     } else {
-        LOG_ERR << "Wbem: failed creating device instance" << END;
+        if (gLogWbemCreateFail) {
+            LOG_ERR << "Wbem: failed creating device instance" << END;
+        }
         return nullptr;
     }
 }
@@ -1034,7 +1037,7 @@ class MyWbemLocatorIntf : public ComIntfWrapper<IWbemLocator, MyWbemLocator> {
 public:
     STDMETHODIMP ConnectServer(const BSTR strNetworkResource, const BSTR strUser, const BSTR strPassword, const BSTR strLocale,
                                long lSecurityFlags, const BSTR strAuthority, IWbemContext *pCtx, IWbemServices **ppNamespace) override {
-        if (gUniqLogWbemUsed) {
+        if (gLogWbemUsed) {
             LOG << "(Wbem used)" << END;
         }
 

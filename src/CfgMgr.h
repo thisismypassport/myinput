@@ -7,7 +7,9 @@
 #include <devpkey.h>
 
 DEVINST gRootDevInst;
-UniqueLog gUniqLogCfgMgrFind;
+UniqueLog gLogCfgMgrFind;
+LimitedLog gLogCfgMgrBadProp;
+LimitedLog gLogCfgMgrBadNotify;
 RedirectDetector gCfgMgrRedirect;
 
 // Note - I'm ignoring HMACHINE since in modern windows, non-local HMACHINEs aren't supported anyway
@@ -661,7 +663,9 @@ CONFIGRET WINAPI CM_Get_DevNode_Registry_Property_GenHook(DEVINST dnDevInst, ULO
                 break;
 
             default:
-                LOG_ERR << "Unexpected prop type: " << type << END;
+                if (gLogCfgMgrBadProp) {
+                    LOG_ERR << "Unexpected prop type: " << type << END;
+                }
                 break;
             }
 
@@ -771,7 +775,7 @@ CONFIGRET WINAPI CM_Get_Device_Interface_List_GenHook(LPGUID clsGuid, tchar *pDe
 
     FilterResult filter;
     if (ret == CR_SUCCESS && buffer && DeviceInterfaceListFilterMatches(clsGuid, pDeviceID, &filter)) {
-        if (gUniqLogCfgMgrFind) {
+        if (gLogCfgMgrFind) {
             LOG << "Found device via CfgMgr API" << END;
         }
         if (G.ApiDebug) {
@@ -1003,7 +1007,9 @@ CONFIGRET WINAPI CM_Register_Notification_Hook(PCM_NOTIFY_FILTER pFilter, PVOID 
             break;
 
         default:
-            LOG_ERR << "Unknown cfgmgr notification type: " << pFilter->FilterType << END;
+            if (gLogCfgMgrBadNotify) {
+                LOG_ERR << "Unknown cfgmgr notification type: " << pFilter->FilterType << END;
+            }
             break;
         }
     }

@@ -6,6 +6,8 @@
 #include "XUsbApi.h"
 #include <Dbt.h>
 
+LimitedLog gLogNotifyUnsupported;
+
 struct ImplThreadPoolNotification {
     ImplGlobalCb CbIter;
     ImplThreadPoolNotificationCb Cb;
@@ -95,7 +97,9 @@ HDEVNOTIFY WINAPI RegisterDeviceNotification_Hook(HANDLE hRecepient, LPVOID Noti
     }
 
     if (Flags & DEVICE_NOTIFY_SERVICE_HANDLE) {
-        LOG_ERR << "Unsupported service device notification" << END;
+        if (gLogNotifyUnsupported) {
+            LOG_ERR << "Unsupported service device notification" << END;
+        }
     } else if (NotificationFilter) {
         HWND window = (HWND)hRecepient;
         DEV_BROADCAST_HDR *header = (DEV_BROADCAST_HDR *)NotificationFilter;
@@ -169,7 +173,9 @@ HDEVNOTIFY WINAPI RegisterDeviceNotification_Hook(HANDLE hRecepient, LPVOID Noti
         }
 
         default:
-            LOG_ERR << "Unknown device notification type: " << header->dbch_devicetype << END;
+            if (gLogNotifyUnsupported) {
+                LOG_ERR << "Unknown device notification type: " << header->dbch_devicetype << END;
+            }
             break;
         }
     }

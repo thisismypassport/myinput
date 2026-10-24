@@ -11,14 +11,22 @@
 #define IOCTL_XUSB_GET_CAPABILITIES 0x8000e004
 #define IOCTL_XUSB_GET_LED_STATE 0x8000e008
 #define IOCTL_XUSB_GET_GAMEPAD_STATE 0x8000e00c
-#define IOCTL_XUSB_GET_BATTERY_INFO 0x8000e018
-#define IOCTL_XUSB_GET_AUDIO_DEV_INFO 0x8000e020
-#define IOCTL_XUSB_GET_GAMEPAD_STATE_ASYNC 0x8000e3ac
 #define IOCTL_XUSB_SET_GAMEPAD_STATE 0x8000a010
+#define IOCTL_XUSB_GET_GUIDE_BUTTON 0x8000e014
+#define IOCTL_XUSB_GET_BATTERY_INFO 0x8000e018
+#define IOCTL_XUSB_SET_POWER_OFF 0x8000a01c
+#define IOCTL_XUSB_GET_AUDIO_DEV_INFO 0x8000e020
+#define IOCTL_XUSB_GET_SHARE_BUTTON 0x80006380
+#define IOCTL_XUSB_GET_GAMEPAD_STATE_ASYNC 0x8000e3ac
+#define IOCTL_XUSB_GET_BASE_BUS_INFO 0x8000e3fc
 
 atomic<UINT> gXUsbSequence;
-UniqueLog gUniqLogXUsbOpen;
-UniqueLog gUniqLogXUsbAsync;
+UniqueLog gLogXUsbOpen;
+UniqueLog gLogXUsbAsync;
+LimitedLog gLogXUsbPipeConflict;
+LightlyLimitedLog gLogXUsbPipeError;
+LimitedLog gLogXUsbBadVersion;
+LimitedLog gLogXUsbBadIoctl;
 
 static HANDLE XUsbCreateFile(DeviceIntf *device, DWORD flags) {
     while (true) {
@@ -34,13 +42,17 @@ static HANDLE XUsbCreateFile(DeviceIntf *device, DWORD flags) {
 
         if (pipe == INVALID_HANDLE_VALUE) {
             if (GetLastError() == ERROR_PIPE_BUSY) {
-                LOG << "xusb pipe name already taken, retrying..." << END;
+                if (gLogXUsbPipeConflict) {
+                    LOG << "xusb pipe name already taken, retrying..." << END;
+                }
                 continue;
             }
 
-            LOG_ERR << "failed creating xusb pipe" << END;
+            if (gLogXUsbPipeError) {
+                LOG_ERR << "failed creating xusb pipe" << END;
+            }
         } else {
-            if (gUniqLogXUsbOpen) {
+            if (gLogXUsbOpen) {
                 LOG << "Opening xusb device" << END;
             }
             if (G.ApiDebug) {
@@ -92,7 +104,7 @@ enum class XUsbVersion : uint16_t {
     // there is also V0, not supported
     V1 = 0x101,
     V2 = 0x102,
-    // there is also V3, not supported yet
+    // V3 = 0x103, - includes basebus info, v2 caps (?)
 
     Default = V2,
 };
@@ -137,20 +149,25 @@ struct XUsbLedState {
     uint8_t State;
 };
 
+struct XUsbGamepadExt {
+    uint8_t Unk[5];
+    uint8_t Share;
+};
+
 struct XUsbGamepadState {
     XUsbVersion Version; // guess
     uint8_t Active, Unk, AudioIndex;
     uint32_t PacketNumber;
     uint8_t Unk2, Unk3;
     XINPUT_GAMEPAD Gamepad;
-    uint8_t GamepadExt[6];
+    XUsbGamepadExt GamepadExt;
 };
 
 struct XUsbCapabilities {
     XUsbVersion Version; // guess
     uint8_t Type, SubType;
     XINPUT_GAMEPAD Gamepad;
-    uint8_t GamepadExt[6];
+    XUsbGamepadExt GamepadExt;
     uint8_t LowMotor, HighMotor;
 };
 
@@ -158,11 +175,10 @@ struct XUsbCapabilities2 {
     XUsbVersion Version; // guess
     uint8_t Type, SubType;
     uint16_t Flags;
-    uint16_t VendorID, ProductID; // part of Ex capabilities, not sure what device it's about
-    uint16_t Unk1;                // part of Ex capabilities, unknown
-    uint32_t Unk2;                // part of Ex capabilities, unknown
+    uint16_t VendorID, ProductID, Revision; // part of Ex capabilities, not sure what device it's about
+    uint32_t XId;                           // part of Ex capabilities, unknown
     XINPUT_GAMEPAD Gamepad;
-    uint8_t GamepadExt[6];
+    XUsbGamepadExt GamepadExt;
     uint8_t LowMotor, HighMotor;
 };
 
@@ -185,7 +201,9 @@ static BOOL ProcessDeviceIoControlXUsbInput(LPVOID lpInBuffer, DWORD nInBufferSi
 }
 
 BOOL OnXUsbVersionError(XUsbVersion version, const char *funcDesc) {
-    LOG_ERR << "Unknown xusb device " << funcDesc << " version: " << (int)version << END;
+    if (gLogXUsbBadVersion) {
+        LOG_ERR << "Unknown xusb device " << funcDesc << " version: " << (int)version << END;
+    }
     SetLastError(ERROR_INVALID_PARAMETER); // ???
     return FALSE;
 }
@@ -219,11 +237,12 @@ void ReadXUsbState(XUsbGamepadState *xusb, const ImplState &state, XUsbVersion v
     xusb->Gamepad.sThumbLY = state.LA.Y.Value16();
     xusb->Gamepad.sThumbRX = state.RA.X.Value16();
     xusb->Gamepad.sThumbRY = state.RA.Y.Value16();
+    xusb->GamepadExt.Share = state.Extra.State;
 }
 
 // Note: assuming version will not change in future async reads...
 static bool XUsbSetupAsyncRead(const wchar_t *finalPath, DeviceIntf *device, XUsbVersion version) {
-    if (gUniqLogXUsbAsync) {
+    if (gLogXUsbAsync) {
         LOG << "Using async xusb api (from wgi?)" << END;
     }
 
@@ -237,7 +256,9 @@ static bool XUsbSetupAsyncRead(const wchar_t *finalPath, DeviceIntf *device, XUs
     HANDLE client = CreateFileW_Real(pipePath, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
                                      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
     if (client == INVALID_HANDLE_VALUE) {
-        LOG_ERR << "failed creating xusb client" << END;
+        if (gLogXUsbPipeError) {
+            LOG_ERR << "failed creating xusb client" << END;
+        }
         return false;
     }
 
@@ -296,6 +317,13 @@ static BOOL XUsbDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, DW
                 return TRUE;
             });
 
+    case IOCTL_XUSB_GET_SHARE_BUTTON:
+        return ProcessDeviceIoControlOutput<int>(
+            lpOutBuffer, nOutBufferSize, lpBytesReturned, [&](int *info) {
+                *info = 0; // supported
+                return TRUE;
+            });
+
     case IOCTL_XUSB_GET_CAPABILITIES:
         return ProcessDeviceIoControlXUsbInput<XUsbInput>(lpInBuffer, nInBufferSize, [&](XUsbInput *, XUsbVersion version) {
             switch (version) {
@@ -307,6 +335,7 @@ static BOOL XUsbDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, DW
                         caps->Type = XINPUT_DEVTYPE_GAMEPAD;
                         caps->SubType = XINPUT_DEVSUBTYPE_GAMEPAD;
                         memset(&caps->Gamepad, 0xff, sizeof(caps->Gamepad));
+                        memset(&caps->GamepadExt, 0xff, sizeof(caps->GamepadExt));
                         caps->LowMotor = caps->HighMotor = 0xff;
                         return TRUE;
                     });
@@ -321,7 +350,9 @@ static BOOL XUsbDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, DW
                         caps->Flags = XINPUT_CAPS_VOICE_SUPPORTED | XINPUT_CAPS_PMD_SUPPORTED; // ???
                         caps->VendorID = device->VendorId;
                         caps->ProductID = device->ProductId;
+                        caps->Revision = device->VersionNum;
                         memset(&caps->Gamepad, 0xff, sizeof(caps->Gamepad));
+                        memset(&caps->GamepadExt, 0xff, sizeof(caps->GamepadExt));
                         caps->LowMotor = caps->HighMotor = 0xff;
                         return TRUE;
                     });
@@ -427,7 +458,9 @@ static BOOL XUsbDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, DW
         });
 
     default:
-        LOG_ERR << "Unknown xusb device io control: " << dwIoControlCode << END;
+        if (gLogXUsbBadIoctl) {
+            LOG_ERR << "Unknown xusb device io control: " << dwIoControlCode << END;
+        }
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }

@@ -6,7 +6,10 @@
 #include "UtilsBuffer.h"
 #include "WinUtils.h"
 
-UniqueLog gUniqLogDeviceOpen;
+UniqueLog gLogDeviceOpen;
+LimitedLog gLogDeviceBadIoctl;
+LimitedLog gLogDevicePipeConflict;
+LightlyLimitedLog gLogDevicePipeError;
 
 static InfiniteThreadPool GInputThreadPool{InputThreadPriority};
 
@@ -80,10 +83,10 @@ class ImplProcessPipeThread {
         auto onReadEnd = [&](BOOL status) -> bool {
             inRead = false;
             if (status) {
-                if (truncRead) {
-                    LOG << "Received too-large output report" << END;
-                } else {
+                if (!truncRead) {
                     Device->ProcessOutput((const byte *)readBuffer.Ptr(), numRead);
+                } else if (gLogDevBadReport) {
+                    LOG << "Received too-large output report" << END;
                 }
                 truncRead = false;
             } else {
@@ -277,13 +280,17 @@ public:
 
             if (pipe == INVALID_HANDLE_VALUE || client == INVALID_HANDLE_VALUE) {
                 if (GetLastError() == ERROR_PIPE_BUSY) {
-                    LOG << "pipe name already taken, retrying..." << END;
+                    if (gLogDevicePipeConflict) {
+                        LOG << "pipe name already taken, retrying..." << END;
+                    }
                     continue;
                 }
 
-                LOG_ERR << "failed creating pipe" << END;
+                if (gLogDevicePipeError) {
+                    LOG_ERR << "failed creating pipe" << END;
+                }
             } else {
-                if (gUniqLogDeviceOpen) {
+                if (gLogDeviceOpen) {
                     LOG << "Opening device via file API" << END;
                 }
                 if (G.ApiDebug) {
@@ -509,7 +516,9 @@ static BOOL ImplDoDeviceIoControl(const wchar_t *finalPath, DeviceIntf *device, 
         return FALSE;
 
     default:
-        LOG_ERR << "Unknown device io control: " << dwIoControlCode << END;
+        if (gLogDeviceBadIoctl) {
+            LOG_ERR << "Unknown device io control: " << dwIoControlCode << END;
+        }
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
