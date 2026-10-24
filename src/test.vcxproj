@@ -98,6 +98,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <BufferSecurityCheck>false</BufferSecurityCheck>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -120,6 +121,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <OmitFramePointers>false</OmitFramePointers>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
       <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;gdiplus.lib;comctl32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -139,6 +141,7 @@
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
       <AdditionalDependencies>myinput_hook.lib;kernel32.lib;user32.lib;gdiplus.lib;comctl32.lib;hid.lib;setupapi.lib;cfgmgr32.lib;shlwapi.lib;winmm.lib;wbemuuid.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -162,6 +165,7 @@
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <OmitFramePointers>false</OmitFramePointers>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
