@@ -65,7 +65,17 @@ bool SystemParametersInfoW(UINT action, UINT param, void *data, UINT flags) {
 
 DWORD GetLastError() { return 0; }
 
+static void RegisterMacOptions();
+
 bool LoadLibraryExW(const wchar_t *path, HANDLE file, DWORD flags) {
+    // Config options written as "mac/<name>" look like they belong to a plugin called "mac".
+    // That is how macOS-only options get into the config format without changing the shared parser:
+    // the engine asks for mac_hook.dll, and the options are registered here instead.
+    if (tstreq(PathGetBaseNamePtr(path), L"mac_hook.dll")) {
+        RegisterMacOptions();
+        return true;
+    }
+
     LOG_W << "ERROR: Plugins aren't supported on macOS yet" << END;
     return false;
 }
@@ -131,6 +141,9 @@ void PostAppCallback(VoidCallback cb) {
     PostAppCallback([](void *data) { ((VoidCallback)data)(); }, (void *)cb);
 }
 
+struct MouseLook;
+static void UpdateMouseLook();
+
 void UpdateCursor() {
     bool wantCapture = (G.HideCursor || G.BoundCursor) && !G.Disable && G.InForeground;
     GHost.SetCursorCapture(wantCapture && G.HideCursor, wantCapture && !G.HideCursor);
@@ -140,6 +153,7 @@ void UpdateAll() {
     G.Paused = !G.IsActive();
     UpdateCursor();
     ImplUpdateAsyncState();
+    UpdateMouseLook(); // lets go of the stick if the mappings were just paused or disabled
 }
 
 void ShowWindowRumble(double lowFreq, double highFreq) {
@@ -147,6 +161,197 @@ void ShowWindowRumble(double lowFreq, double highFreq) {
     if (once) {
         LOG_W << "ERROR: RumbleWindow isn't supported on macOS yet" << END;
     }
+}
+
+// ---- Mouse look ----
+//
+// The engine's own mouse mappings (Mouse.Left : %R.Left) treat movement as a held direction, which is
+// fine for menus but poor for aiming. A stick sets how fast the camera turns, so the natural conversion
+// is from mouse speed to stick deflection. That is what this does, outside the engine: it measures the
+// mouse's speed over a short window and adds the matching deflection to a stick when its state is sent out.
+
+static void PushPadState(int index);
+
+static double NowSeconds() {
+    static mach_timebase_info_data_t timebase;
+    if (!timebase.denom) {
+        mach_timebase_info(&timebase);
+    }
+    return (double)mach_absolute_time() * timebase.numer / timebase.denom / NSEC_PER_SEC;
+}
+
+struct MouseLook {
+    // Mouse speed, in pixels per second, that pushes the stick all the way at Sensitivity 1.
+    static constexpr double FullSpeed = 1000;
+    static constexpr int TickMs = 4;
+
+    // The longest stretch of time one mouse event is taken to describe.
+    static constexpr double MaxSpan = 0.02;
+
+    // A mouse event reports the distance covered since the previous one, so it stands for a stretch of time.
+    struct Sample {
+        double Start, End, X, Y;
+    };
+
+    // The longest that movement too fast for the stick is kept and played back afterwards.
+    static constexpr double MaxCarry = 0.15;
+
+    bool Enabled, LeftStick;
+    double Sensitivity, Deadzone, Curve, Smoothing, Vertical;
+
+    deque<Sample> Samples; // movement within the last Smoothing seconds
+    double LastMove = 0, LastUpdate = 0;
+    double CarryX = 0, CarryY = 0; // movement the stick was too slow to deliver yet, in pixels
+    double OutX = 0, OutY = 0; // what is added to the stick, positive is right/up
+    int User = 0;
+    UserTimer Timer;
+
+    MouseLook() { ResetSettings(); }
+
+    void ResetSettings() {
+        Enabled = LeftStick = false;
+        Sensitivity = 1;
+        Deadzone = 0.1;
+        Curve = 1;
+        Smoothing = 0.03;
+        Vertical = 1;
+    }
+
+    bool IsActive() { return Enabled && !G.Paused && !G.Disable; }
+
+    void Update() {
+        double now = NowSeconds();
+        double window = max(Smoothing, TickMs / 1000.0);
+        while (!Samples.empty() && (!IsActive() || Samples.front().End <= now - window)) {
+            Samples.pop_front();
+        }
+
+        // Add up the movement that falls inside the window, counting the part of each event's stretch
+        // that does. Counting whole events instead would make the result jump every time one enters or
+        // leaves the window, which at a mouse's event rate is a visible stutter.
+        double x = 0, y = 0;
+        for (auto &sample : Samples) {
+            double inside = min(sample.End, now) - max(sample.Start, now - window);
+            double share = inside / (sample.End - sample.Start);
+            x += sample.X * share, y += sample.Y * share;
+        }
+
+        // Averaging over the window turns distance into speed, and keeps the total turn the same
+        // however the movement is spread: every pixel deflects the stick for exactly that long.
+        double vx = x / window, vy = y * Vertical / window;
+
+        // A stick pushed all the way is as fast as the game turns. When the mouse is faster than that,
+        // remember what couldn't be delivered and keep turning until it is, so that a quick flick
+        // still ends up where the same movement made slowly would have.
+        double dt = min(max(now - LastUpdate, 0.001), 0.05);
+        LastUpdate = now;
+        double fullSpeed = FullSpeed / Sensitivity;
+        if (!IsActive()) {
+            CarryX = CarryY = 0;
+        }
+        vx += CarryX / dt, vy += CarryY / dt;
+        double speed = sqrt(vx * vx + vy * vy);
+        CarryX = CarryY = 0;
+        if (speed > fullSpeed) {
+            double excess = min((speed - fullSpeed) * dt, fullSpeed * MaxCarry);
+            CarryX = vx / speed * excess, CarryY = vy / speed * excess;
+        }
+
+        double outX = 0, outY = 0;
+        if (speed > 0) {
+            // Games ignore the middle of the stick. Starting from the edge of that deadzone
+            // is what makes the smallest movement show up.
+            double amount = min(speed / fullSpeed, 1.0);
+            double deflection = Deadzone + (1 - Deadzone) * pow(amount, Curve);
+            outX = vx / speed * deflection;
+            outY = -vy / speed * deflection;
+        }
+
+        if (outX != OutX || outY != OutY) {
+            OutX = outX, OutY = outY;
+            PushPadState(User);
+        }
+        if (Samples.empty() && !CarryX && !CarryY && !OutX && !OutY) {
+            Timer.End(); // nothing left to play out, and the stick is back at rest
+        }
+    }
+
+    static void CALLBACK OnTimer(HWND, UINT, UINT_PTR, DWORD);
+
+    bool OnMove(double dx, double dy) {
+        if (!IsActive()) {
+            return false;
+        }
+
+        if (dx || dy) {
+            User = G.ActiveUser;
+            double now = NowSeconds();
+            double start = min(max(LastMove, now - MaxSpan), now - 0.001);
+            Samples.push_back({start, now, dx, dy});
+            LastMove = now;
+            if (!Timer.IsSet()) {
+                LastUpdate = now - TickMs / 1000.0; // coming out of idle: this is the first tick
+                Timer.StartMs(TickMs, OnTimer, this);
+                Update();
+            }
+        }
+        return !G.Forward;
+    }
+} GLook;
+
+void CALLBACK MouseLook::OnTimer(HWND, UINT, UINT_PTR, DWORD) { GLook.Update(); }
+
+static void UpdateMouseLook() { GLook.Update(); }
+
+static void SetLookNumber(double *target, const char *name, const string &value, double minValue, double maxValue) {
+    char *end = nullptr;
+    double number = strtod_l(value.c_str(), &end, nullptr);
+    if (end == value.c_str() || *end || number < minValue || number > maxValue) {
+        LOG_W << "ERROR: Invalid " << name << " (must be between " << minValue << " and " << maxValue << "): " << value << END;
+    } else {
+        *target = number;
+    }
+}
+
+static void RegisterMacOptions() {
+    ConfigRegisterCB([](bool after) {
+        if (!after) { // about to (re)load the config: back to defaults
+            GLook.ResetSettings();
+            GLook.Update();
+        }
+    });
+
+    ConfigRegisterCustomVar("mouselook", [](const string &value) {
+        string stick = StrLowerCase(value);
+        if (stick == "r" || stick == "right") {
+            GLook.Enabled = true, GLook.LeftStick = false;
+        } else if (stick == "l" || stick == "left") {
+            GLook.Enabled = true, GLook.LeftStick = true;
+        } else if (stick == "off") {
+            GLook.Enabled = false;
+        } else {
+            LOG_W << "ERROR: Invalid MouseLook (should be R, L or Off): " << value << END;
+        }
+
+        if (GLook.Enabled) {
+            G.Users[G.ActiveUser].Connected = true; // like a mapping to a gamepad key would
+        }
+    });
+    ConfigRegisterCustomVar("mouselooksensitivity", [](const string &value) {
+        SetLookNumber(&GLook.Sensitivity, "MouseLook.Sensitivity", value, 0.01, 100);
+    });
+    ConfigRegisterCustomVar("mouselookdeadzone", [](const string &value) {
+        SetLookNumber(&GLook.Deadzone, "MouseLook.Deadzone", value, 0, 0.9);
+    });
+    ConfigRegisterCustomVar("mouselookcurve", [](const string &value) {
+        SetLookNumber(&GLook.Curve, "MouseLook.Curve", value, 0.1, 5);
+    });
+    ConfigRegisterCustomVar("mouselooksmoothing", [](const string &value) {
+        SetLookNumber(&GLook.Smoothing, "MouseLook.Smoothing", value, 0, 0.5);
+    });
+    ConfigRegisterCustomVar("mouselookvertical", [](const string &value) {
+        SetLookNumber(&GLook.Vertical, "MouseLook.Vertical", value, 0.1, 10);
+    });
 }
 
 // ---- Virtual gamepads ----
@@ -165,6 +370,16 @@ static void PushPadState(int index) {
         out.LT = in.LT.Value, out.RT = in.RT.Value;
         out.LX = in.LA.X.Value, out.LY = in.LA.Y.Value;
         out.RX = in.RA.X.Value, out.RY = in.RA.Y.Value;
+    }
+
+    if (index == GLook.User && (GLook.OutX || GLook.OutY)) {
+        double &x = GLook.LeftStick ? out.LX : out.RX;
+        double &y = GLook.LeftStick ? out.LY : out.RY;
+        x += GLook.OutX, y += GLook.OutY;
+        double length = sqrt(x * x + y * y);
+        if (length > 1) {
+            x /= length, y /= length;
+        }
     }
 
     if (G.Trace) {
@@ -295,6 +510,10 @@ bool MyInputMac::OnMouseButton(int vk, bool down) {
 bool MyInputMac::OnMouseMove(int dx, int dy) {
     ChangedMask changes;
     return ImplMouseMotionHook(dx, dy, GetTickCount(), &changes);
+}
+
+bool MyInputMac::OnMouseLook(double dx, double dy) {
+    return GLook.OnMove(dx, dy);
 }
 
 bool MyInputMac::OnMouseWheel(bool horizontal, int delta) {

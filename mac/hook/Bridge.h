@@ -57,6 +57,10 @@ void SetForeground(bool foreground);
 bool OnKey(int vk, bool down);
 bool OnMouseButton(int vk, bool down);
 bool OnMouseMove(int dx, int dy);                // positive is right/down
+// Offered every mouse movement first, unrounded. Returns true if the config's mouse-look
+// (!mac/MouseLook) took it, in which case OnMouseMove must not be called for it.
+// Passing no movement just asks whether mouse-look is taking the mouse.
+bool OnMouseLook(double dx, double dy);
 bool OnMouseWheel(bool horizontal, int delta);   // 120 per notch, positive is up/right
 
 void OnRumble(int user, double low, double high); // 0 .. 1

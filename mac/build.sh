@@ -23,7 +23,7 @@ clang++ "${common[@]}" -w -include "$here/compat/Prelude.h" -I"$here/compat" -I"
 clang++ "${common[@]}" "${warn[@]}" -fobjc-arc -I"$here/hook" -c "$here/hook/SdlPad.mm" -o "$obj/SdlPad.o"
 clang++ "${common[@]}" "${warn[@]}" -fobjc-arc -I"$here/hook" -c "$here/hook/Hook.mm" -o "$obj/Hook.o"
 clang++ "${common[@]}" -dynamiclib -o "$out/libmyinput_hook.dylib" \
-    "$obj/Engine.o" "$obj/SdlPad.o" "$obj/Hook.o" -framework Cocoa -framework Carbon
+    "$obj/Engine.o" "$obj/SdlPad.o" "$obj/Hook.o" -framework Cocoa -framework Carbon -framework GameController
 
 clang++ "${common[@]}" "${warn[@]}" -fobjc-arc "$here/inject/Inject.mm" -o "$out/myinput" \
     -framework AppKit -framework Security

@@ -12,7 +12,7 @@ prefix="$(brew --prefix)"
 flags=(-std=c++20 -fobjc-arc -O1 -I"$prefix/include" -L"$prefix/lib" -framework Cocoa -framework Carbon)
 
 mkdir -p "$out/test/Configs"
-cp "$here/probe.ini" "$out/test/Configs/probe.ini"
+cp "$here/probe.ini" "$here/look.ini" "$out/test/Configs/"
 
 status=0
 for sdl in 2 3; do
@@ -27,6 +27,13 @@ for sdl in 2 3; do
     DYLD_INSERT_LIBRARIES="$hook" \
         MYINPUT_HOOK_CONFIG_DIR="$out/test/Configs" \
         MYINPUT_HOOK_CONFIG=probe \
+        "$probe" || status=1
+
+    echo "== SDL$sdl, mouse look =="
+    DYLD_INSERT_LIBRARIES="$hook" \
+        MYINPUT_HOOK_CONFIG_DIR="$out/test/Configs" \
+        MYINPUT_HOOK_CONFIG=look \
+        PROBE_SCRIPT=look \
         "$probe" || status=1
 done
 

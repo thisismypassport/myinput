@@ -5,6 +5,7 @@
 // It only ever sees events delivered to this app, so it needs no Accessibility or Input Monitoring permission.
 #import <Cocoa/Cocoa.h>
 #import <Carbon/Carbon.h> // kVK_* key codes
+#import <GameController/GameController.h> // GCMouse, for unaccelerated mouse movement
 #import <objc/runtime.h>
 #include "Bridge.h"
 #include "SdlPad.h"
@@ -252,11 +253,58 @@ void KeepCursorInKeyWindow() {
     }
 }
 
+// ---- Raw mouse movement ----
+//
+// The deltas in mouse events have the system's pointer acceleration applied: the same hand movement
+// counts for more when it is fast. That is right for a cursor and wrong for aiming, so mouse look takes
+// the mouse's own counts instead, straight from the device, like raw input does on Windows.
+// Trackpads don't offer that, and keep going through the events.
+
+// A mouse reports several counts for each pixel the pointer would move at slow speed.
+// Scaling them down keeps one Sensitivity setting in a similar range for mice and trackpads.
+constexpr double RawCountsToPixels = 0.2;
+
+NSTimeInterval GLastRawMove;
+
+void WatchRawMouse(GCMouse *mouse) {
+    NSString *name = mouse.vendorName ?: @"a mouse";
+    __block bool announced = false;
+    mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput *, float deltaX, float deltaY) {
+        GLastRawMove = NSProcessInfo.processInfo.systemUptime;
+        // GameController's Y axis points up.
+        if (OnMouseLook(deltaX * RawCountsToPixels, -deltaY * RawCountsToPixels) && !announced) {
+            announced = true;
+            LogLine([NSString stringWithFormat:@"Mouse look is using raw input from: %@", name].UTF8String);
+        }
+    };
+}
+
+void WatchRawMice() {
+    for (GCMouse *mouse in GCMouse.mice) {
+        WatchRawMouse(mouse);
+    }
+    [NSNotificationCenter.defaultCenter addObserverForName:GCMouseDidConnectNotification
+                                                    object:nil
+                                                     queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *note) {
+                                                    WatchRawMouse(note.object);
+                                                }];
+}
+
 bool HandleMouseMove(NSEvent *event) {
     if (GSkipNextMove) {
         GSkipNextMove = false;
         GMoveRemainderX = GMoveRemainderY = 0;
         return GCursorHidden;
+    }
+
+    // An event that echoes movement the mouse has just reported raw must not count twice.
+    bool echo = NSProcessInfo.processInfo.systemUptime - GLastRawMove < 0.1;
+    if (OnMouseLook(echo ? 0 : event.deltaX, echo ? 0 : event.deltaY)) {
+        if (GCursorBound) {
+            KeepCursorInKeyWindow();
+        }
+        return true;
     }
 
     // Deltas can be fractional. The engine counts whole pixels, so carry the remainder over.
@@ -551,6 +599,7 @@ void Start() {
                         EnsureMouseMovedEvents();
                     }];
     InstallEventHooks();
+    WatchRawMice();
     SetForeground(NSApp.isActive);
 
     static dispatch_source_t pollTimer;

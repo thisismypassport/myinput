@@ -137,6 +137,30 @@ Keys keep their Windows names:
 * `%Extra` is the touchpad click of a PlayStation controller.
 * `!Device1 = ps4` makes the first virtual gamepad identify as a DualShock 4 instead of an Xbox pad.
 
+## Mouse look
+
+Mappings like `Mouse.Left : %R.Left` work as on Windows, but they treat mouse movement as a held direction, which is too coarse for aiming. macOS has a mode made for it, where the faster the mouse moves, the further the stick is pushed:
+
+```
+!mac/MouseLook = R
+!mac/MouseLook.Sensitivity = 1.0
+!mac/MouseLook.Deadzone = 0.10
+!mac/MouseLook.Curve = 1.0
+!mac/MouseLook.Vertical = 1.0
+!mac/MouseLook.Smoothing = 0.03
+```
+
+* `MouseLook` is the stick to drive: `R`, `L` or `Off`. The other lines are optional, and show the defaults.
+* `Sensitivity` is how far the stick goes for a given mouse speed. At 1, about 1000 pixels per second pushes it all the way.
+* A mouse is read raw, without the system's pointer acceleration, as on Windows. A trackpad has no raw movement to read, so it goes through pointer acceleration.
+* `Deadzone` is the part of the stick the game ignores. The slightest movement starts from its edge, which is what lets small movements through. Match it to the game: too low and slow movements do nothing, too high and the camera lurches.
+* `Curve` shapes the response: 1 is linear, below 1 gives slow movements more effect.
+* `Vertical` gives up-and-down movement more (or less) stick than sideways movement, for games that turn slower vertically.
+* `Smoothing` is the time, in seconds, the mouse speed is averaged over.
+* A stick pushed all the way is as fast as the game turns. When the mouse is faster than that, the rest of the movement is played back right after (up to 0.15 seconds of it), so a quick flick ends where the same movement made slowly would.
+
+In the game, look for these settings: the smallest stick deadzone, a linear response curve, and no ramp-up time for the camera. Check what the ramp-up setting means, since games name it differently: in GTA 6 it is "acceleration", and the highest value is the one that reaches full speed at once. The camera still can't turn faster than the game lets a stick turn it.
+
 ## chiaki-ng (GTA 6 and other PS5 games with mouse and keyboard)
 
 `chiaki.ini` is installed on first run with a layout for GTA 6's default control scheme: WASD to move, mouse to look, left and right click to shoot and aim, Shift to run, Space to jump. The file itself lists every binding.
@@ -147,7 +171,7 @@ A controller uses the same buttons for different things on foot and in a vehicle
 2. Once the game is on screen, press **Right Option**. This turns the mappings on and captures the mouse.
 3. Press Right Option again to get the cursor back, for example to use chiaki-ng's menus.
 
-Mouse look goes through the right stick, so the camera can't turn faster than the game lets a stick turn it. Raise the game's camera sensitivity, and lower its stick deadzone if it has that setting, then tune the `Mouse.*` lines in `chiaki.ini`. Turning off System Settings > Mouse > Pointer acceleration makes the mouse response linear.
+The preset uses [mouse look](#mouse-look) on the right stick. Raise the game's camera and aim sensitivity, set its stick deadzone to the minimum and its response curve to linear, then tune the `!mac/MouseLook` lines in `chiaki.ini`.
 
 ## Not on macOS yet
 

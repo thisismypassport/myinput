@@ -43,7 +43,7 @@ static int Axis(Pad *pad, int axis) { return SDL_GameControllerGetAxis(pad, (SDL
 static Pad *GPad;
 static std::string GPadName;
 static std::vector<int> GKeysSeen; // key codes of the key-down events that reached the app
-static int GRightClicksSeen, GScrollDownsSeen;
+static int GRightClicksSeen, GScrollDownsSeen, GMouseMovesSeen;
 static int GFailures;
 static int GTurboPresses;
 
@@ -249,6 +249,76 @@ static std::vector<Step> BuildScript() {
 
 static bool GPrintEvents; // PROBE_IDLE mode: print what the gamepad does
 
+// The script for "!mac/MouseLook" (look.ini): mouse speed becomes stick deflection.
+static std::vector<Step> BuildLookScript() {
+    static int slow, fast;
+    std::vector<Step> script;
+    // A steady stream of movement, one event every ~10ms, like a mouse being dragged.
+    auto stream = [&](int dx, int dy) {
+        for (int i = 0; i < 30; i++) {
+            script.push_back({[=] { MouseMove(dx, dy); }, 8});
+        }
+    };
+    const int deadzone = 3277; // 0.1, as set in look.ini
+
+    script.push_back({[] { Check(GPad != nullptr, "a virtual gamepad showed up"); }, 0});
+
+    stream(4, 0);
+    script.push_back({[] {
+                          slow = Axis(GPad, AXIS(RIGHTX));
+                          Check(slow > 8000 && slow < 26000, "a steady drag to the right holds the stick partly right");
+                          Check(Axis(GPad, AXIS(RIGHTY)) == 0, "and not up or down");
+                          Check(GMouseMovesSeen == 0, "the movement is hidden from the app");
+                      },
+                      0});
+    stream(8, 0);
+    script.push_back({[] {
+                          fast = Axis(GPad, AXIS(RIGHTX));
+                          printf("      (%d, then %d)\n", slow, fast);
+                          Check(fast > slow * 1.25, "dragging twice as fast pushes it further");
+                      },
+                      150});
+    script.push_back({[] {
+                          Check(Axis(GPad, AXIS(RIGHTX)) == 0, "the stick recenters when the mouse stops");
+                          MouseMove(1, 0);
+                      },
+                      12});
+    script.push_back({[=] {
+                          int x = Axis(GPad, AXIS(RIGHTX));
+                          Check(x >= deadzone && x < deadzone * 3, "a single pixel of movement gets past the deadzone");
+                      },
+                      120});
+    script.push_back({[] { Check(Axis(GPad, AXIS(RIGHTX)) == 0, "and is over right after"); }, 0});
+
+    stream(0, -4);
+    script.push_back({[] {
+                          Check(Axis(GPad, AXIS(RIGHTY)) < -8000 && Axis(GPad, AXIS(RIGHTX)) == 0, "dragging up pushes the stick up");
+                      },
+                      150});
+
+    // A flick faster than the stick can follow: what couldn't be delivered is played back after it.
+    for (int i = 0; i < 5; i++) {
+        script.push_back({[] { MouseMove(60, 0); }, 8});
+    }
+    script.push_back({[] { Check(Axis(GPad, AXIS(RIGHTX)) > 32000, "a flick pushes the stick all the way"); }, 60});
+    script.push_back({[] { Check(Axis(GPad, AXIS(RIGHTX)) > 32000, "and holds it there after the mouse stopped, to finish the turn"); }, 400});
+    script.push_back({[] { Check(Axis(GPad, AXIS(RIGHTX)) == 0, "then lets go"); }, 0});
+
+    // With the mappings toggled off, the mouse belongs to the app again.
+    script.push_back({[] {
+                          Key(kVK_F8, true);
+                          Key(kVK_F8, false);
+                      },
+                      120});
+    script.push_back({[] { GMouseMovesSeen = 0; }, 0});
+    stream(4, 0);
+    script.push_back({[] {
+                          Check(Axis(GPad, AXIS(RIGHTX)) == 0 && GMouseMovesSeen > 20, "after ToggleDisable, the mouse goes to the app instead");
+                      },
+                      0});
+    return script;
+}
+
 static void PumpSdl() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -296,6 +366,8 @@ static void PumpAppKit(int ms) {
             if (event) {
                 if (event.type == NSEventTypeKeyDown) {
                     GKeysSeen.push_back(event.keyCode);
+                } else if (event.type == NSEventTypeMouseMoved) {
+                    GMouseMovesSeen++;
                 } else if (event.type == NSEventTypeRightMouseDown) {
                     GRightClicksSeen++;
                 } else if (event.type == NSEventTypeScrollWheel && event.scrollingDeltaY < 0) {
@@ -341,7 +413,8 @@ int main() {
             return 0;
         }
 
-        for (const Step &step : BuildScript()) {
+        const char *which = getenv("PROBE_SCRIPT");
+        for (const Step &step : which && !strcmp(which, "look") ? BuildLookScript() : BuildScript()) {
             if (!GPad) {
                 Check(false, "a virtual gamepad showed up");
                 break;
